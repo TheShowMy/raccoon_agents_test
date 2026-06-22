@@ -1,0 +1,228 @@
+/* ============================================================
+   macOS Web Simulator — 窗口系统样式
+   ============================================================ */
+
+/* ---------- 窗口主容器 ---------- */
+.mac-window {
+  position: absolute;
+  min-width: var(--window-min-width);
+  min-height: var(--window-min-height);
+  background: var(--glass-bg);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition:
+    box-shadow var(--transition-normal),
+    border-color var(--transition-normal);
+  animation: windowOpen 250ms ease-out;
+}
+
+@keyframes windowOpen {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 聚焦窗口 */
+.mac-window.focused {
+  box-shadow: var(--shadow-xl);
+  border-color: rgba(255, 255, 255, 0.38);
+}
+
+/* 未聚焦窗口 */
+.mac-window:not(.focused) {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* 最小化态 */
+.mac-window.minimized {
+  opacity: 0;
+  transform: scale(0.65) translateY(60px);
+  pointer-events: none;
+  transition:
+    opacity var(--transition-normal),
+    transform var(--transition-normal);
+}
+
+/* 最大化态 */
+.mac-window.maximized {
+  top: var(--menubar-height) !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: calc(var(--dock-height) + 22px) !important;
+  width: auto !important;
+  height: auto !important;
+  border-radius: 0 !important;
+  border: none !important;
+  border-top: 1px solid var(--glass-border-dark);
+}
+
+/* ---------- 标题栏 ---------- */
+.window-titlebar {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 12px;
+  background: rgba(0, 0, 0, 0.06);
+  cursor: default;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- 三色交通灯按钮 ---------- */
+.window-traffic-lights {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.traffic-light {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  position: relative;
+  cursor: default;
+  transition:
+    filter var(--transition-fast),
+    opacity var(--transition-fast);
+  line-height: 0;
+}
+
+.traffic-light.close {
+  background: #ff5f57;
+}
+
+.traffic-light.minimize {
+  background: #febc2e;
+}
+
+.traffic-light.maximize {
+  background: #28c840;
+}
+
+/* 未聚焦时交通灯变灰 */
+.mac-window:not(.focused) .traffic-light {
+  filter: brightness(0.55);
+}
+
+/* 悬停标题栏时显示按钮内图标 */
+.window-titlebar:hover .traffic-light::after {
+  opacity: 1;
+}
+
+.traffic-light::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.traffic-light.close::after {
+  content: "×";
+  font-size: 11px;
+  padding-bottom: 1px;
+}
+
+.traffic-light.minimize::after {
+  content: "−";
+  font-size: 12px;
+  padding-bottom: 2px;
+  font-weight: 800;
+}
+
+.traffic-light.maximize::after {
+  content: "＋";
+  font-size: 10px;
+  padding-bottom: 1px;
+}
+
+/* 按钮悬停微效 */
+.traffic-light.close:hover {
+  filter: brightness(0.9);
+}
+
+.traffic-light.minimize:hover {
+  filter: brightness(0.9);
+}
+
+.traffic-light.maximize:hover {
+  filter: brightness(0.9);
+}
+
+/* ---------- 窗口标题 ---------- */
+.window-title {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  margin: 0 48px 0 8px; /* 右侧留空保持视觉对称 */
+  line-height: 40px;
+}
+
+.mac-window:not(.focused) .window-title {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* ---------- 窗口内容区 ---------- */
+.window-content {
+  flex: 1;
+  overflow: auto;
+  color: #fff;
+  position: relative;
+  min-height: 0;
+}
+
+/* macOS 风格滚动条 */
+.window-content::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.window-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.window-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.window-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+/* ---------- 窗口关闭动画 ---------- */
+.mac-window.closing {
+  opacity: 0;
+  transform: scale(0.88);
+  transition:
+    opacity 150ms ease-out,
+    transform 150ms ease-out;
+  pointer-events: none;
+}

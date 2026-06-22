@@ -131,9 +131,79 @@ img {
   position: fixed;
   inset: 0;
   z-index: var(--z-desktop);
-  background: var(--color-gray-900);
-  /* 动态壁纸默认占位色，后续 JS 注入图片/视频 */
+  background: #0a0a14;
   overflow: hidden;
+}
+
+/* —— 动态壁纸：多层级 CSS 渐变动画，模拟 Sonoma/Sequoia 流动色彩 —— */
+.desktop-wallpaper {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 30% 20%, rgba(64, 128, 255, 0.35), transparent 60%),
+    radial-gradient(ellipse 60% 70% at 70% 50%, rgba(180, 80, 220, 0.30), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 50% 80%, rgba(30, 160, 120, 0.25), transparent 60%),
+    radial-gradient(ellipse 90% 60% at 20% 80%, rgba(20, 60, 140, 0.40), transparent 55%),
+    radial-gradient(ellipse 50% 50% at 80% 20%, rgba(255, 140, 50, 0.20), transparent 55%),
+    linear-gradient(180deg, #0a0a1e 0%, #0f1530 30%, #1a1040 60%, #0a0f20 100%);
+  animation: wallpaperFlow 20s ease-in-out infinite;
+}
+
+@keyframes wallpaperFlow {
+  0% {
+    background:
+      radial-gradient(ellipse 80% 60% at 30% 20%, rgba(64, 128, 255, 0.35), transparent 60%),
+      radial-gradient(ellipse 60% 70% at 70% 50%, rgba(180, 80, 220, 0.30), transparent 60%),
+      radial-gradient(ellipse 70% 50% at 50% 80%, rgba(30, 160, 120, 0.25), transparent 60%),
+      radial-gradient(ellipse 90% 60% at 20% 80%, rgba(20, 60, 140, 0.40), transparent 55%),
+      radial-gradient(ellipse 50% 50% at 80% 20%, rgba(255, 140, 50, 0.20), transparent 55%),
+      linear-gradient(180deg, #0a0a1e 0%, #0f1530 30%, #1a1040 60%, #0a0f20 100%);
+  }
+  25% {
+    background:
+      radial-gradient(ellipse 80% 60% at 70% 30%, rgba(180, 80, 220, 0.30), transparent 60%),
+      radial-gradient(ellipse 60% 70% at 30% 60%, rgba(64, 128, 255, 0.35), transparent 60%),
+      radial-gradient(ellipse 70% 50% at 60% 30%, rgba(30, 160, 120, 0.30), transparent 60%),
+      radial-gradient(ellipse 90% 60% at 80% 60%, rgba(255, 140, 50, 0.20), transparent 55%),
+      radial-gradient(ellipse 50% 50% at 20% 50%, rgba(20, 60, 140, 0.35), transparent 55%),
+      linear-gradient(180deg, #0f1530 0%, #1a1040 30%, #0a0f20 60%, #0a0a1e 100%);
+  }
+  50% {
+    background:
+      radial-gradient(ellipse 80% 60% at 60% 70%, rgba(30, 160, 120, 0.30), transparent 60%),
+      radial-gradient(ellipse 60% 70% at 40% 20%, rgba(255, 140, 50, 0.25), transparent 60%),
+      radial-gradient(ellipse 70% 50% at 30% 50%, rgba(180, 80, 220, 0.30), transparent 60%),
+      radial-gradient(ellipse 90% 60% at 50% 40%, rgba(64, 128, 255, 0.35), transparent 55%),
+      radial-gradient(ellipse 50% 50% at 80% 70%, rgba(20, 60, 140, 0.25), transparent 55%),
+      linear-gradient(180deg, #1a1040 0%, #0a0f20 30%, #0a0a1e 60%, #0f1530 100%);
+  }
+  75% {
+    background:
+      radial-gradient(ellipse 80% 60% at 40% 50%, rgba(255, 140, 50, 0.25), transparent 60%),
+      radial-gradient(ellipse 60% 70% at 60% 70%, rgba(30, 160, 120, 0.30), transparent 60%),
+      radial-gradient(ellipse 70% 50% at 70% 30%, rgba(64, 128, 255, 0.30), transparent 60%),
+      radial-gradient(ellipse 90% 60% at 30% 70%, rgba(180, 80, 220, 0.30), transparent 55%),
+      radial-gradient(ellipse 50% 50% at 50% 20%, rgba(20, 60, 140, 0.40), transparent 55%),
+      linear-gradient(180deg, #0a0f20 0%, #0a0a1e 30%, #0f1530 60%, #1a1040 100%);
+  }
+  100% {
+    background:
+      radial-gradient(ellipse 80% 60% at 30% 20%, rgba(64, 128, 255, 0.35), transparent 60%),
+      radial-gradient(ellipse 60% 70% at 70% 50%, rgba(180, 80, 220, 0.30), transparent 60%),
+      radial-gradient(ellipse 70% 50% at 50% 80%, rgba(30, 160, 120, 0.25), transparent 60%),
+      radial-gradient(ellipse 90% 60% at 20% 80%, rgba(20, 60, 140, 0.40), transparent 55%),
+      radial-gradient(ellipse 50% 50% at 80% 20%, rgba(255, 140, 50, 0.20), transparent 55%),
+      linear-gradient(180deg, #0a0a1e 0%, #0f1530 30%, #1a1040 60%, #0a0f20 100%);
+  }
+}
+
+/* —— 桌面浮动粒子（canvas）—— */
+.desktop-particles {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.45;
 }
 
 /* ---------- 窗口容器 ---------- */
@@ -161,12 +231,13 @@ img {
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  background: var(--glass-bg-dark);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border-bottom: 1px solid var(--glass-border-dark);
+  background: rgba(28, 28, 30, 0.72);
+  backdrop-filter: blur(25px) saturate(190%);
+  -webkit-backdrop-filter: blur(25px) saturate(190%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   color: #fff;
   font-size: 13px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.15);
 }
 
 .menubar-left {
@@ -244,6 +315,41 @@ img {
   background: rgba(255, 255, 255, 0.12);
 }
 
+/* —— 系统状态图标区 —— */
+.menubar-status-icons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+}
+
+.menubar-status-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 100%;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.menubar-status-icon:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.menubar-status-icon svg {
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
+}
+
+.menubar-time {
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Dock ---------- */
 .dock {
   position: fixed;
@@ -252,20 +358,36 @@ img {
   transform: translateX(-50%);
   z-index: var(--z-dock);
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
 }
 
 .dock-inner {
   display: flex;
   align-items: flex-end;
   gap: 4px;
-  padding: 6px 10px 8px;
-  background: var(--glass-bg);
-  backdrop-filter: blur(25px) saturate(200%);
-  -webkit-backdrop-filter: blur(25px) saturate(200%);
-  border: 1px solid var(--glass-border);
+  padding: 8px 12px 10px;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(30px) saturate(220%);
+  -webkit-backdrop-filter: blur(30px) saturate(220%);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-md);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  position: relative;
+}
+
+/* Dock 分隔线 */
+.dock-separator {
+  width: 1px;
+  height: 40px;
+  margin: 0 6px;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 1px;
+  align-self: center;
+  flex-shrink: 0;
 }
 
 .dock-icon {
@@ -287,6 +409,7 @@ img {
   height: 44px;
   object-fit: contain;
   pointer-events: none;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
 }
 
 /* 悬停放大：由 JS 根据鼠标位置动态计算，CSS 仅作基础过渡 */
@@ -298,19 +421,34 @@ img {
 .dock-icon::after {
   content: "";
   position: absolute;
-  bottom: -4px;
+  bottom: -5px;
   left: 50%;
   transform: translateX(-50%);
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.3);
   opacity: 0;
   transition: opacity var(--transition-fast);
 }
 
 .dock-icon.running::after {
   opacity: 1;
+}
+
+/* Dock 倒影效果 */
+.dock-reflection {
+  width: 100%;
+  height: 6px;
+  margin-top: 1px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.06) 0%,
+    transparent 100%
+  );
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+  pointer-events: none;
 }
 
 /* ---------- 右键/下拉菜单浮层 ---------- */

@@ -32,10 +32,13 @@
   /** DOM 引用缓存 */
   const DOM = {
     desktop: null,
+    desktopWallpaper: null,
+    desktopParticles: null,
     menubar: null,
     menubarTime: null,
     menubarAppName: null,
     menubarMenus: null,
+    menubarStatusIcons: null,
     appleMenuBtn: null,
     windowLayer: null,
     dock: null,
@@ -77,22 +80,92 @@
   }
 
   /* ==========================================================
-   *  桌面壁纸
+   *  桌面壁纸 & 粒子特效
    * ========================================================== */
 
   function initDesktop() {
     DOM.desktop = document.getElementById("desktop");
+    DOM.desktopWallpaper = document.getElementById("desktop-wallpaper");
+    DOM.desktopParticles = document.getElementById("desktop-particles");
     if (!DOM.desktop) return;
-
-    // Sonoma/Sequoia 风格渐变色壁纸（默认）
-    DOM.desktop.style.background =
-      "linear-gradient(160deg, #1a1a2e 0%, #16213e 25%, #0f3460 50%, #533483 75%, #1a1a2e 100%)";
 
     // 右键菜单占位 —— 后续由 context menu 模块接管
     DOM.desktop.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       hideContextMenu();
     });
+
+    // 启动浮动粒子画布
+    initParticles();
+  }
+
+  /**
+   * Canvas 浮动粒子——模拟 Sonoma 壁纸中细微光点漂浮效果
+   */
+  function initParticles() {
+    const canvas = DOM.desktopParticles;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const particles = [];
+    const PARTICLE_COUNT = 40;
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    // 创建粒子
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      particles.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        r: Math.random() * 2.5 + 0.5,
+        vx: (Math.random() - 0.5) * 0.3,
+        vy: (Math.random() - 0.5) * 0.2 - 0.1,
+        alpha: Math.random() * 0.5 + 0.15,
+        alphaDrift: (Math.random() - 0.5) * 0.005,
+      });
+    }
+
+    function animate() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (const p of particles) {
+        // 移动
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha += p.alphaDrift;
+
+        // 边界回绕
+        if (p.x < -10) p.x = canvas.width + 10;
+        if (p.x > canvas.width + 10) p.x = -10;
+        if (p.y < -10) p.y = canvas.height + 10;
+        if (p.y > canvas.height + 10) p.y = -10;
+
+        // alpha 波动
+        if (p.alpha > 0.55 || p.alpha < 0.08) p.alphaDrift *= -1;
+
+        // 绘制光点
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(200, 220, 255, ${p.alpha})`;
+        ctx.fill();
+
+        // 微光晕
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r * 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(180, 200, 255, ${p.alpha * 0.25})`;
+        ctx.fill();
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
   }
 
   /* ==========================================================
@@ -122,14 +195,40 @@
       .join("");
   }
 
+  /** 系统状态图标 SVG（WiFi、电池、Spotlight、控制中心） */
+  const STATUS_ICONS = [
+    {
+      id: "wifi",
+      title: "Wi-Fi",
+      svg: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1.5 5.5c3.5-3 9.5-3 13 0"/><path d="M4 8c2-1.7 6-1.7 8 0"/><path d="M6.5 10.5a2 2 0 0 1 3 0"/><circle cx="8" cy="13" r="0.8" fill="currentColor" stroke="none"/></svg>`,
+    },
+    {
+      id: "battery",
+      title: "电池",
+      svg: `<svg viewBox="0 0 24 16" width="20" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="18" height="14" rx="2"/><rect x="3" y="3" width="12" height="10" rx="1" fill="currentColor" stroke="none" opacity="0.85"/><rect x="19" y="4.5" width="2.5" height="7" rx="1"/></svg>`,
+    },
+    {
+      id: "spotlight",
+      title: "聚焦搜索",
+      svg: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14.5" y2="14.5"/></svg>`,
+    },
+    {
+      id: "control-center",
+      title: "控制中心",
+      svg: `<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><rect x="3" y="1.5" width="10" height="2.5" rx="1.2" opacity="0.7"/><rect x="3" y="6.75" width="10" height="2.5" rx="1.2" opacity="0.9"/><rect x="3" y="12" width="8" height="2.5" rx="1.2" opacity="0.5"/></svg>`,
+    },
+  ];
+
   function initMenubar() {
     DOM.menubar = document.getElementById("menubar");
     DOM.menubarTime = document.getElementById("menubar-time");
     DOM.menubarAppName = document.getElementById("menubar-app-name");
     DOM.menubarMenus = document.getElementById("menubar-menus");
+    DOM.menubarStatusIcons = document.getElementById("menubar-status-icons");
     DOM.appleMenuBtn = document.getElementById("apple-menu-btn");
 
     buildFinderMenus();
+    renderStatusIcons();
     updateClock();
     setInterval(updateClock, 10_000);
 
@@ -141,6 +240,15 @@
 
     // 点击空白关闭菜单
     document.addEventListener("click", hideContextMenu);
+  }
+
+  /** 渲染系统状态图标 */
+  function renderStatusIcons() {
+    if (!DOM.menubarStatusIcons) return;
+    DOM.menubarStatusIcons.innerHTML = STATUS_ICONS.map(
+      (icon) =>
+        `<span class="menubar-status-icon" title="${icon.title}" data-status-id="${icon.id}">${icon.svg}</span>`
+    ).join("");
   }
 
   /* ==========================================================
@@ -202,13 +310,27 @@
   }
 
   function renderDockIcons() {
-    DOM.dockInner.innerHTML = DOCK_APPS.map((app) => {
+    const appIcons = DOCK_APPS.map((app) => {
       const iconSvg = getAppIconSvg(app.icon);
       return `
-        <div class="dock-icon" data-app-id="${app.id}" title="${app.name}">
+        <div class="dock-icon running" data-app-id="${app.id}" title="${app.name}">
           ${iconSvg}
         </div>`;
     }).join("");
+
+    // 在 Finder 和其他应用之间加入分隔线
+    const parts = DOCK_APPS[0]
+      ? [
+          `<div class="dock-icon running" data-app-id="${DOCK_APPS[0].id}" title="${DOCK_APPS[0].name}">${getAppIconSvg(DOCK_APPS[0].icon)}</div>`,
+          `<div class="dock-separator"></div>`,
+          ...DOCK_APPS.slice(1).map(
+            (app) =>
+              `<div class="dock-icon running" data-app-id="${app.id}" title="${app.name}">${getAppIconSvg(app.icon)}</div>`
+          ),
+        ].join("")
+      : appIcons;
+
+    DOM.dockInner.innerHTML = parts;
   }
 
   /** 返回应用图标 SVG 占位（后续任务替换为真实图标） */

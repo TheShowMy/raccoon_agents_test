@@ -2,24 +2,25 @@
    macOS Web Simulator — 窗口系统样式
    ============================================================ */
 
-/* ---------- 窗口主容器 ---------- */
-.mac-window {
+/* ---------- 窗口容器 ---------- */
+.macos-window {
   position: absolute;
-  min-width: var(--window-min-width);
-  min-height: var(--window-min-height);
-  background: var(--glass-bg);
-  backdrop-filter: blur(30px) saturate(180%);
-  -webkit-backdrop-filter: blur(30px) saturate(180%);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
   display: flex;
   flex-direction: column;
+  min-width: var(--window-min-width, 360px);
+  min-height: var(--window-min-height, 240px);
+  border-radius: var(--radius-md, 10px);
   overflow: hidden;
+  background: #ececee;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.12),
+    0 0 0 0.5px rgba(0, 0, 0, 0.08);
   transition:
-    box-shadow var(--transition-normal),
-    border-color var(--transition-normal);
-  animation: windowOpen 250ms ease-out;
+    box-shadow var(--transition-normal, 250ms),
+    opacity var(--transition-normal, 250ms),
+    transform var(--transition-fast, 120ms);
+  will-change: transform;
+  animation: windowOpen var(--transition-normal, 250ms) ease-out;
 }
 
 @keyframes windowOpen {
@@ -33,97 +34,94 @@
   }
 }
 
-/* 聚焦窗口 */
-.mac-window.focused {
-  box-shadow: var(--shadow-xl);
-  border-color: rgba(255, 255, 255, 0.38);
+/* ---------- 聚焦态 ---------- */
+.macos-window.focused {
+  box-shadow:
+    0 8px 30px rgba(0, 0, 0, 0.2),
+    0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 
-/* 未聚焦窗口 */
-.mac-window:not(.focused) {
-  border-color: rgba(255, 255, 255, 0.12);
+/* 聚焦时标题栏变亮 */
+.macos-window.focused .window-titlebar {
+  background: #dbdbe0;
 }
 
-/* 最小化态 */
-.mac-window.minimized {
+/* ---------- 最小化 ---------- */
+.macos-window.minimized {
   opacity: 0;
-  transform: scale(0.65) translateY(60px);
-  pointer-events: none;
+  transform: scale(0.5) translateY(60px);
+  pointer-events: none !important;
   transition:
-    opacity var(--transition-normal),
-    transform var(--transition-normal);
+    opacity var(--transition-normal, 250ms),
+    transform var(--transition-normal, 250ms);
 }
 
-/* 最大化态 */
-.mac-window.maximized {
-  top: var(--menubar-height) !important;
-  left: 0 !important;
-  right: 0 !important;
-  bottom: calc(var(--dock-height) + 22px) !important;
-  width: auto !important;
-  height: auto !important;
+/* ---------- 最大化 ---------- */
+.macos-window.maximized {
   border-radius: 0 !important;
-  border: none !important;
-  border-top: 1px solid var(--glass-border-dark);
+  animation: none;
 }
 
-/* ---------- 标题栏 ---------- */
+/* ============================================================
+ *  标题栏
+ * ============================================================ */
 .window-titlebar {
   display: flex;
   align-items: center;
-  height: 40px;
+  height: 38px;
   padding: 0 12px;
-  background: rgba(0, 0, 0, 0.06);
-  cursor: default;
+  background: #ececee;
   flex-shrink: 0;
-  position: relative;
-  z-index: 1;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-/* ---------- 三色交通灯按钮 ---------- */
+/* ============================================================
+ *  三色交通灯按钮
+ * ============================================================ */
 .window-traffic-lights {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-  padding-top: 1px;
+  margin-right: 12px;
+  padding: 2px 0;
 }
 
-.traffic-light {
-  width: 13px;
-  height: 13px;
+.window-traffic-light {
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   position: relative;
   cursor: default;
-  transition:
-    filter var(--transition-fast),
-    opacity var(--transition-fast);
-  line-height: 0;
+  transition: filter var(--transition-fast);
+  flex-shrink: 0;
 }
 
-.traffic-light.close {
+.window-traffic-light:hover {
+  filter: brightness(0.88);
+}
+
+.window-traffic-light:active {
+  filter: brightness(0.72);
+}
+
+.window-traffic-light.close {
   background: #ff5f57;
+  /* 悬停在任一灯上时，显示所有按钮的符号 */
 }
 
-.traffic-light.minimize {
+.window-traffic-light.minimize {
   background: #febc2e;
 }
 
-.traffic-light.maximize {
+.window-traffic-light.maximize {
   background: #28c840;
 }
 
-/* 未聚焦时交通灯变灰 */
-.mac-window:not(.focused) .traffic-light {
-  filter: brightness(0.55);
-}
-
-/* 悬停标题栏时显示按钮内图标 */
-.window-titlebar:hover .traffic-light::after {
-  opacity: 1;
-}
-
-.traffic-light::after {
+/* 符号仅在悬停 traffic-lights 容器时显示 */
+.window-traffic-lights .window-traffic-light::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -131,74 +129,62 @@
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity var(--transition-fast);
-  font-size: 10px;
+  transition: opacity 80ms ease-out;
+  font-size: 7.5px;
   font-weight: 700;
-  line-height: 1;
   color: rgba(0, 0, 0, 0.55);
+  line-height: 1;
+  font-family: var(--font-ui);
 }
 
-.traffic-light.close::after {
-  content: "×";
-  font-size: 11px;
-  padding-bottom: 1px;
+.window-traffic-lights:hover .window-traffic-light::after {
+  opacity: 1;
 }
 
-.traffic-light.minimize::after {
+.window-traffic-light.close::after {
+  content: "✕";
+}
+
+.window-traffic-light.minimize::after {
   content: "−";
-  font-size: 12px;
-  padding-bottom: 2px;
+  font-size: 9px;
   font-weight: 800;
 }
 
-.traffic-light.maximize::after {
-  content: "＋";
-  font-size: 10px;
-  padding-bottom: 1px;
+.window-traffic-light.maximize::after {
+  content: "+";
+  font-size: 8px;
 }
 
-/* 按钮悬停微效 */
-.traffic-light.close:hover {
-  filter: brightness(0.9);
-}
-
-.traffic-light.minimize:hover {
-  filter: brightness(0.9);
-}
-
-.traffic-light.maximize:hover {
-  filter: brightness(0.9);
-}
-
-/* ---------- 窗口标题 ---------- */
+/* ---------- 标题文字 ---------- */
 .window-title {
   flex: 1;
   text-align: center;
   font-size: 13px;
   font-weight: 600;
-  color: #fff;
+  color: #535358;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
-  margin: 0 48px 0 8px; /* 右侧留空保持视觉对称 */
-  line-height: 40px;
+  letter-spacing: -0.01em;
 }
 
-.mac-window:not(.focused) .window-title {
-  color: rgba(255, 255, 255, 0.45);
+.macos-window.focused .window-title {
+  color: #1d1d1f;
 }
 
-/* ---------- 窗口内容区 ---------- */
+/* ============================================================
+ *  窗口内容区
+ * ============================================================ */
 .window-content {
   flex: 1;
   overflow: auto;
-  color: #fff;
+  background: #fff;
   position: relative;
-  min-height: 0;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.08);
 }
 
-/* macOS 风格滚动条 */
 .window-content::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -209,20 +195,87 @@
 }
 
 .window-content::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.12);
   border-radius: 3px;
 }
 
 .window-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.22);
 }
 
-/* ---------- 窗口关闭动画 ---------- */
-.mac-window.closing {
-  opacity: 0;
-  transform: scale(0.88);
-  transition:
-    opacity 150ms ease-out,
-    transform 150ms ease-out;
-  pointer-events: none;
+/* ============================================================
+ *  窗口边缘缩放把手
+ * ============================================================ */
+.window-resize-handle {
+  position: absolute;
+  z-index: 10;
+}
+
+.window-resize-handle.nw {
+  top: 0;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  cursor: nwse-resize;
+}
+
+.window-resize-handle.ne {
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 8px;
+  cursor: nesw-resize;
+}
+
+.window-resize-handle.sw {
+  bottom: 0;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  cursor: nesw-resize;
+}
+
+.window-resize-handle.se {
+  bottom: 0;
+  right: 0;
+  width: 8px;
+  height: 8px;
+  cursor: nwse-resize;
+}
+
+.window-resize-handle.n {
+  top: 0;
+  left: 8px;
+  right: 8px;
+  height: 4px;
+  cursor: ns-resize;
+}
+
+.window-resize-handle.s {
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  height: 4px;
+  cursor: ns-resize;
+}
+
+.window-resize-handle.e {
+  right: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  cursor: ew-resize;
+}
+
+.window-resize-handle.w {
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  cursor: ew-resize;
+}
+
+/* ---------- 最大化时隐藏缩放把手 ---------- */
+.macos-window.maximized .window-resize-handle {
+  display: none;
 }

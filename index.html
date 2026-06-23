@@ -304,6 +304,12 @@
       background: var(--green-bg) !important;
     }
 
+    .card__copy-btn--failed {
+      color: var(--red) !important;
+      border-color: var(--red) !important;
+      background: var(--red-bg) !important;
+    }
+
     /* ---- Card Code Area ---- */
     .card__code {
       padding: 1.1rem 1rem;
@@ -638,9 +644,10 @@
         if (!btn) return;
 
         var code = btn.getAttribute('data-code');
+        var originalHTML = btn.innerHTML;
+
         copyToClipboard(code).then(function () {
           btn.classList.add('card__copy-btn--copied');
-          var originalText = btn.innerHTML;
           btn.innerHTML =
             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
               '<polyline points="20 6 9 17 4 12"/>' +
@@ -649,7 +656,21 @@
 
           setTimeout(function () {
             btn.classList.remove('card__copy-btn--copied');
-            btn.innerHTML = originalText;
+            btn.innerHTML = originalHTML;
+          }, 2000);
+        }).catch(function () {
+          btn.classList.add('card__copy-btn--failed');
+          btn.innerHTML =
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+              '<circle cx="12" cy="12" r="10"/>' +
+              '<line x1="15" y1="9" x2="9" y2="15"/>' +
+              '<line x1="9" y1="9" x2="15" y2="15"/>' +
+            '</svg>' +
+            '复制失败';
+
+          setTimeout(function () {
+            btn.classList.remove('card__copy-btn--failed');
+            btn.innerHTML = originalHTML;
           }, 2000);
         });
       });

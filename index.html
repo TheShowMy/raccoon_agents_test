@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hello World — 多语言代码展示</title>
+  <style>
+    /* ===== Reset & Base ===== */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      /* Surface / background */
+      --bg-primary: #1a1b26;
+      --bg-secondary: #16171f;
+      --bg-card: #24253a;
+      --bg-code: #1a1b2e;
+      --bg-input: #2a2b3d;
+      --bg-input-focus: #1a1b26;
+
+      /* Text */
+      --text-primary: #c0caf5;
+      --text-secondary: #9aa5ce;
+      --text-muted: #565f89;
+
+      /* Accent */
+      --accent: #7aa2f7;
+      --accent-hover: #89b4fa;
+      --accent-glow: rgba(122, 162, 247, 0.18);
+
+      /* Semantic */
+      --green: #9ece6a;
+      --green-bg: rgba(158, 206, 106, 0.1);
+      --red: #f7768e;
+      --red-bg: rgba(247, 118, 142, 0.1);
+      --yellow: #e0af68;
+      --yellow-bg: rgba(224, 175, 104, 0.1);
+      --blue: #7aa2f7;
+      --purple: #bb9af7;
+      --cyan: #7dcfff;
+      --orange: #ff9e64;
+
+      /* Borders & effects */
+      --border: #3b3d54;
+      --border-light: #454766;
+      --radius: 10px;
+      --radius-sm: 6px;
+      --shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.3);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
+      --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.45);
+      --transition: 0.2s ease;
+
+      /* Typography */
+      --font-mono: 'Cascadia Code', 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Menlo', 'Monaco', monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', system-ui, sans-serif;
+
+      /* Layout */
+      --card-min-width: 400px;
+      --page-max-width: 1480px;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.6;
+    }
+
+    /* ===== Scrollbar ===== */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--border-light);
+    }
+
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+
+    /* Firefox */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    /* ===== Header ===== */
+    .header {
+      padding: 2.5rem 1.5rem 2rem;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .header::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 200px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .header__title {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.02em;
+      font-family: var(--font-mono);
+    }
+
+    .header__subtitle {
+      margin-top: 0.5rem;
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+    }
+
+    /* ===== Search ===== */
+    .search-section {
+      padding: 1.5rem 1.5rem 0;
+      max-width: 720px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 0.8rem 1.2rem 0.8rem 2.85rem;
+      font-size: 0.95rem;
+      font-family: var(--font-sans);
+      color: var(--text-primary);
+      background:
+        var(--bg-input)
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%239aa5ce' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E")
+        0.9rem center no-repeat;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      outline: none;
+      transition:
+        border-color var(--transition),
+        box-shadow var(--transition),
+        background-color var(--transition);
+    }
+
+    .search-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .search-input:focus {
+      border-color: var(--accent);
+      background-color: var(--bg-input-focus);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    /* ===== Results Counter ===== */
+    .results-counter {
+      max-width: 720px;
+      margin: 0.6rem auto 0;
+      padding: 0 1.5rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      letter-spacing: 0.02em;
+    }
+
+    /* ===== Main & Grid ===== */
+    .main {
+      flex: 1;
+      padding: 1.5rem;
+      max-width: var(--page-max-width);
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(var(--card-min-width), 1fr));
+      gap: 1.25rem;
+      align-items: start;
+    }
+
+    /* ===== Card ===== */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition:
+        transform var(--transition),
+        box-shadow var(--transition),
+        border-color var(--transition);
+    }
+
+    .card:hover {
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-lg);
+      border-color: var(--border-light);
+    }
+
+    /* ---- Card Header (editor tab bar) ---- */
+    .card__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.7rem 1rem;
+      background: #1f2137;
+      border-bottom: 1px solid var(--border);
+      user-select: none;
+    }
+
+    .card__header-left {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    /* macOS-style traffic light dots */
+    .card__dots {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .card__dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      transition: opacity var(--transition);
+    }
+
+    .card__dot--red    { background: #ff5f57; }
+    .card__dot--yellow { background: #febc2e; }
+    .card__dot--green  { background: #28c840; }
+
+    .card:hover .card__dot {
+      opacity: 0.85;
+    }
+
+    .card__lang {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      letter-spacing: 0.01em;
+    }
+
+    .card__copy-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.35rem 0.7rem;
+      font-size: 0.78rem;
+      font-family: var(--font-sans);
+      font-weight: 500;
+      color: var(--text-muted);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .card__copy-btn:hover {
+      color: var(--text-primary);
+      background: var(--bg-input);
+      border-color: var(--border);
+    }
+
+    .card__copy-btn:active {
+      transform: scale(0.96);
+    }
+
+    .card__copy-btn--copied {
+      color: var(--green) !important;
+      border-color: var(--green) !important;
+      background: var(--green-bg) !important;
+    }
+
+    /* ---- Card Code Area ---- */
+    .card__code {
+      padding: 1.1rem 1rem;
+      overflow-x: auto;
+      background: var(--bg-code);
+      position: relative;
+    }
+
+    /* Gutter accent line */
+    .card__code::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 3px;
+      background: linear-gradient(180deg, var(--accent), var(--purple));
+      opacity: 0.6;
+      border-radius: 0 2px 2px 0;
+    }
+
+    .card__code pre {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      line-height: 1.7;
+      color: var(--text-primary);
+      white-space: pre;
+      word-break: normal;
+      overflow-wrap: normal;
+      margin: 0;
+      tab-size: 4;
+      -moz-tab-size: 4;
+    }
+
+    .card__code code {
+      font-family: inherit;
+      font-size: inherit;
+    }
+
+    /* ---- Syntax Highlighting Tokens ---- */
+    .token.keyword   { color: var(--purple); font-style: italic; }
+    .token.builtin   { color: var(--cyan); }
+    .token.type      { color: var(--yellow); }
+    .token.function  { color: var(--blue); }
+    .token.string    { color: var(--green); }
+    .token.number    { color: var(--orange); }
+    .token.comment   { color: var(--text-muted); font-style: italic; }
+    .token.operator  { color: var(--text-secondary); }
+    .token.punctuation { color: var(--text-secondary); }
+    .token.boolean   { color: var(--orange); }
+    .token.constant  { color: var(--orange); }
+    .token.property  { color: var(--cyan); }
+    .token.regex     { color: var(--red); }
+
+    /* ===== Empty State ===== */
+    .empty-state {
+      display: none;
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 4rem 1rem 3rem;
+      color: var(--text-muted);
+      animation: fadeIn 0.3s ease;
+    }
+
+    .empty-state--visible {
+      display: block;
+    }
+
+    .empty-state__icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      opacity: 0.4;
+    }
+
+    .empty-state__text {
+      font-size: 1.05rem;
+      color: var(--text-secondary);
+    }
+
+    /* ===== Footer ===== */
+    .footer {
+      padding: 1.25rem 1.5rem;
+      text-align: center;
+      border-top: 1px solid var(--border);
+      background: var(--bg-secondary);
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    .footer__link {
+      color: var(--accent);
+      text-decoration: none;
+      transition: color var(--transition);
+    }
+
+    .footer__link:hover {
+      color: var(--accent-hover);
+      text-decoration: underline;
+    }
+
+    /* ===== Animations ===== */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .card {
+      animation: fadeIn 0.35s ease both;
+    }
+
+    /* Stagger card entrance */
+    .card:nth-child(1)  { animation-delay: 0.02s; }
+    .card:nth-child(2)  { animation-delay: 0.04s; }
+    .card:nth-child(3)  { animation-delay: 0.06s; }
+    .card:nth-child(4)  { animation-delay: 0.08s; }
+    .card:nth-child(5)  { animation-delay: 0.10s; }
+    .card:nth-child(6)  { animation-delay: 0.12s; }
+    .card:nth-child(7)  { animation-delay: 0.14s; }
+    .card:nth-child(8)  { animation-delay: 0.16s; }
+    .card:nth-child(9)  { animation-delay: 0.18s; }
+    .card:nth-child(10) { animation-delay: 0.20s; }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 900px) {
+      :root {
+        --card-min-width: 1fr;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header__title {
+        font-size: 1.5rem;
+      }
+
+      .header {
+        padding: 1.8rem 1rem 1.5rem;
+      }
+
+      .main {
+        padding: 1rem;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .card__header {
+        padding: 0.6rem 0.75rem;
+      }
+
+      .card__dots {
+        gap: 4px;
+      }
+
+      .card__dot {
+        width: 9px;
+        height: 9px;
+      }
+
+      .card__code {
+        padding: 0.85rem 0.75rem;
+      }
+
+      .card__code pre {
+        font-size: 0.78rem;
+      }
+
+      .search-input {
+        font-size: 0.9rem;
+        padding: 0.7rem 1rem 0.7rem 2.6rem;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ===== Header ===== -->
+  <header class="header">
+    <h1 class="header__title">&lt;Hello World /&gt;</h1>
+    <p class="header__subtitle">浏览 20+ 种编程语言的经典问候</p>
+  </header>
+
+  <!-- ===== Search ===== -->
+  <section class="search-section" aria-label="搜索语言">
+    <input
+      type="text"
+      id="searchInput"
+      class="search-input"
+      placeholder="搜索语言名称，例如 JavaScript、Python…"
+      autocomplete="off"
+    >
+  </section>
+
+  <!-- ===== Results Counter ===== -->
+  <p class="results-counter" id="resultsCounter" aria-live="polite"></p>
+
+  <!-- ===== Main Grid ===== -->
+  <main class="main">
+    <div class="grid" id="gridContainer">
+      <!--
+        语言卡片将由此处 JavaScript 动态渲染。
+        TODO: 后续任务中添加 20+ 语言的 Hello World 数据并实现渲染。
+      -->
+    </div>
+
+    <!-- Empty State -->
+    <div class="empty-state" id="emptyState">
+      <div class="empty-state__icon">🔍</div>
+      <p class="empty-state__text">没有找到匹配的语言，试试其他关键词</p>
+    </div>
+  </main>
+
+  <!-- ===== Footer ===== -->
+  <footer class="footer">
+    <p>Hello World Collection · 所有代码示例均可自由使用</p>
+  </footer>
+
+  <!-- ===== JavaScript ===== -->
+  <script>
+    (function () {
+      'use strict';
+
+      /* ==========================================================
+         DOM 引用
+         ========================================================== */
+      const searchInput = document.getElementById('searchInput');
+      const gridContainer = document.getElementById('gridContainer');
+      const resultsCounter = document.getElementById('resultsCounter');
+      const emptyState = document.getElementById('emptyState');
+
+      /* ==========================================================
+         语言数据（占位 — 后续任务扩充至 20+ 语言）
+         TODO: 将完整数据集抽取为独立数据源，每项包含
+               { lang, code } 字段。
+         ========================================================== */
+      const languages = [
+        { lang: 'C',          code: '#include <stdio.h>\n\nint main() {\n    printf("Hello, World!\\n");\n    return 0;\n}' },
+        { lang: 'C++',        code: '#include <iostream>\n\nint main() {\n    std::cout << "Hello, World!" << std::endl;\n    return 0;\n}' },
+        { lang: 'Python',     code: 'print("Hello, World!")' },
+        { lang: 'Java',       code: 'public class HelloWorld {\n    public static void main(String[] args) {\n        System.out.println("Hello, World!");\n    }\n}' },
+        { lang: 'JavaScript', code: 'console.log("Hello, World!");' },
+        { lang: 'Go',         code: 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello, World!")\n}' },
+        { lang: 'Rust',       code: 'fn main() {\n    println!("Hello, World!");\n}' },
+        { lang: 'Ruby',       code: 'puts "Hello, World!"' },
+        { lang: 'Swift',      code: 'print("Hello, World!")' },
+        { lang: 'Kotlin',     code: 'fun main() {\n    println("Hello, World!")\n}' },
+        { lang: 'PHP',        code: '<?php\necho "Hello, World!\\n";' },
+        { lang: 'C#',         code: 'using System;\n\nclass HelloWorld {\n    static void Main() {\n        Console.WriteLine("Hello, World!");\n    }\n}' },
+        { lang: 'TypeScript', code: 'console.log("Hello, World!");' },
+        { lang: 'Lua',        code: 'print("Hello, World!")' },
+        { lang: 'Shell',      code: '#!/bin/bash\necho "Hello, World!"' },
+        { lang: 'SQL',        code: "SELECT 'Hello, World!' AS greeting;" },
+        { lang: 'R',          code: 'cat("Hello, World!\\n")' },
+        { lang: 'Scala',      code: 'object HelloWorld {\n  def main(args: Array[String]): Unit = {\n    println("Hello, World!")\n  }\n}' },
+        { lang: 'Perl',       code: '#!/usr/bin/perl\nuse strict;\nuse warnings;\n\nprint "Hello, World!\\n";' },
+        { lang: 'Dart',       code: "void main() {\n  print('Hello, World!');\n}" },
+        { lang: 'Haskell',    code: 'main :: IO ()\nmain = putStrLn "Hello, World!"' }
+      ];
+
+      /* ==========================================================
+         渲染卡片
+         ========================================================== */
+      function renderCards(items) {
+        gridContainer.innerHTML = '';
+
+        if (items.length === 0) {
+          emptyState.classList.add('empty-state--visible');
+          resultsCounter.textContent = '';
+          return;
+        }
+
+        emptyState.classList.remove('empty-state--visible');
+
+        const fragment = document.createDocumentFragment();
+
+        items.forEach(function (item) {
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.setAttribute('data-lang', item.lang.toLowerCase());
+
+          card.innerHTML =
+            '<div class="card__header">' +
+              '<div class="card__header-left">' +
+                '<span class="card__dots">' +
+                  '<span class="card__dot card__dot--red"></span>' +
+                  '<span class="card__dot card__dot--yellow"></span>' +
+                  '<span class="card__dot card__dot--green"></span>' +
+                '</span>' +
+                '<span class="card__lang">' + escapeHTML(item.lang) + '</span>' +
+              '</div>' +
+              '<button class="card__copy-btn" data-code="' + escapeAttr(item.code) + '" title="复制代码">' +
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                  '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>' +
+                  '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>' +
+                '</svg>' +
+                '复制' +
+              '</button>' +
+            '</div>' +
+            '<div class="card__code"><pre><code>' + escapeHTML(item.code) + '</code></pre></div>';
+
+          fragment.appendChild(card);
+        });
+
+        gridContainer.appendChild(fragment);
+
+        resultsCounter.textContent = '共 ' + items.length + ' 种语言';
+      }
+
+      /* ==========================================================
+         搜索 / 筛选
+         ========================================================== */
+      function filterLanguages() {
+        var query = searchInput.value.trim().toLowerCase();
+
+        if (query === '') {
+          renderCards(languages);
+          return;
+        }
+
+        var filtered = languages.filter(function (item) {
+          return item.lang.toLowerCase().indexOf(query) !== -1;
+        });
+
+        renderCards(filtered);
+      }
+
+      /* ==========================================================
+         一键复制
+         ========================================================== */
+      gridContainer.addEventListener('click', function (e) {
+        var btn = e.target.closest('.card__copy-btn');
+        if (!btn) return;
+
+        var code = btn.getAttribute('data-code');
+        copyToClipboard(code).then(function () {
+          btn.classList.add('card__copy-btn--copied');
+          var originalText = btn.innerHTML;
+          btn.innerHTML =
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+              '<polyline points="20 6 9 17 4 12"/>' +
+            '</svg>' +
+            '已复制';
+
+          setTimeout(function () {
+            btn.classList.remove('card__copy-btn--copied');
+            btn.innerHTML = originalText;
+          }, 2000);
+        });
+      });
+
+      function copyToClipboard(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          return navigator.clipboard.writeText(text);
+        }
+
+        // Fallback for older browsers
+        return new Promise(function (resolve, reject) {
+          try {
+            var textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        });
+      }
+
+      /* ==========================================================
+         工具函数
+         ========================================================== */
+      function escapeHTML(str) {
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(str));
+        return div.innerHTML;
+      }
+
+      function escapeAttr(str) {
+        return str
+          .replace(/&/g, '&amp;')
+          .replace(/"/g, '&quot;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      }
+
+      /* ==========================================================
+         事件绑定 & 初始渲染
+         ========================================================== */
+      searchInput.addEventListener('input', filterLanguages);
+
+      // 初始渲染
+      renderCards(languages);
+    })();
+  </script>
+</body>
+</html>

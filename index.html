@@ -434,10 +434,6 @@
 
     /* ===== Responsive ===== */
     @media (max-width: 900px) {
-      :root {
-        --card-min-width: 1fr;
-      }
-
       .grid {
         grid-template-columns: 1fr;
       }
@@ -509,10 +505,7 @@
   <!-- ===== Main Grid ===== -->
   <main class="main">
     <div class="grid" id="gridContainer">
-      <!--
-        语言卡片将由此处 JavaScript 动态渲染。
-        TODO: 后续任务中添加 20+ 语言的 Hello World 数据并实现渲染。
-      -->
+      <!-- 语言卡片由 JavaScript 动态渲染 -->
     </div>
 
     <!-- Empty State -->
@@ -541,9 +534,8 @@
       const emptyState = document.getElementById('emptyState');
 
       /* ==========================================================
-         语言数据（占位 — 后续任务扩充至 20+ 语言）
-         TODO: 将完整数据集抽取为独立数据源，每项包含
-               { lang, code } 字段。
+         语言数据（21 种编程语言的 Hello World 示例）
+         每项包含 { lang, code } 字段。
          ========================================================== */
       const languages = [
         { lang: 'C',          code: '#include <stdio.h>\n\nint main() {\n    printf("Hello, World!\\n");\n    return 0;\n}' },

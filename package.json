@@ -1,9 +1,0 @@
-{
-  "name": "macos-web-simulator",
-  "version": "1.0.0",
-  "description": "macOS Sonoma/Sequoia 风格网页桌面模拟器",
-  "scripts": {
-    "check": "node scripts/check.js"
-  },
-  "private": true
-}

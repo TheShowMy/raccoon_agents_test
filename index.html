@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hello World — 多语言代码展示</title>
+  <style>
+    /* ===== Reset & Base ===== */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg-primary: #1e1e2e;
+      --bg-secondary: #181825;
+      --bg-card: #313244;
+      --bg-input: #45475a;
+      --text-primary: #cdd6f4;
+      --text-secondary: #a6adc8;
+      --text-muted: #6c7086;
+      --accent: #89b4fa;
+      --accent-hover: #74c7ec;
+      --green: #a6e3a1;
+      --red: #f38ba8;
+      --border: #45475a;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+      --transition: 0.2s ease;
+      --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.6;
+    }
+
+    /* ===== Header ===== */
+    .header {
+      padding: 2rem 1.5rem;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+    }
+
+    .header__title {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.02em;
+    }
+
+    .header__subtitle {
+      margin-top: 0.5rem;
+      font-size: 1rem;
+      color: var(--text-secondary);
+    }
+
+    /* ===== Search ===== */
+    .search-section {
+      padding: 1.5rem 1.5rem 0;
+      max-width: 768px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 0.85rem 1.25rem 0.85rem 3rem;
+      font-size: 1rem;
+      font-family: var(--font-sans);
+      color: var(--text-primary);
+      background: var(--bg-input) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23a6adc8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E") 1rem center no-repeat;
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+
+    .search-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .search-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(137, 180, 250, 0.15);
+    }
+
+    /* ===== Results Counter ===== */
+    .results-counter {
+      max-width: 768px;
+      margin: 0.75rem auto 0;
+      padding: 0 1.5rem;
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+
+    /* ===== Grid ===== */
+    .main {
+      flex: 1;
+      padding: 1.5rem;
+      max-width: 1440px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 1.25rem;
+    }
+
+    /* ===== Card ===== */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: transform var(--transition), box-shadow var(--transition);
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow);
+    }
+
+    .card__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.85rem 1rem;
+      background: rgba(0, 0, 0, 0.2);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .card__lang {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .card__copy-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
+      font-family: var(--font-sans);
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .card__copy-btn:hover {
+      color: var(--text-primary);
+      border-color: var(--accent);
+      background: rgba(137, 180, 250, 0.1);
+    }
+
+    .card__copy-btn--copied {
+      color: var(--green) !important;
+      border-color: var(--green) !important;
+      background: rgba(166, 227, 161, 0.1) !important;
+    }
+
+    .card__code {
+      padding: 1rem;
+      overflow-x: auto;
+    }
+
+    .card__code pre {
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      line-height: 1.65;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+    }
+
+    .card__code code {
+      font-family: inherit;
+    }
+
+    /* ===== Empty State ===== */
+    .empty-state {
+      display: none;
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 3rem 1rem;
+      color: var(--text-muted);
+    }
+
+    .empty-state--visible {
+      display: block;
+    }
+
+    .empty-state__icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      opacity: 0.5;
+    }
+
+    .empty-state__text {
+      font-size: 1.1rem;
+    }
+
+    /* ===== Footer ===== */
+    .footer {
+      padding: 1.5rem;
+      text-align: center;
+      border-top: 1px solid var(--border);
+      background: var(--bg-secondary);
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    .footer__link {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .footer__link:hover {
+      text-decoration: underline;
+    }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 860px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header__title {
+        font-size: 1.5rem;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ===== Header ===== -->
+  <header class="header">
+    <h1 class="header__title">&lt;Hello World /&gt;</h1>
+    <p class="header__subtitle">浏览 20+ 种编程语言的经典问候</p>
+  </header>
+
+  <!-- ===== Search ===== -->
+  <section class="search-section" aria-label="搜索语言">
+    <input
+      type="text"
+      id="searchInput"
+      class="search-input"
+      placeholder="搜索语言名称，例如 JavaScript、Python…"
+      autocomplete="off"
+    >
+  </section>
+
+  <!-- ===== Results Counter ===== -->
+  <p class="results-counter" id="resultsCounter" aria-live="polite"></p>
+
+  <!-- ===== Main Grid ===== -->
+  <main class="main">
+    <div class="grid" id="gridContainer">
+      <!--
+        语言卡片将由此处 JavaScript 动态渲染。
+        TODO: 后续任务中添加 20+ 语言的 Hello World 数据并实现渲染。
+      -->
+    </div>
+
+    <!-- Empty State -->
+    <div class="empty-state" id="emptyState">
+      <div class="empty-state__icon">🔍</div>
+      <p class="empty-state__text">没有找到匹配的语言，试试其他关键词</p>
+    </div>
+  </main>
+
+  <!-- ===== Footer ===== -->
+  <footer class="footer">
+    <p>Hello World Collection · 所有代码示例均可自由使用</p>
+  </footer>
+
+  <!-- ===== JavaScript ===== -->
+  <script>
+    (function () {
+      'use strict';
+
+      /* ==========================================================
+         DOM 引用
+         ========================================================== */
+      const searchInput = document.getElementById('searchInput');
+      const gridContainer = document.getElementById('gridContainer');
+      const resultsCounter = document.getElementById('resultsCounter');
+      const emptyState = document.getElementById('emptyState');
+
+      /* ==========================================================
+         语言数据（占位 — 后续任务扩充至 20+ 语言）
+         TODO: 将完整数据集抽取为独立数据源，每项包含
+               { lang, code } 字段。
+         ========================================================== */
+      const languages = [
+        { lang: 'C',          code: '#include <stdio.h>\n\nint main() {\n    printf("Hello, World!\\n");\n    return 0;\n}' },
+        { lang: 'C++',        code: '#include <iostream>\n\nint main() {\n    std::cout << "Hello, World!" << std::endl;\n    return 0;\n}' },
+        { lang: 'Python',     code: 'print("Hello, World!")' },
+        { lang: 'Java',       code: 'public class HelloWorld {\n    public static void main(String[] args) {\n        System.out.println("Hello, World!");\n    }\n}' },
+        { lang: 'JavaScript', code: 'console.log("Hello, World!");' },
+        { lang: 'Go',         code: 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello, World!")\n}' },
+        { lang: 'Rust',       code: 'fn main() {\n    println!("Hello, World!");\n}' },
+        { lang: 'Ruby',       code: 'puts "Hello, World!"' },
+        { lang: 'Swift',      code: 'print("Hello, World!")' },
+        { lang: 'Kotlin',     code: 'fun main() {\n    println("Hello, World!")\n}' },
+        { lang: 'PHP',        code: '<?php\necho "Hello, World!\\n";' },
+        { lang: 'C#',         code: 'using System;\n\nclass HelloWorld {\n    static void Main() {\n        Console.WriteLine("Hello, World!");\n    }\n}' },
+        { lang: 'TypeScript', code: 'console.log("Hello, World!");' },
+        { lang: 'Lua',        code: 'print("Hello, World!")' },
+        { lang: 'Shell',      code: '#!/bin/bash\necho "Hello, World!"' },
+        { lang: 'SQL',        code: "SELECT 'Hello, World!' AS greeting;" },
+        { lang: 'R',          code: 'cat("Hello, World!\\n")' },
+        { lang: 'Scala',      code: 'object HelloWorld {\n  def main(args: Array[String]): Unit = {\n    println("Hello, World!")\n  }\n}' },
+        { lang: 'Perl',       code: '#!/usr/bin/perl\nuse strict;\nuse warnings;\n\nprint "Hello, World!\\n";' },
+        { lang: 'Dart',       code: "void main() {\n  print('Hello, World!');\n}" },
+        { lang: 'Haskell',    code: 'main :: IO ()\nmain = putStrLn "Hello, World!"' }
+      ];
+
+      /* ==========================================================
+         渲染卡片
+         ========================================================== */
+      function renderCards(items) {
+        gridContainer.innerHTML = '';
+
+        if (items.length === 0) {
+          emptyState.classList.add('empty-state--visible');
+          resultsCounter.textContent = '';
+          return;
+        }
+
+        emptyState.classList.remove('empty-state--visible');
+
+        const fragment = document.createDocumentFragment();
+
+        items.forEach(function (item) {
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.setAttribute('data-lang', item.lang.toLowerCase());
+
+          card.innerHTML =
+            '<div class="card__header">' +
+              '<span class="card__lang">' + escapeHTML(item.lang) + '</span>' +
+              '<button class="card__copy-btn" data-code="' + escapeAttr(item.code) + '">' +
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                  '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>' +
+                  '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>' +
+                '</svg>' +
+                '复制' +
+              '</button>' +
+            '</div>' +
+            '<div class="card__code"><pre><code>' + escapeHTML(item.code) + '</code></pre></div>';
+
+          fragment.appendChild(card);
+        });
+
+        gridContainer.appendChild(fragment);
+
+        resultsCounter.textContent = '共 ' + items.length + ' 种语言';
+      }
+
+      /* ==========================================================
+         搜索 / 筛选
+         ========================================================== */
+      function filterLanguages() {
+        var query = searchInput.value.trim().toLowerCase();
+
+        if (query === '') {
+          renderCards(languages);
+          return;
+        }
+
+        var filtered = languages.filter(function (item) {
+          return item.lang.toLowerCase().indexOf(query) !== -1;
+        });
+
+        renderCards(filtered);
+      }
+
+      /* ==========================================================
+         一键复制
+         ========================================================== */
+      gridContainer.addEventListener('click', function (e) {
+        var btn = e.target.closest('.card__copy-btn');
+        if (!btn) return;
+
+        var code = btn.getAttribute('data-code');
+        copyToClipboard(code).then(function () {
+          btn.classList.add('card__copy-btn--copied');
+          var originalText = btn.innerHTML;
+          btn.innerHTML =
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+              '<polyline points="20 6 9 17 4 12"/>' +
+            '</svg>' +
+            '已复制';
+
+          setTimeout(function () {
+            btn.classList.remove('card__copy-btn--copied');
+            btn.innerHTML = originalText;
+          }, 2000);
+        });
+      });
+
+      function copyToClipboard(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          return navigator.clipboard.writeText(text);
+        }
+
+        // Fallback for older browsers
+        return new Promise(function (resolve, reject) {
+          try {
+            var textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        });
+      }
+
+      /* ==========================================================
+         工具函数
+         ========================================================== */
+      function escapeHTML(str) {
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(str));
+        return div.innerHTML;
+      }
+
+      function escapeAttr(str) {
+        return str
+          .replace(/&/g, '&amp;')
+          .replace(/"/g, '&quot;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      }
+
+      /* ==========================================================
+         事件绑定 & 初始渲染
+         ========================================================== */
+      searchInput.addEventListener('input', filterLanguages);
+
+      // 初始渲染
+      renderCards(languages);
+    })();
+  </script>
+</body>
+</html>

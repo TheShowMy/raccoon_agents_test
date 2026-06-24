@@ -206,21 +206,67 @@
       padding-bottom: 8px;
     }
 
-    .dock-placeholder {
-      width: 60%;
-      max-width: 600px;
-      height: 56px;
+    .dock {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      padding: 6px 12px;
       background: rgba(255, 255, 255, 0.12);
       backdrop-filter: blur(30px) saturate(200%);
       -webkit-backdrop-filter: blur(30px) saturate(200%);
       border: 1px solid rgba(255, 255, 255, 0.15);
       border-radius: 20px;
+    }
+
+    .dock__item {
+      position: relative;
+      width: 50px;
+      height: 50px;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: rgba(255, 255, 255, 0.35);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: transform 0.18s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      transform-origin: bottom center;
+      flex-shrink: 0;
+    }
+
+    .dock__item:hover {
+      transform: scale(1.55);
+    }
+
+    .dock__item:active {
+      transform: scale(1.25);
+    }
+
+    .dock__item-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .dock__item-tooltip {
+      position: absolute;
+      bottom: calc(100% + 12px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(30, 30, 30, 0.92);
+      color: #fff;
       font-size: 12px;
-      letter-spacing: 0.02em;
+      padding: 4px 10px;
+      border-radius: 4px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.18s ease;
+    }
+
+    .dock__item:hover .dock__item-tooltip {
+      opacity: 1;
     }
 
     /* ===== Window System ===== */
@@ -423,9 +469,71 @@
     <!-- Desktop Main Area -->
     <main class="desktop-main"></main>
 
-    <!-- Bottom Dock Area (Placeholder) -->
+    <!-- Bottom Dock -->
     <footer class="dock-area">
-      <div class="dock-placeholder">Dock</div>
+      <nav class="dock">
+        <!-- 终端 -->
+        <div class="dock__item" data-app="terminal" title="终端">
+          <span class="dock__item-icon">
+            <svg width="50" height="50" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
+              <rect x="3" y="3" width="44" height="44" rx="11" fill="#2a2a2a"/>
+              <text x="25" y="33" text-anchor="middle" fill="#0f0" font-size="22" font-family="monospace" font-weight="bold">&gt;_</text>
+            </svg>
+          </span>
+          <span class="dock__item-tooltip">终端</span>
+        </div>
+
+        <!-- 访达 -->
+        <div class="dock__item" data-app="finder" title="访达">
+          <span class="dock__item-icon">
+            <svg width="50" height="50" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
+              <rect x="3" y="3" width="44" height="44" rx="11" fill="#4a9eff"/>
+              <path d="M13,17 C13,15.5 14,14.5 15.4,14.5 L22,14.5 L24.5,17 L33,17 C34.4,17 35.4,18 35.4,19.5 L35.4,33 C35.4,34.5 34.4,35.5 33,35.5 L15.4,35.5 C14,35.5 13,34.5 13,33 Z" fill="rgba(255,255,255,0.15)"/>
+            </svg>
+          </span>
+          <span class="dock__item-tooltip">访达</span>
+        </div>
+
+        <!-- 文本编辑器 -->
+        <div class="dock__item" data-app="text-editor" title="文本编辑器">
+          <span class="dock__item-icon">
+            <svg width="50" height="50" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
+              <rect x="8" y="5" width="34" height="40" rx="8" fill="#0077ed"/>
+              <rect x="14" y="18" width="16" height="2" rx="1" fill="rgba(255,255,255,0.25)"/>
+              <rect x="14" y="23" width="22" height="2" rx="1" fill="rgba(255,255,255,0.25)"/>
+              <rect x="14" y="28" width="12" height="2" rx="1" fill="rgba(255,255,255,0.25)"/>
+              <rect x="14" y="33" width="18" height="2" rx="1" fill="rgba(255,255,255,0.25)"/>
+            </svg>
+          </span>
+          <span class="dock__item-tooltip">文本编辑器</span>
+        </div>
+
+        <!-- 计算器 -->
+        <div class="dock__item" data-app="calculator" title="计算器">
+          <span class="dock__item-icon">
+            <svg width="50" height="50" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
+              <rect x="3" y="3" width="44" height="44" rx="11" fill="#2d2d2d"/>
+              <rect x="11" y="11" width="12" height="12" rx="3" fill="#ff9500"/>
+              <rect x="27" y="11" width="12" height="12" rx="3" fill="#555"/>
+              <rect x="11" y="27" width="12" height="12" rx="3" fill="#555"/>
+              <rect x="27" y="27" width="12" height="12" rx="3" fill="#555"/>
+            </svg>
+          </span>
+          <span class="dock__item-tooltip">计算器</span>
+        </div>
+
+        <!-- 飞机大战 -->
+        <div class="dock__item" data-app="airplane" title="飞机大战">
+          <span class="dock__item-icon">
+            <svg width="50" height="50" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
+              <rect x="3" y="3" width="44" height="44" rx="11" fill="#16213e"/>
+              <polygon points="25,11 31,36 25,30 19,36" fill="#e94560"/>
+              <circle cx="25" cy="25" r="3" fill="#ff6b6b"/>
+            </svg>
+          </span>
+          <span class="dock__item-tooltip">飞机大战</span>
+        </div>
+      </nav>
     </footer>
 
   </div>
@@ -677,6 +785,30 @@
 
       // Expose globally for console testing
       window.createWindow = createWindow;
+    })();
+
+    // ===== Dock Click Handlers =====
+    (function() {
+      var dockItems = document.querySelectorAll('.dock__item');
+      if (!dockItems.length) return;
+
+      var appConfigs = {
+        'terminal':   { title: '终端',       content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">终端 — 命令行界面（即将实现）</div>' },
+        'finder':     { title: '访达',       content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">访达 — 文件浏览器（即将实现）</div>' },
+        'text-editor': { title: '文本编辑器',   content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">文本编辑器 — 文本编辑区域（即将实现）</div>' },
+        'calculator': { title: '计算器',      content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">计算器 — 计算器界面（即将实现）</div>' },
+        'airplane':   { title: '飞机大战',    content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">飞机大战 — 3D 飞机大战游戏（即将实现）</div>' }
+      };
+
+      dockItems.forEach(function(item) {
+        item.addEventListener('click', function() {
+          var app = item.getAttribute('data-app');
+          var config = appConfigs[app];
+          if (config && window.createWindow) {
+            window.createWindow(config.title, config.content);
+          }
+        });
+      });
     })();
   </script>
 </body>

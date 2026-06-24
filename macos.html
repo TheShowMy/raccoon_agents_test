@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>macOS 模拟桌面</title>
+  <style>
+    /* ===== Reset & Base ===== */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --menu-bar-height: 28px;
+      --dock-height: 80px;
+      --menu-bar-bg: rgba(30, 30, 30, 0.82);
+      --menu-bar-text: #f5f5f7;
+      --menu-bar-text-dim: #b0b0b5;
+      --desktop-gradient-start: #2b5876;
+      --desktop-gradient-mid1: #4e4376;
+      --desktop-gradient-mid2: #ad5389;
+      --desktop-gradient-end: #3a1c71;
+      --font-system: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', system-ui, 'Helvetica Neue', sans-serif;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: var(--font-system);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* ===== Full-Screen Container ===== */
+    .macos-desktop {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ===== Desktop Wallpaper ===== */
+    .desktop-wallpaper {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        160deg,
+        var(--desktop-gradient-start) 0%,
+        var(--desktop-gradient-mid1) 30%,
+        var(--desktop-gradient-mid2) 65%,
+        var(--desktop-gradient-end) 100%
+      );
+      z-index: 0;
+    }
+
+    /* subtle noise overlay for texture */
+    .desktop-wallpaper::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at 20% 50%, rgba(255, 255, 255, 0.04) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 20%, rgba(255, 255, 255, 0.03) 0%, transparent 50%);
+    }
+
+    /* ===== Top Menu Bar ===== */
+    .menu-bar {
+      position: relative;
+      z-index: 100;
+      height: var(--menu-bar-height);
+      background: var(--menu-bar-bg);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      flex-shrink: 0;
+      color: var(--menu-bar-text);
+      font-size: 13px;
+      line-height: 1;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    /* ---- Left Section (Apple + App Menus) ---- */
+    .menu-bar__left {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      height: 100%;
+    }
+
+    .menu-bar__apple {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 10px;
+      height: 100%;
+      font-size: 13px;
+      color: var(--menu-bar-text);
+      cursor: default;
+      opacity: 0.9;
+    }
+
+    .menu-bar__apple:hover {
+      opacity: 1;
+    }
+
+    .menu-bar__menu {
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      height: 100%;
+      color: var(--menu-bar-text);
+      cursor: default;
+      font-weight: 500;
+      opacity: 0.85;
+      border-radius: 5px;
+      transition: background 0.15s ease, opacity 0.15s ease;
+    }
+
+    .menu-bar__menu:hover {
+      background: rgba(255, 255, 255, 0.12);
+      opacity: 1;
+    }
+
+    .menu-bar__menu--bold {
+      font-weight: 600;
+    }
+
+    /* ---- Right Section (Status Icons + Time) ---- */
+    .menu-bar__right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 100%;
+    }
+
+    .menu-bar__status-icons {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Wi-Fi icon (SVG-based) */
+    .menu-bar__icon-wifi {
+      display: flex;
+      align-items: center;
+    }
+
+    .menu-bar__icon-wifi svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Battery icon */
+    .menu-bar__icon-battery {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .menu-bar__icon-battery svg {
+      width: 22px;
+      height: 12px;
+    }
+
+    .menu-bar__battery-percent {
+      font-size: 11px;
+      color: var(--menu-bar-text);
+    }
+
+    .menu-bar__time {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--menu-bar-text);
+      white-space: nowrap;
+      min-width: 60px;
+      text-align: right;
+    }
+
+    /* ===== Desktop Main Area ===== */
+    .desktop-main {
+      position: relative;
+      z-index: 1;
+      flex: 1;
+      /* The wallpaper is behind, this is the interactive layer */
+    }
+
+    /* ===== Bottom Dock Area (Placeholder) ===== */
+    .dock-area {
+      position: relative;
+      z-index: 100;
+      height: var(--dock-height);
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding-bottom: 8px;
+    }
+
+    .dock-placeholder {
+      width: 60%;
+      max-width: 600px;
+      height: 56px;
+      background: rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(30px) saturate(200%);
+      -webkit-backdrop-filter: blur(30px) saturate(200%);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 255, 255, 0.35);
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }
+  </style>
+</head>
+<body>
+  <div class="macos-desktop">
+
+    <!-- Desktop Wallpaper -->
+    <div class="desktop-wallpaper"></div>
+
+    <!-- Top Menu Bar -->
+    <header class="menu-bar">
+      <!-- Left: Apple logo + app menu placeholders -->
+      <div class="menu-bar__left">
+        <span class="menu-bar__apple" title="Apple"></span>
+        <span class="menu-bar__menu menu-bar__menu--bold">访达</span>
+        <span class="menu-bar__menu">文件</span>
+        <span class="menu-bar__menu">编辑</span>
+        <span class="menu-bar__menu">显示</span>
+        <span class="menu-bar__menu">前往</span>
+        <span class="menu-bar__menu">窗口</span>
+        <span class="menu-bar__menu">帮助</span>
+      </div>
+
+      <!-- Right: Status icons + time -->
+      <div class="menu-bar__right">
+        <span class="menu-bar__icon-wifi" title="Wi-Fi">
+          <svg viewBox="0 0 16 16" fill="currentColor" opacity="0.9">
+            <path d="M8 3C5.5 3 3.3 4.1 1.7 5.8L3.1 7.2C4.3 5.9 6.1 5 8 5s3.7.9 4.9 2.2l1.4-1.4C12.7 4.1 10.5 3 8 3z"/>
+            <path d="M8 7C6.4 7 5 7.8 4 8.9l1.4 1.4C6 9.7 6.9 9.2 8 9.2s2 .5 2.6 1.1L12 8.9C11 7.8 9.6 7 8 7z"/>
+            <circle cx="8" cy="12" r="1.5"/>
+          </svg>
+        </span>
+        <span class="menu-bar__icon-battery" title="电池">
+          <svg viewBox="0 0 24 12" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.9">
+            <rect x="0.6" y="0.6" width="19" height="10.8" rx="2" stroke="currentColor" fill="none"/>
+            <rect x="2" y="2" width="14" height="8" rx="1" fill="currentColor" opacity="0.8"/>
+            <rect x="19.6" y="3.6" width="2.5" height="4.8" rx="1" fill="currentColor" opacity="0.6" stroke="none"/>
+          </svg>
+          <span class="menu-bar__battery-percent">85%</span>
+        </span>
+        <span class="menu-bar__time" id="menuBarTime">00:00</span>
+      </div>
+    </header>
+
+    <!-- Desktop Main Area -->
+    <main class="desktop-main"></main>
+
+    <!-- Bottom Dock Area (Placeholder) -->
+    <footer class="dock-area">
+      <div class="dock-placeholder">Dock</div>
+    </footer>
+
+  </div>
+
+  <script>
+    // Real-time clock update
+    (function updateTime() {
+      const timeEl = document.getElementById('menuBarTime');
+      if (!timeEl) return;
+
+      const now = new Date();
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      timeEl.textContent = hours + ':' + minutes;
+
+      // Schedule next update at the beginning of the next minute
+      const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+      setTimeout(updateTime, msUntilNextMinute + 50);
+    })();
+  </script>
+</body>
+</html>

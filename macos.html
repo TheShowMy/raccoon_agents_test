@@ -705,6 +705,84 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+
+    /* ===== Calculator ===== */
+    .calc-container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: #1c1c1e;
+    }
+
+    .calc-display {
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-end;
+      padding: 16px 20px;
+      background: #1c1c1e;
+      min-height: 80px;
+      font-size: 42px;
+      font-weight: 300;
+      color: #fff;
+      word-break: break-all;
+      overflow: hidden;
+    }
+
+    .calc-buttons {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      flex: 1;
+    }
+
+    .calc-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      font-size: 22px;
+      font-family: var(--font-system);
+      cursor: pointer;
+      color: #fff;
+      background: #505050;
+      transition: filter 0.1s ease;
+      outline: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .calc-btn:active {
+      filter: brightness(1.6);
+    }
+
+    .calc-btn--ac {
+      background: #d4d4d2;
+      color: #000;
+      font-size: 18px;
+    }
+
+    .calc-btn--fn {
+      background: #d4d4d2;
+      color: #000;
+    }
+
+    .calc-btn--op {
+      background: #ff9500;
+      font-size: 24px;
+    }
+
+    .calc-btn--op:active {
+      filter: brightness(1.4);
+    }
+
+    .calc-btn--eq {
+      background: #ff9500;
+      font-size: 24px;
+    }
+
+    .calc-btn--eq:active {
+      filter: brightness(1.4);
+    }
+    }
   </style>
 </head>
 <body>
@@ -1343,6 +1421,171 @@
       return container;
     }
 
+    // ===== Calculator App =====
+    function buildCalculator() {
+      var container = document.createElement('div');
+      container.className = 'calc-container';
+
+      var currentInput = '0';
+      var previousInput = null;
+      var operator = null;
+      var shouldResetDisplay = false;
+
+      var display = document.createElement('div');
+      display.className = 'calc-display';
+      var displayText = document.createElement('span');
+      displayText.textContent = '0';
+      display.appendChild(displayText);
+
+      function updateDisplay() {
+        displayText.textContent = currentInput;
+      }
+
+      var buttonsGrid = document.createElement('div');
+      buttonsGrid.className = 'calc-buttons';
+
+      function handleNumber(num) {
+        if (shouldResetDisplay) {
+          currentInput = num;
+          shouldResetDisplay = false;
+        } else {
+          currentInput = currentInput === '0' ? num : currentInput + num;
+        }
+        updateDisplay();
+      }
+
+      function handleDecimal() {
+        if (shouldResetDisplay) {
+          currentInput = '0.';
+          shouldResetDisplay = false;
+        } else if (currentInput.indexOf('.') === -1) {
+          currentInput += '.';
+        }
+        updateDisplay();
+      }
+
+      function compute(a, b, op) {
+        switch (op) {
+          case '+': return a + b;
+          case '\u2212': return a - b;
+          case '\u00d7': return a * b;
+          case '\u00f7':
+            if (b === 0) {
+              currentInput = '\u9519\u8bef';
+              operator = null;
+              previousInput = null;
+              shouldResetDisplay = true;
+              updateDisplay();
+              return null;
+            }
+            return a / b;
+          default: return b;
+        }
+      }
+
+      function handleOperator(op) {
+        var inputNum = parseFloat(currentInput);
+        if (operator && previousInput !== null && !shouldResetDisplay) {
+          var result = compute(previousInput, inputNum, operator);
+          if (result === null) return;
+          currentInput = String(result);
+          updateDisplay();
+        }
+        previousInput = parseFloat(currentInput);
+        operator = op;
+        shouldResetDisplay = true;
+      }
+
+      function handleEquals() {
+        if (operator && previousInput !== null) {
+          var inputNum = parseFloat(currentInput);
+          var result = compute(previousInput, inputNum, operator);
+          if (result === null) return;
+          currentInput = String(result);
+          operator = null;
+          previousInput = null;
+          shouldResetDisplay = true;
+          updateDisplay();
+        }
+      }
+
+      function handleClear() {
+        currentInput = '0';
+        previousInput = null;
+        operator = null;
+        shouldResetDisplay = false;
+        updateDisplay();
+      }
+
+      function handleBackspace() {
+        if (shouldResetDisplay) return;
+        currentInput = currentInput.slice(0, -1);
+        if (currentInput === '' || currentInput === '-') {
+          currentInput = '0';
+        }
+        updateDisplay();
+      }
+
+      var btnDefs = [
+        { text: 'AC' },
+        { text: '\u232b' },
+        { text: '\u00f7' },
+        { text: '\u00d7' },
+        { text: '7' },
+        { text: '8' },
+        { text: '9' },
+        { text: '\u2212' },
+        { text: '4' },
+        { text: '5' },
+        { text: '6' },
+        { text: '+' },
+        { text: '1' },
+        { text: '2' },
+        { text: '3' },
+        { text: '=' },
+        { text: '0' },
+        { text: '.' }
+      ];
+
+      btnDefs.forEach(function(def) {
+        var btn = document.createElement('button');
+        btn.className = 'calc-btn';
+        btn.textContent = def.text;
+
+        if (def.text === 'AC') {
+          btn.classList.add('calc-btn--ac');
+          btn.addEventListener('click', handleClear);
+        } else if (def.text === '\u232b') {
+          btn.classList.add('calc-btn--fn');
+          btn.addEventListener('click', handleBackspace);
+        } else if (def.text === '\u00f7') {
+          btn.classList.add('calc-btn--op');
+          btn.addEventListener('click', function() { handleOperator('\u00f7'); });
+        } else if (def.text === '\u00d7') {
+          btn.classList.add('calc-btn--op');
+          btn.addEventListener('click', function() { handleOperator('\u00d7'); });
+        } else if (def.text === '\u2212') {
+          btn.classList.add('calc-btn--op');
+          btn.addEventListener('click', function() { handleOperator('\u2212'); });
+        } else if (def.text === '+') {
+          btn.classList.add('calc-btn--op');
+          btn.addEventListener('click', function() { handleOperator('+'); });
+        } else if (def.text === '=') {
+          btn.classList.add('calc-btn--eq');
+          btn.addEventListener('click', handleEquals);
+        } else if (def.text === '.') {
+          btn.addEventListener('click', handleDecimal);
+        } else {
+          btn.addEventListener('click', function() { handleNumber(def.text); });
+        }
+
+        buttonsGrid.appendChild(btn);
+      });
+
+      container.appendChild(display);
+      container.appendChild(buttonsGrid);      return container;
+    }
+
     // ===== Dock Click Handlers =====
     (function() {
       var dockItems = document.querySelectorAll('.dock__item');
@@ -1481,7 +1724,7 @@
         'terminal':   { title: '终端',       content: createTerminalContent },
         'finder':     { title: '访达',       content: createFinderApp },
         'text-editor': { title: '文本编辑器',   content: buildTextEditor },
-        'calculator': { title: '计算器',      content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">计算器 — 计算器界面（即将实现）</div>' },
+        'calculator': { title: '计算器',      content: buildCalculator },
         'airplane':   { title: '飞机大战',    content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">飞机大战 — 3D 飞机大战游戏（即将实现）</div>' }
       };
 

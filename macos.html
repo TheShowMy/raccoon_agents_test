@@ -1,0 +1,2242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>macOS 模拟桌面</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    /* ===== Reset & Base ===== */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --menu-bar-height: 28px;
+      --dock-height: 80px;
+      --menu-bar-bg: rgba(30, 30, 30, 0.82);
+      --menu-bar-text: #f5f5f7;
+      --menu-bar-text-dim: #b0b0b5;
+      --desktop-gradient-start: #2b5876;
+      --desktop-gradient-mid1: #4e4376;
+      --desktop-gradient-mid2: #ad5389;
+      --desktop-gradient-end: #3a1c71;
+      --font-system: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', system-ui, 'Helvetica Neue', sans-serif;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: var(--font-system);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* ===== Full-Screen Container ===== */
+    .macos-desktop {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ===== Desktop Wallpaper ===== */
+    .desktop-wallpaper {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        160deg,
+        var(--desktop-gradient-start) 0%,
+        var(--desktop-gradient-mid1) 30%,
+        var(--desktop-gradient-mid2) 65%,
+        var(--desktop-gradient-end) 100%
+      );
+      z-index: 0;
+    }
+
+    /* subtle noise overlay for texture */
+    .desktop-wallpaper::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at 20% 50%, rgba(255, 255, 255, 0.04) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 20%, rgba(255, 255, 255, 0.03) 0%, transparent 50%);
+    }
+
+    /* ===== Top Menu Bar ===== */
+    .menu-bar {
+      position: relative;
+      z-index: 100;
+      height: var(--menu-bar-height);
+      background: var(--menu-bar-bg);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      flex-shrink: 0;
+      color: var(--menu-bar-text);
+      font-size: 13px;
+      line-height: 1;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    /* ---- Left Section (Apple + App Menus) ---- */
+    .menu-bar__left {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      height: 100%;
+    }
+
+    .menu-bar__apple {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 10px;
+      height: 100%;
+      font-size: 13px;
+      color: var(--menu-bar-text);
+      cursor: default;
+      opacity: 0.9;
+    }
+
+    .menu-bar__apple:hover {
+      opacity: 1;
+    }
+
+    .menu-bar__menu {
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      height: 100%;
+      color: var(--menu-bar-text);
+      cursor: default;
+      font-weight: 500;
+      opacity: 0.85;
+      border-radius: 5px;
+      transition: background 0.15s ease, opacity 0.15s ease;
+    }
+
+    .menu-bar__menu:hover {
+      background: rgba(255, 255, 255, 0.12);
+      opacity: 1;
+    }
+
+    .menu-bar__menu--bold {
+      font-weight: 600;
+    }
+
+    /* ---- Right Section (Status Icons + Time) ---- */
+    .menu-bar__right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 100%;
+    }
+
+    .menu-bar__status-icons {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Wi-Fi icon (SVG-based) */
+    .menu-bar__icon-wifi {
+      display: flex;
+      align-items: center;
+    }
+
+    .menu-bar__icon-wifi svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Battery icon */
+    .menu-bar__icon-battery {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .menu-bar__icon-battery svg {
+      width: 22px;
+      height: 12px;
+    }
+
+    .menu-bar__battery-percent {
+      font-size: 11px;
+      color: var(--menu-bar-text);
+    }
+
+    .menu-bar__time {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--menu-bar-text);
+      white-space: nowrap;
+      min-width: 60px;
+      text-align: right;
+    }
+
+    /* ===== Desktop Main Area ===== */
+    .desktop-main {
+      position: relative;
+      z-index: 1;
+      flex: 1;
+      /* The wallpaper is behind, this is the interactive layer */
+    }
+
+    /* ===== Bottom Dock Area (Placeholder) ===== */
+    .dock-area {
+      position: relative;
+      z-index: 100;
+      height: var(--dock-height);
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding-bottom: 8px;
+    }
+
+    .dock {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      padding: 6px 12px;
+      background: rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(30px) saturate(200%);
+      -webkit-backdrop-filter: blur(30px) saturate(200%);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 20px;
+    }
+
+    .dock__item {
+      position: relative;
+      width: 50px;
+      height: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: transform 0.18s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      transform-origin: bottom center;
+      flex-shrink: 0;
+    }
+
+    .dock__item:hover {
+      transform: scale(1.55);
+    }
+
+    .dock__item:active {
+      transform: scale(1.25);
+    }
+
+    .dock__item-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .dock__item-tooltip {
+      position: absolute;
+      bottom: calc(100% + 12px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(30, 30, 30, 0.92);
+      color: #fff;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.18s ease;
+    }
+
+    .dock__item:hover .dock__item-tooltip {
+      opacity: 1;
+    }
+
+    /* ===== Window System ===== */
+    .window {
+      position: absolute;
+      background: rgba(30, 30, 30, 0.92);
+      backdrop-filter: blur(30px) saturate(180%);
+      -webkit-backdrop-filter: blur(30px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      box-shadow:
+        0 10px 40px rgba(0, 0, 0, 0.35),
+        0 0 0 1px rgba(0, 0, 0, 0.1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 280px;
+      min-height: 180px;
+      animation: window-open 0.2s ease-out;
+    }
+
+    @keyframes window-open {
+      from {
+        opacity: 0;
+        transform: scale(0.85);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    .window--focused {
+      box-shadow:
+        0 10px 40px rgba(0, 0, 0, 0.5),
+        0 0 0 1px rgba(255, 255, 255, 0.18);
+    }
+
+    /* Minimized: shrink to titlebar only */
+    .window--minimized {
+      height: auto !important;
+      min-height: 0 !important;
+    }
+
+    .window--minimized .window__content,
+    .window--minimized .window__resize-handle {
+      display: none;
+    }
+
+    /* Maximized: fill desktop-main */
+    .window--maximized {
+      left: 0 !important;
+      top: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      border-radius: 0 !important;
+    }
+
+    .window--maximized .window__resize-handle {
+      display: none;
+    }
+
+    /* ===== Title Bar ===== */
+    .window__titlebar {
+      display: flex;
+      align-items: center;
+      height: 40px;
+      padding: 0 12px;
+      background: rgba(45, 45, 45, 0.5);
+      cursor: default;
+      flex-shrink: 0;
+    }
+
+    /* Traffic Lights Container */
+    .window__traffic-lights {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-right: 12px;
+      flex-shrink: 0;
+    }
+
+    .window__tl {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: filter 0.15s ease;
+      line-height: 0;
+    }
+
+    .window__tl:hover {
+      filter: brightness(0.8);
+    }
+
+    .window__tl:active {
+      filter: brightness(0.65);
+    }
+
+    .window__tl--close    { background: #ff5f57; }
+    .window__tl--minimize { background: #febc2e; }
+    .window__tl--maximize { background: #28c840; }
+
+    .window__tl svg {
+      opacity: 0;
+      transition: opacity 0.12s ease;
+    }
+
+    .window__titlebar:hover .window__tl svg,
+    .window__tl:hover svg {
+      opacity: 1;
+    }
+
+    .window__title {
+      flex: 1;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.85);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      pointer-events: none;
+    }
+
+    /* ===== Window Content ===== */
+    .window__content {
+      flex: 1;
+      overflow: auto;
+      color: #e0e0e0;
+      font-size: 14px;
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    /* ===== Text Editor Application ===== */
+    .text-editor {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: #1e1e1e;
+    }
+
+    .text-editor__toolbar {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px;
+      background: rgba(45, 45, 45, 0.6);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      flex-shrink: 0;
+      gap: 8px;
+    }
+
+    .text-editor__clear-btn {
+      padding: 4px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #d0d0d0;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      font-family: var(--font-system);
+    }
+
+    .text-editor__clear-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .text-editor__body {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .text-editor__lines {
+      width: 44px;
+      min-width: 44px;
+      padding: 10px 0;
+      background: rgba(0, 0, 0, 0.2);
+      border-right: 1px solid rgba(255, 255, 255, 0.06);
+      overflow: hidden;
+      text-align: right;
+      font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #6a6a6a;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .text-editor__lines div {
+      padding-right: 10px;
+      height: 1.6em;
+    }
+
+    .text-editor__textarea {
+      flex: 1;
+      padding: 10px 12px;
+      background: transparent;
+      border: none;
+      outline: none;
+      resize: none;
+      color: #d4d4d4;
+      font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      overflow-y: auto;
+      tab-size: 4;
+    }
+
+    /* ===== Resize Handle ===== */
+    .window__resize-handle {
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 18px;
+      height: 18px;
+      cursor: nwse-resize;
+      z-index: 10;
+      background:
+        linear-gradient(135deg, transparent 60%, rgba(255,255,255,0.12) 60%),
+        linear-gradient(135deg, transparent 60%, rgba(255,255,255,0.08) 60%);
+      background-size: 6px 6px, 10px 10px;
+      background-position: bottom right;
+      background-repeat: no-repeat;
+    }
+
+    /* ===== Finder App Styles ===== */
+    .finder-container {
+      display: flex;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .finder-sidebar {
+      width: 180px;
+      min-width: 180px;
+      background: rgba(0, 0, 0, 0.2);
+      border-right: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 10px 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .finder-sidebar-section {
+      padding: 8px 14px 4px;
+      font-size: 11px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.32);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .finder-sidebar-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 14px;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.72);
+      cursor: default;
+      border-radius: 5px;
+      margin: 0 6px;
+      transition: background 0.15s ease;
+    }
+
+    .finder-sidebar-item:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .finder-sidebar-item--active {
+      background: rgba(255, 255, 255, 0.14);
+      color: #fff;
+    }
+
+    .finder-sidebar-icon {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .finder-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .finder-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(0, 0, 0, 0.1);
+      flex-shrink: 0;
+    }
+
+    .finder-btn {
+      width: 26px;
+      height: 22px;
+      border: none;
+      background: rgba(255, 255, 255, 0.07);
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 13px;
+      line-height: 1;
+      transition: background 0.15s ease;
+      flex-shrink: 0;
+      padding: 0;
+    }
+
+    .finder-btn:hover {
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    .finder-btn:active {
+      background: rgba(255, 255, 255, 0.24);
+    }
+
+    .finder-btn:disabled {
+      opacity: 0.25;
+      cursor: default;
+      pointer-events: none;
+    }
+
+    .finder-path {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.55);
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .finder-path-sep {
+      color: rgba(255, 255, 255, 0.2);
+      flex-shrink: 0;
+      font-size: 10px;
+      padding: 0 2px;
+    }
+
+    .finder-path-item {
+      cursor: default;
+      padding: 2px 5px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      max-width: 120px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .finder-path-item:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .finder-path-item--current {
+      color: rgba(255, 255, 255, 0.9);
+      font-weight: 500;
+    }
+
+    .finder-filelist {
+      flex: 1;
+      display: flex;
+      flex-wrap: wrap;
+      align-content: flex-start;
+      padding: 12px;
+      gap: 4px;
+      overflow-y: auto;
+    }
+
+    .finder-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 88px;
+      padding: 8px 4px;
+      border-radius: 8px;
+      cursor: default;
+      transition: background 0.12s ease;
+    }
+
+    .finder-item:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .finder-item:active {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .finder-item-icon {
+      width: 52px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 6px;
+      flex-shrink: 0;
+    }
+
+    .finder-item-icon svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .finder-item-name {
+      font-size: 11.5px;
+      color: rgba(255, 255, 255, 0.78);
+      text-align: center;
+      word-break: break-word;
+      line-height: 1.3;
+      max-width: 100%;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* ===== Calculator ===== */
+    .calc-container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: #1c1c1e;
+    }
+
+    .calc-display {
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-end;
+      padding: 16px 20px;
+      background: #1c1c1e;
+      min-height: 80px;
+      font-size: 42px;
+      font-weight: 300;
+      color: #fff;
+      word-break: break-all;
+      overflow: hidden;
+    }
+
+    .calc-buttons {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      flex: 1;
+    }
+
+    .calc-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      font-size: 22px;
+      font-family: var(--font-system);
+      cursor: pointer;
+      color: #fff;
+      background: #505050;
+      transition: filter 0.1s ease;
+      outline: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .calc-btn:active {
+      filter: brightness(1.6);
+    }
+
+    .calc-btn--ac {
+      background: #d4d4d2;
+      color: #000;
+      font-size: 18px;
+    }
+
+    .calc-btn--fn {
+      background: #d4d4d2;
+      color: #000;
+    }
+
+    .calc-btn--op {
+      background: #ff9500;
+      font-size: 24px;
+    }
+
+    .calc-btn--op:active {
+      filter: brightness(1.4);
+    }
+
+    .calc-btn--eq {
+      background: #ff9500;
+      font-size: 24px;
+    }
+
+    .calc-btn--eq:active {
+      filter: brightness(1.4);
+    }
+    }
+  </style>
+</head>
+<body>
+  <div class="macos-desktop">
+
+    <!-- Desktop Wallpaper -->
+    <div class="desktop-wallpaper"></div>
+
+    <!-- Top Menu Bar -->
+    <header class="menu-bar">
+      <!-- Left: Apple logo + app menu placeholders -->
+      <div class="menu-bar__left">
+        <span class="menu-bar__apple" title="Apple"></span>
+        <span class="menu-bar__menu menu-bar__menu--bold">访达</span>
+        <span class="menu-bar__menu">文件</span>
+        <span class="menu-bar__menu">编辑</span>
+        <span class="menu-bar__menu">显示</span>
+        <span class="menu-bar__menu">前往</span>
+        <span class="menu-bar__menu">窗口</span>
+        <span class="menu-bar__menu">帮助</span>
+      </div>
+
+      <!-- Right: Status icons + time -->
+      <div class="menu-bar__right">
+        <span class="menu-bar__icon-wifi" title="Wi-Fi">
+          <svg viewBox="0 0 16 16" fill="currentColor" opacity="0.9">
+            <path d="M8 3C5.5 3 3.3 4.1 1.7 5.8L3.1 7.2C4.3 5.9 6.1 5 8 5s3.7.9 4.9 2.2l1.4-1.4C12.7 4.1 10.5 3 8 3z"/>
+            <path d="M8 7C6.4 7 5 7.8 4 8.9l1.4 1.4C6 9.7 6.9 9.2 8 9.2s2 .5 2.6 1.1L12 8.9C11 7.8 9.6 7 8 7z"/>
+            <circle cx="8" cy="12" r="1.5"/>
+          </svg>
+        </span>
+        <span class="menu-bar__icon-battery" title="电池">
+          <svg viewBox="0 0 24 12" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.9">
+            <rect x="0.6" y="0.6" width="19" height="10.8" rx="2" stroke="currentColor" fill="none"/>
+            <rect x="2" y="2" width="14" height="8" rx="1" fill="currentColor" opacity="0.8"/>
+            <rect x="19.6" y="3.6" width="2.5" height="4.8" rx="1" fill="currentColor" opacity="0.6" stroke="none"/>
+          </svg>
+          <span class="menu-bar__battery-percent">85%</span>
+        </span>
+        <span class="menu-bar__time" id="menuBarTime">00:00</span>
+      </div>
+    </header>
+
+    <!-- Desktop Main Area -->
+    <main class="desktop-main"></main>
+
+    <!-- Bottom Dock -->
+    <footer class="dock-area">
+      <nav class="dock">
+        <!-- 终端 -->
+        <div class="dock__item" data-app="terminal" title="终端">
+          <span class="dock__item-icon">
+            <svg width="50" height="50" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
+              <rect x="3" y="3" width="44" height="44" rx="11" fill="#2a2a2a"/>
+              <text x="25" y="33" text-anchor="middle" fill="#0f0" font-size="22" font-family="monospace" font-weight="bold">&gt;_</text>
+            </svg>
+          </span>
+          <span class="dock__item-tooltip">终端</span>
+        </div>
+
+        <!-- 访达 -->
+        <div class="dock__item" data-app="finder" title="访达">
+          <span class="dock__item-icon">
+            <svg width="50" height="50" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
+              <rect x="3" y="3" width="44" height="44" rx="11" fill="#4a9eff"/>
+              <path d="M13,17 C13,15.5 14,14.5 15.4,14.5 L22,14.5 L24.5,17 L33,17 C34.4,17 35.4,18 35.4,19.5 L35.4,33 C35.4,34.5 34.4,35.5 33,35.5 L15.4,35.5 C14,35.5 13,34.5 13,33 Z" fill="rgba(255,255,255,0.15)"/>
+            </svg>
+          </span>
+          <span class="dock__item-tooltip">访达</span>
+        </div>
+
+        <!-- 文本编辑器 -->
+        <div class="dock__item" data-app="text-editor" title="文本编辑器">
+          <span class="dock__item-icon">
+            <svg width="50" height="50" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
+              <rect x="8" y="5" width="34" height="40" rx="8" fill="#0077ed"/>
+              <rect x="14" y="18" width="16" height="2" rx="1" fill="rgba(255,255,255,0.25)"/>
+              <rect x="14" y="23" width="22" height="2" rx="1" fill="rgba(255,255,255,0.25)"/>
+              <rect x="14" y="28" width="12" height="2" rx="1" fill="rgba(255,255,255,0.25)"/>
+              <rect x="14" y="33" width="18" height="2" rx="1" fill="rgba(255,255,255,0.25)"/>
+            </svg>
+          </span>
+          <span class="dock__item-tooltip">文本编辑器</span>
+        </div>
+
+        <!-- 计算器 -->
+        <div class="dock__item" data-app="calculator" title="计算器">
+          <span class="dock__item-icon">
+            <svg width="50" height="50" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
+              <rect x="3" y="3" width="44" height="44" rx="11" fill="#2d2d2d"/>
+              <rect x="11" y="11" width="12" height="12" rx="3" fill="#ff9500"/>
+              <rect x="27" y="11" width="12" height="12" rx="3" fill="#555"/>
+              <rect x="11" y="27" width="12" height="12" rx="3" fill="#555"/>
+              <rect x="27" y="27" width="12" height="12" rx="3" fill="#555"/>
+            </svg>
+          </span>
+          <span class="dock__item-tooltip">计算器</span>
+        </div>
+
+        <!-- 飞机大战 -->
+        <div class="dock__item" data-app="airplane" title="飞机大战">
+          <span class="dock__item-icon">
+            <svg width="50" height="50" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
+              <rect x="3" y="3" width="44" height="44" rx="11" fill="#16213e"/>
+              <polygon points="25,11 31,36 25,30 19,36" fill="#e94560"/>
+              <circle cx="25" cy="25" r="3" fill="#ff6b6b"/>
+            </svg>
+          </span>
+          <span class="dock__item-tooltip">飞机大战</span>
+        </div>
+      </nav>
+    </footer>
+
+  </div>
+
+  <script>
+    // Real-time clock update
+    (function updateTime() {
+      const timeEl = document.getElementById('menuBarTime');
+      if (!timeEl) return;
+
+      const now = new Date();
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      timeEl.textContent = hours + ':' + minutes;
+
+      // Schedule next update at the beginning of the next minute
+      const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+      setTimeout(updateTime, msUntilNextMinute + 50);
+    })();
+
+    // ===== Window System =====
+    (function() {
+      var desktopMain = document.querySelector('.desktop-main');
+      if (!desktopMain) return;
+
+      var zIndexCounter = 100;
+      var windows = [];
+
+      /**
+       * Bring the given window to the front (highest z-index).
+       */
+      function bringToFront(win) {
+        zIndexCounter++;
+        win.style.zIndex = zIndexCounter;
+        windows.forEach(function(w) { w.classList.remove('window--focused'); });
+        win.classList.add('window--focused');
+      }
+
+      function savePosition(win) {
+        win._prevLeft = win.style.left;
+        win._prevTop = win.style.top;
+        win._prevWidth = win.style.width;
+        win._prevHeight = win.style.height;
+      }
+
+      function restoreMaximize(win) {
+        win.classList.remove('window--maximized');
+        win.style.left = win._prevLeft || '100px';
+        win.style.top = win._prevTop || '80px';
+        win.style.width = win._prevWidth || '620px';
+        win.style.height = win._prevHeight || '420px';
+      }
+
+      /**
+       * Factory: createWindow(title, content)
+       *  - title: string for the window title bar
+       *  - content: string (HTML) or HTMLElement to place in the window body
+       * Returns the window DOM element.
+       */
+      function createWindow(title, content) {
+        // ---- Build elements ----
+        var win = document.createElement('div');
+        win.className = 'window';
+
+        // Position: cascade offset for each new window
+        var offset = (windows.length % 10) * 28;
+        win.style.left = (100 + offset) + 'px';
+        win.style.top = (80 + offset) + 'px';
+        win.style.width = '620px';
+        win.style.height = '420px';
+
+        // Title bar
+        var titlebar = document.createElement('div');
+        titlebar.className = 'window__titlebar';
+
+        // Traffic lights
+        var lights = document.createElement('div');
+        lights.className = 'window__traffic-lights';
+
+        // Close button
+        var closeBtn = document.createElement('button');
+        closeBtn.className = 'window__tl window__tl--close';
+        closeBtn.title = '关闭';
+        closeBtn.innerHTML = '<svg width="7" height="7" viewBox="0 0 7 7"><line x1="0.5" y1="0.5" x2="6.5" y2="6.5" stroke="#4a0000" stroke-width="1.2"/><line x1="6.5" y1="0.5" x2="0.5" y2="6.5" stroke="#4a0000" stroke-width="1.2"/></svg>';
+        closeBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          // Cleanup: if content div has a _cleanup function, call it
+          var contentEl = win.querySelector('.window__content').firstChild;
+          if (contentEl && contentEl._cleanup) {
+            contentEl._cleanup();
+          }
+          win.remove();
+          windows = windows.filter(function(w) { return w !== win; });
+        });
+
+        // Minimize button
+        var minBtn = document.createElement('button');
+        minBtn.className = 'window__tl window__tl--minimize';
+        minBtn.title = '最小化';
+        minBtn.innerHTML = '<svg width="7" height="7" viewBox="0 0 7 7"><line x1="1" y1="3.5" x2="6" y2="3.5" stroke="#7a5500" stroke-width="1.2"/></svg>';
+        minBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          if (win.classList.contains('window--minimized')) {
+            win.classList.remove('window--minimized');
+          } else {
+            if (win.classList.contains('window--maximized')) {
+              restoreMaximize(win);
+            }
+            win.classList.add('window--minimized');
+          }
+          bringToFront(win);
+        });
+
+        // Maximize button
+        var maxBtn = document.createElement('button');
+        maxBtn.className = 'window__tl window__tl--maximize';
+        maxBtn.title = '最大化';
+        maxBtn.innerHTML = '<svg width="7" height="7" viewBox="0 0 7 7"><polygon points="1,1 6,1 6,2.5 6,6 1,6 1,2.5" fill="none" stroke="#004d00" stroke-width="1"/></svg>';
+        maxBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          if (win.classList.contains('window--minimized')) {
+            win.classList.remove('window--minimized');
+          }
+          if (win.classList.contains('window--maximized')) {
+            restoreMaximize(win);
+          } else {
+            savePosition(win);
+            win.classList.add('window--maximized');
+          }
+          bringToFront(win);
+        });
+
+        lights.appendChild(closeBtn);
+        lights.appendChild(minBtn);
+        lights.appendChild(maxBtn);
+
+        // Title text
+        var titleSpan = document.createElement('span');
+        titleSpan.className = 'window__title';
+        titleSpan.textContent = title;
+
+        titlebar.appendChild(lights);
+        titlebar.appendChild(titleSpan);
+
+        // Content area
+        var contentDiv = document.createElement('div');
+        contentDiv.className = 'window__content';
+        if (typeof content === 'string') {
+          contentDiv.innerHTML = content;
+        } else if (typeof content === 'function') {
+          var el = content();
+          if (el instanceof HTMLElement) {
+            contentDiv.appendChild(el);
+          }
+        } else if (content instanceof HTMLElement) {
+          contentDiv.appendChild(content);
+        }
+
+        // Resize handle
+        var resizeHandle = document.createElement('div');
+        resizeHandle.className = 'window__resize-handle';
+
+        // Assemble window
+        win.appendChild(titlebar);
+        win.appendChild(contentDiv);
+        win.appendChild(resizeHandle);
+
+        // ---- Events ----
+
+        // Focus on any mousedown within the window
+        win.addEventListener('mousedown', function() {
+          bringToFront(win);
+        });
+
+        // ---- Drag (titlebar) ----
+        var isDragging = false;
+        var dragStartX, dragStartY, winStartLeft, winStartTop;
+
+        function onDragMouseMove(e) {
+          if (!isDragging) return;
+          var dx = e.clientX - dragStartX;
+          var dy = e.clientY - dragStartY;
+          var newLeft = winStartLeft + dx;
+          var newTop = winStartTop + dy;
+
+          var parentRect = desktopMain.getBoundingClientRect();
+          newLeft = Math.max(-200, Math.min(newLeft, parentRect.width - 120));
+          newTop = Math.max(0, Math.min(newTop, parentRect.height - 24));
+
+          win.style.left = newLeft + 'px';
+          win.style.top = newTop + 'px';
+        }
+
+        function onDragMouseUp() {
+          if (!isDragging) return;
+          isDragging = false;
+          document.removeEventListener('mousemove', onDragMouseMove);
+          document.removeEventListener('mouseup', onDragMouseUp);
+        }
+
+        titlebar.addEventListener('mousedown', function(e) {
+          if (e.target.closest('.window__tl')) return;
+          if (win.classList.contains('window--minimized')) return;
+          if (win.classList.contains('window--maximized')) return;
+
+          isDragging = true;
+          dragStartX = e.clientX;
+          dragStartY = e.clientY;
+          winStartLeft = win.offsetLeft;
+          winStartTop = win.offsetTop;
+
+          document.addEventListener('mousemove', onDragMouseMove);
+          document.addEventListener('mouseup', onDragMouseUp);
+          e.preventDefault();
+        });
+
+        // ---- Resize (bottom-right handle) ----
+        var isResizing = false;
+        var resizeStartX, resizeStartY, winStartWidth, winStartHeight;
+
+        function onResizeMouseMove(e) {
+          if (!isResizing) return;
+          var dx = e.clientX - resizeStartX;
+          var dy = e.clientY - resizeStartY;
+          win.style.width = Math.max(280, winStartWidth + dx) + 'px';
+          win.style.height = Math.max(180, winStartHeight + dy) + 'px';
+        }
+
+        function onResizeMouseUp() {
+          if (!isResizing) return;
+          isResizing = false;
+          document.removeEventListener('mousemove', onResizeMouseMove);
+          document.removeEventListener('mouseup', onResizeMouseUp);
+        }
+
+        resizeHandle.addEventListener('mousedown', function(e) {
+          if (win.classList.contains('window--minimized')) return;
+          if (win.classList.contains('window--maximized')) return;
+
+          isResizing = true;
+          resizeStartX = e.clientX;
+          resizeStartY = e.clientY;
+          winStartWidth = win.offsetWidth;
+          winStartHeight = win.offsetHeight;
+
+          document.addEventListener('mousemove', onResizeMouseMove);
+          document.addEventListener('mouseup', onResizeMouseUp);
+          e.preventDefault();
+          e.stopPropagation();
+        });
+
+        // ---- Attach to DOM ----
+        desktopMain.appendChild(win);
+        windows.push(win);
+        bringToFront(win);
+
+        return win;
+      }
+
+      // Expose globally for console testing
+      window.createWindow = createWindow;
+    })();
+
+    // ===== Finder File System Data =====
+    var finderData = {
+      '': ['桌面', '文稿', '下载', '应用程序', '图片', '音乐'],
+      '桌面': ['屏幕快照.png', '我的文档.docx'],
+      '桌面/屏幕快照.png': null,
+      '桌面/我的文档.docx': null,
+      '文稿': ['项目', '简历.pdf', '笔记.txt'],
+      '文稿/项目': ['README.md', 'plan.txt'],
+      '文稿/项目/README.md': null,
+      '文稿/项目/plan.txt': null,
+      '文稿/简历.pdf': null,
+      '文稿/笔记.txt': null,
+      '下载': ['photo.jpg', 'setup.dmg'],
+      '下载/photo.jpg': null,
+      '下载/setup.dmg': null,
+      '应用程序': [],
+      '图片': ['壁纸', '头像.png'],
+      '图片/壁纸': ['mountain.jpg', 'beach.jpg'],
+      '图片/壁纸/mountain.jpg': null,
+      '图片/壁纸/beach.jpg': null,
+      '图片/头像.png': null,
+      '音乐': ['playlist.m3u'],
+      '音乐/playlist.m3u': null
+    };
+
+    function isFinderFolder(path) {
+      return finderData.hasOwnProperty(path) && finderData[path] !== null;
+    }
+
+    function getFinderChildren(path) {
+      return finderData[path] || [];
+    }
+
+    function getFinderFileColor(name) {
+      var ext = name.split('.').pop().toLowerCase();
+      var colors = {
+        'png': '#e07b5a', 'jpg': '#e07b5a', 'jpeg': '#e07b5a',
+        'docx': '#4a9eff', 'doc': '#4a9eff', 'pdf': '#e74c3c',
+        'txt': '#7b8c9e', 'md': '#58c4b9',
+        'dmg': '#9575cd', 'app': '#5ac8fa',
+        'm3u': '#ab47bc'
+      };
+      return colors[ext] || '#7b8c9e';
+    }
+
+    function createFinderApp() {
+      var container = document.createElement('div');
+      container.className = 'finder-container';
+
+      var currentPath = '';
+      var pathHistory = [''];
+      var historyIndex = 0;
+      var favorites = ['桌面', '文稿', '下载', '图片', '音乐'];
+
+      /* ---- Sidebar ---- */
+      var sidebar = document.createElement('div');
+      sidebar.className = 'finder-sidebar';
+
+      var favSection = document.createElement('div');
+      favSection.className = 'finder-sidebar-section';
+      favSection.textContent = '个人收藏';
+      sidebar.appendChild(favSection);
+
+      favorites.forEach(function(name) {
+        var item = document.createElement('div');
+        item.className = 'finder-sidebar-item';
+        var icon = document.createElement('span');
+        icon.className = 'finder-sidebar-icon';
+        icon.textContent = '📁';
+        item.appendChild(icon);
+        var label = document.createElement('span');
+        label.textContent = name;
+        item.appendChild(label);
+        item.addEventListener('click', function() {
+          navigateTo(name);
+        });
+        sidebar.appendChild(item);
+      });
+
+      var locSection = document.createElement('div');
+      locSection.className = 'finder-sidebar-section';
+      locSection.textContent = '位置';
+      sidebar.appendChild(locSection);
+
+      var rootItem = document.createElement('div');
+      rootItem.className = 'finder-sidebar-item';
+      var rootIcon = document.createElement('span');
+      rootIcon.className = 'finder-sidebar-icon';
+      rootIcon.textContent = '🖥';
+      rootItem.appendChild(rootIcon);
+      var rootLabel = document.createElement('span');
+      rootLabel.textContent = 'Macintosh HD';
+      rootItem.appendChild(rootLabel);
+      rootItem.addEventListener('click', function() {
+        navigateTo('');
+      });
+      sidebar.appendChild(rootItem);
+
+      /* ---- Main area ---- */
+      var main = document.createElement('div');
+      main.className = 'finder-main';
+
+      /* Toolbar */
+      var toolbar = document.createElement('div');
+      toolbar.className = 'finder-toolbar';
+
+      var backBtn = document.createElement('button');
+      backBtn.className = 'finder-btn';
+      backBtn.textContent = '‹';
+      backBtn.title = '返回';
+      backBtn.disabled = true;
+      backBtn.addEventListener('click', function() {
+        if (historyIndex > 0) {
+          historyIndex--;
+          refreshView(pathHistory[historyIndex]);
+        }
+      });
+      toolbar.appendChild(backBtn);
+
+      var forwardBtn = document.createElement('button');
+      forwardBtn.className = 'finder-btn';
+      forwardBtn.textContent = '›';
+      forwardBtn.title = '前进';
+      forwardBtn.disabled = true;
+      forwardBtn.addEventListener('click', function() {
+        if (historyIndex < pathHistory.length - 1) {
+          historyIndex++;
+          refreshView(pathHistory[historyIndex]);
+        }
+      });
+      toolbar.appendChild(forwardBtn);
+
+      var pathEl = document.createElement('div');
+      pathEl.className = 'finder-path';
+      toolbar.appendChild(pathEl);
+
+      main.appendChild(toolbar);
+
+      /* File list */
+      var fileList = document.createElement('div');
+      fileList.className = 'finder-filelist';
+      main.appendChild(fileList);
+
+      /* ---- Assemble ---- */
+      container.appendChild(sidebar);
+      container.appendChild(main);
+
+      /* ---- Internal helpers ---- */
+      function navigateTo(targetPath) {
+        pathHistory = pathHistory.slice(0, historyIndex + 1);
+        pathHistory.push(targetPath);
+        historyIndex = pathHistory.length - 1;
+        refreshView(targetPath);
+      }
+
+      function refreshView(path) {
+        currentPath = path;
+        renderPath(currentPath);
+        renderFileList(currentPath);
+        updateButtons();
+        updateSidebar();
+      }
+
+      function renderPath(path) {
+        while (pathEl.firstChild) {
+          pathEl.removeChild(pathEl.firstChild);
+        }
+
+        var rootSpan = document.createElement('span');
+        rootSpan.className = 'finder-path-item';
+        rootSpan.textContent = 'Macintosh HD';
+        rootSpan.addEventListener('click', function() { navigateTo(''); });
+        pathEl.appendChild(rootSpan);
+
+        if (path) {
+          var parts = path.split('/');
+          var accum = '';
+          parts.forEach(function(part, i) {
+            accum = accum ? accum + '/' + part : part;
+
+            var sep = document.createElement('span');
+            sep.className = 'finder-path-sep';
+            sep.textContent = '▸';
+            pathEl.appendChild(sep);
+
+            var span = document.createElement('span');
+            span.className = 'finder-path-item';
+            if (i === parts.length - 1) {
+              span.classList.add('finder-path-item--current');
+            }
+            span.textContent = part;
+            (function(p) {
+              span.addEventListener('click', function() { navigateTo(p); });
+            })(accum);
+            pathEl.appendChild(span);
+          });
+        }
+      }
+
+      function renderFileList(path) {
+        while (fileList.firstChild) {
+          fileList.removeChild(fileList.firstChild);
+        }
+
+        var children = getFinderChildren(path);
+
+        if (children.length === 0) {
+          var empty = document.createElement('div');
+          empty.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:60px;color:rgba(255,255,255,0.28);font-size:13px;';
+          empty.textContent = '此文件夹为空';
+          fileList.appendChild(empty);
+          return;
+        }
+
+        children.forEach(function(name) {
+          var childPath = path ? path + '/' + name : name;
+          var isFolder = isFinderFolder(childPath);
+
+          var item = document.createElement('div');
+          item.className = 'finder-item';
+
+          var icon = document.createElement('div');
+          icon.className = 'finder-item-icon';
+
+          if (isFolder) {
+            icon.innerHTML = '<svg viewBox="0 0 48 48"><path d="M6 12C6 9.8 7.8 8 10 8h11l4 3h15c2.2 0 4 1.8 4 4v22c0 2.2-1.8 4-4 4H10c-2.2 0-4-1.8-4-4V12z" fill="#4a9eff"/><path d="M6 12C6 9.8 7.8 8 10 8h11l4 3h15c2.2 0 4 1.8 4 4v22c0 2.2-1.8 4-4 4H10c-2.2 0-4-1.8-4-4V12z" fill="rgba(255,255,255,0.08)"/></svg>';
+          } else {
+            var color = getFinderFileColor(name);
+            icon.innerHTML = '<svg viewBox="0 0 48 48"><path d="M12 6h14l14 14v22c0 2.2-1.8 4-4 4H12c-2.2 0-4-1.8-4-4V10c0-2.2 1.8-4 4-4z" fill="' + color + '"/><path d="M26 6v14h14" fill="rgba(255,255,255,0.12)"/></svg>';
+          }
+          item.appendChild(icon);
+
+          var nameEl = document.createElement('div');
+          nameEl.className = 'finder-item-name';
+          nameEl.textContent = name;
+          item.appendChild(nameEl);
+
+          if (isFolder) {
+            item.addEventListener('click', function() {
+              navigateTo(childPath);
+            });
+          }
+          /* Clicking a file does nothing — its name is already visible */
+
+          fileList.appendChild(item);
+        });
+      }
+
+      function updateButtons() {
+        backBtn.disabled = (historyIndex <= 0);
+        forwardBtn.disabled = (historyIndex >= pathHistory.length - 1);
+      }
+
+      function updateSidebar() {
+        var sidebarItems = sidebar.querySelectorAll('.finder-sidebar-item');
+        for (var i = 0; i < sidebarItems.length; i++) {
+          sidebarItems[i].classList.remove('finder-sidebar-item--active');
+          var label = sidebarItems[i].querySelector('span:last-child');
+          if (!label) continue;
+          var labelText = label.textContent;
+          if (currentPath === '' && labelText === 'Macintosh HD') {
+            sidebarItems[i].classList.add('finder-sidebar-item--active');
+          } else if (currentPath === labelText) {
+            sidebarItems[i].classList.add('finder-sidebar-item--active');
+          }
+        }
+      }
+
+      /* Initial render */
+      refreshView('');
+
+      return container;
+    }
+
+    // ===== 3D 飞机大战游戏 =====
+    function createAirplaneGameContent() {
+      var container = document.createElement('div');
+      container.style.cssText = 'width:100%;height:100%;position:relative;overflow:hidden;background:#000;cursor:crosshair;';
+
+      // HUD overlay
+      var overlay = document.createElement('div');
+      overlay.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
+
+      // Hearts display
+      var heartsEl = document.createElement('div');
+      heartsEl.style.cssText = 'position:absolute;top:12px;left:16px;font-size:22px;color:#ff4757;text-shadow:0 2px 10px rgba(0,0,0,0.8);line-height:1;';
+      heartsEl.textContent = '\u2764\u2764\u2764';
+
+      // Score display
+      var scoreEl = document.createElement('div');
+      scoreEl.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);font-size:18px;color:#fff;font-weight:600;text-shadow:0 2px 10px rgba(0,0,0,0.8);';
+      scoreEl.textContent = '\u5206\u6570: 0';
+
+      // Win/Lose overlay
+      var resultOverlay = document.createElement('div');
+      resultOverlay.style.cssText = 'position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);';
+
+      var resultTitle = document.createElement('div');
+      resultTitle.style.cssText = 'font-size:38px;font-weight:700;margin-bottom:12px;text-align:center;line-height:1.3;';
+
+      var resultSubtitle = document.createElement('div');
+      resultSubtitle.style.cssText = 'font-size:18px;color:#ccc;margin-bottom:24px;';
+
+      var restartBtn = document.createElement('button');
+      restartBtn.textContent = '\u91cd\u65b0\u5f00\u59cb';
+      restartBtn.style.cssText = 'pointer-events:auto;padding:10px 32px;font-size:17px;font-weight:600;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;border-radius:12px;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,0.3);transition:transform .15s ease,box-shadow .15s ease;';
+      restartBtn.addEventListener('mouseenter', function(){this.style.transform='scale(1.06)';this.style.boxShadow='0 6px 28px rgba(0,0,0,0.45)';});
+      restartBtn.addEventListener('mouseleave', function(){this.style.transform='';this.style.boxShadow='';});
+
+      resultOverlay.appendChild(resultTitle);
+      resultOverlay.appendChild(resultSubtitle);
+      resultOverlay.appendChild(restartBtn);
+
+      overlay.appendChild(heartsEl);
+      overlay.appendChild(scoreEl);
+      overlay.appendChild(resultOverlay);
+      container.appendChild(overlay);
+
+      // Game state
+      var gameState = {
+        player: null,
+        bullets: [],
+        enemies: [],
+        asteroids: [],
+        hearts: 3,
+        score: 0,
+        running: true,
+        gameOver: false,
+        targetPosition: new THREE.Vector3(0, 0, 0),
+        lastFireTime: 0,
+        fireInterval: 180,
+        enemySpawnTimer: 0,
+        enemySpawnInterval: 1500,
+        asteroidSpawnTimer: 0,
+        asteroidSpawnInterval: 2500,
+        animId: null,
+        scene: null,
+        camera: null,
+        renderer: null
+      };
+
+      // Initialize game when container is visible
+      requestAnimationFrame(function initGame() {
+        var w = container.clientWidth;
+        var h = container.clientHeight;
+        if (w === 0 || h === 0) {
+          requestAnimationFrame(initGame);
+          return;
+        }
+
+        // --- Scene setup ---
+        var scene = new THREE.Scene();
+        gameState.scene = scene;
+        scene.background = new THREE.Color(0x0a0a2e);
+
+        var camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 500);
+        camera.position.set(0, 32, 18);
+        camera.lookAt(0, 0, 0);
+        gameState.camera = camera;
+
+        var renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(w, h);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        gameState.renderer = renderer;
+        container.insertBefore(renderer.domElement, container.firstChild);
+
+        // --- Lighting ---
+        scene.add(new THREE.AmbientLight(0x444466, 0.6));
+        var dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 25, 10);
+        scene.add(dirLight);
+        var fillLight = new THREE.DirectionalLight(0x4488ff, 0.4);
+        fillLight.position.set(-5, 15, -5);
+        scene.add(fillLight);
+
+        // --- Ground grid ---
+        var grid = new THREE.GridHelper(40, 20, 0x4444aa, 0x333399);
+        grid.position.y = -0.5;
+        scene.add(grid);
+
+        // --- Stars ---
+        var starGeo = new THREE.BufferGeometry();
+        var starPos = new Float32Array(600 * 3);
+        for (var si = 0; si < 600 * 3; si++) {
+          starPos[si] = (Math.random() - 0.5) * 500;
+          if (si % 3 === 1) starPos[si] = Math.random() * 40 + 10;
+        }
+        starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+        scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.35, transparent: true, opacity: 0.7 })));
+
+        // --- Player plane ---
+        var pGroup = new THREE.Group();
+        pGroup.position.set(0, 0, 0);
+
+        var phong = THREE.MeshPhongMaterial;
+        var box = THREE.BoxGeometry;
+        var cone = THREE.ConeGeometry;
+        var sphere = THREE.SphereGeometry;
+
+        pGroup.add(new THREE.Mesh(new box(1.2, 0.35, 2.2), new phong({ color: 0x4488ff, emissive: 0x224488, emissiveIntensity: 0.2 })));
+        var wings = new THREE.Mesh(new box(3.2, 0.06, 0.8), new phong({ color: 0x5599ff }));
+        wings.position.set(0, -0.05, 0.1);
+        pGroup.add(wings);
+        var nose = new THREE.Mesh(new cone(0.5, 0.8, 8), new phong({ color: 0x66aaff, emissive: 0x3366cc, emissiveIntensity: 0.3 }));
+        nose.rotation.x = -Math.PI / 2;
+        nose.position.set(0, 0.1, 1.3);
+        pGroup.add(nose);
+        var tail = new THREE.Mesh(new box(0.6, 0.6, 0.25), new phong({ color: 0x3377dd }));
+        tail.position.set(0, 0.15, -1.4);
+        pGroup.add(tail);
+
+        var pGlow = new THREE.Mesh(new sphere(0.2, 8, 8), new THREE.MeshBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.5 }));
+        pGlow.position.set(0, 0.25, 0.3);
+        pGlow.scale.set(1, 0.5, 0.8);
+        pGroup.add(pGlow);
+
+        scene.add(pGroup);
+        gameState.player = pGroup;
+
+        // --- Bounds ---
+        var bnd = { minX: -15, maxX: 15, minZ: -11, maxZ: 11 };
+        var spawnR = 22;
+
+        // --- Mouse tracking ---
+        var mouse = new THREE.Vector2();
+        var ray = new THREE.Raycaster();
+        var tPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        var tPt = new THREE.Vector3();
+
+        container.addEventListener('mousemove', function(e) {
+          var r = renderer.domElement.getBoundingClientRect();
+          mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+          mouse.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+          ray.setFromCamera(mouse, camera);
+          if (ray.ray.intersectPlane(tPlane, tPt)) gameState.targetPosition.copy(tPt);
+        });
+
+        // --- Factories ---
+        function mkBullet(pos, dir) {
+          var b = new THREE.Mesh(new sphere(0.18, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffff44 }));
+          b.position.copy(pos);
+          b.userData.velocity = dir.clone().multiplyScalar(1.2);
+          b.userData.isBullet = true;
+          scene.add(b);
+          return b;
+        }
+
+        function mkEnemy(pos) {
+          var g = new THREE.Group();
+          g.position.copy(pos);
+          g.add(new THREE.Mesh(new cone(0.6, 1.0, 6), new phong({ color: 0xff3355, emissive: 0x881122, emissiveIntensity: 0.3 })));
+          var ring = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.06, 6, 12), new phong({ color: 0xff6666 }));
+          ring.rotation.x = Math.PI / 2;
+          ring.position.y = 0.1;
+          g.add(ring);
+          var dir = new THREE.Vector3().subVectors(gameState.player.position, pos).normalize();
+          g.userData.velocity = dir.multiplyScalar(0.08 + Math.random() * 0.06);
+          scene.add(g);
+          return g;
+        }
+
+        function mkAsteroid(pos) {
+          var size = 0.5 + Math.random() * 0.5;
+          var a = new THREE.Mesh(new THREE.DodecahedronGeometry(size), new phong({ color: 0x888899, emissive: 0x333344, emissiveIntensity: 0.1, flatShading: true }));
+          a.position.copy(pos);
+          a.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+          var dir = new THREE.Vector3().subVectors(gameState.player.position, pos).normalize();
+          a.userData.velocity = dir.multiplyScalar(0.05 + Math.random() * 0.05);
+          a.userData.radius = size * 0.8;
+          a.userData.rotSpeed = (Math.random() - 0.5) * 0.03;
+          scene.add(a);
+          return a;
+        }
+
+        function edgePos() {
+          var a = Math.random() * Math.PI * 2;
+          return new THREE.Vector3(Math.cos(a) * spawnR, 0, Math.sin(a) * spawnR);
+        }
+
+        function spawnEnemy() { gameState.enemies.push(mkEnemy(edgePos())); }
+        function spawnAsteroid() { gameState.asteroids.push(mkAsteroid(edgePos())); }
+
+        // --- Game over ---
+        function endGame(won) {
+          if (gameState.gameOver) return;
+          gameState.gameOver = true;
+          gameState.running = false;
+          resultOverlay.style.display = 'flex';
+          if (won) {
+            resultTitle.textContent = '\uD83C\uDF89 \u901A\u5173\uFF01';
+            resultTitle.style.color = '#ffd700';
+            resultSubtitle.textContent = '\u606D\u559C\u4F60\u83B7\u5F97 200 \u5206\uFF01';
+          } else {
+            resultTitle.textContent = '\uD83D\uDC80 \u6E38\u620F\u5931\u8D25';
+            resultTitle.style.color = '#ff4757';
+            resultSubtitle.textContent = '\u751F\u547D\u503C\u5F52\u96F6\uFF0C\u518D\u8BD5\u4E00\u6B21\u5427\uFF01';
+          }
+        }
+
+        function resetGame() {
+          resultOverlay.style.display = 'none';
+          gameState.hearts = 3;
+          gameState.score = 0;
+          gameState.running = true;
+          gameState.gameOver = false;
+          // Clear scene objects except player, lights, grid, stars
+          var keep = [gameState.player, grid, dirLight, fillLight];
+          for (var ci = scene.children.length - 1; ci >= 0; ci--) {
+            var ch = scene.children[ci];
+            if (ch instanceof THREE.AmbientLight) { keep.push(ch); continue; }
+            if (ch instanceof THREE.Points) { keep.push(ch); continue; }
+            if (keep.indexOf(ch) === -1) {
+              if (ch.type === 'Group') {
+                ch.children.forEach(function(c) { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); });
+              }
+              if (ch.geometry) ch.geometry.dispose();
+              if (ch.material) ch.material.dispose();
+              scene.remove(ch);
+            }
+          }
+          gameState.enemies = [];
+          gameState.asteroids = [];
+          gameState.bullets = [];
+          gameState.enemySpawnTimer = 0;
+          gameState.asteroidSpawnTimer = 0;
+          gameState.lastFireTime = 0;
+          gameState.player.position.set(0, 0, 0);
+          gameState.targetPosition.set(0, 0, 0);
+          updateHUD();
+        }
+
+        restartBtn.addEventListener('click', resetGame);
+
+        function updateHUD() {
+          var h = '';
+          for (var i = 0; i < gameState.hearts; i++) h += '\u2764';
+          heartsEl.textContent = h;
+          scoreEl.textContent = '\u5206\u6570: ' + gameState.score;
+        }
+
+        // --- Game loop ---
+        var lastTime = performance.now();
+
+        function animate(time) {
+          gameState.animId = requestAnimationFrame(animate);
+          if (!gameState.running) { renderer.render(scene, camera); return; }
+
+          var dt = time - lastTime;
+          lastTime = time;
+
+          var pp = gameState.player.position;
+          var tgt = gameState.targetPosition;
+
+          // Player movement toward mouse
+          var mv = new THREE.Vector3().subVectors(tgt, pp);
+          mv.y = 0;
+          var d = mv.length();
+          if (d > 0.5) {
+            mv.normalize();
+            var spd = 0.25 + Math.min(d * 0.008, 0.08);
+            pp.x += mv.x * spd;
+            pp.z += mv.z * spd;
+            gameState.player.rotation.y = Math.atan2(mv.x, mv.z);
+          }
+          pp.x = Math.max(bnd.minX, Math.min(bnd.maxX, pp.x));
+          pp.z = Math.max(bnd.minZ, Math.min(bnd.maxZ, pp.z));
+
+          // Auto-fire
+          if (time - gameState.lastFireTime > gameState.fireInterval) {
+            gameState.lastFireTime = time;
+            var fd = new THREE.Vector3(0, 0, 1).applyQuaternion(gameState.player.quaternion);
+            fd.y = 0; fd.normalize();
+            var mp = pp.clone(); mp.y = 0.2; mp.x += fd.x * 1.5; mp.z += fd.z * 1.5;
+            gameState.bullets.push(mkBullet(mp, fd));
+          }
+
+          // Update bullets
+          for (var bi = gameState.bullets.length - 1; bi >= 0; bi--) {
+            var b = gameState.bullets[bi];
+            b.position.x += b.userData.velocity.x;
+            b.position.z += b.userData.velocity.z;
+            b.position.y = 0.2;
+            if (Math.abs(b.position.x) > 28 || Math.abs(b.position.z) > 28) {
+              scene.remove(b); if (b.geometry) b.geometry.dispose(); if (b.material) b.material.dispose();
+              gameState.bullets.splice(bi, 1);
+            }
+          }
+
+          // Spawn enemies
+          gameState.enemySpawnTimer += dt;
+          if (gameState.enemySpawnTimer > gameState.enemySpawnInterval) {
+            gameState.enemySpawnTimer = 0;
+            gameState.enemySpawnInterval = Math.max(600, 1500 - gameState.score * 2);
+            spawnEnemy();
+          }
+          gameState.asteroidSpawnTimer += dt;
+          if (gameState.asteroidSpawnTimer > gameState.asteroidSpawnInterval) {
+            gameState.asteroidSpawnTimer = 0;
+            spawnAsteroid();
+          }
+
+          function dmg() {
+            gameState.hearts--; updateHUD();
+            if (gameState.hearts <= 0) endGame(false);
+          }
+          function addScore(pts) {
+            gameState.score += pts; updateHUD();
+            if (gameState.score >= 200) endGame(true);
+          }
+
+          // Update enemies
+          for (var ei = gameState.enemies.length - 1; ei >= 0; ei--) {
+            var e = gameState.enemies[ei];
+            e.position.x += e.userData.velocity.x;
+            e.position.z += e.userData.velocity.z;
+            if (Math.abs(e.position.x) > 32 || Math.abs(e.position.z) > 32) {
+              scene.remove(e); e.children.forEach(function(c) { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); });
+              gameState.enemies.splice(ei, 1); continue;
+            }
+            if (e.position.distanceTo(pp) < 1.8) {
+              scene.remove(e); e.children.forEach(function(c) { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); });
+              gameState.enemies.splice(ei, 1); dmg(); continue;
+            }
+            for (var bj = gameState.bullets.length - 1; bj >= 0; bj--) {
+              var b = gameState.bullets[bj];
+              if (b.position.distanceTo(e.position) < 1.0) {
+                scene.remove(b); if (b.geometry) b.geometry.dispose(); if (b.material) b.material.dispose();
+                gameState.bullets.splice(bj, 1);
+                scene.remove(e); e.children.forEach(function(c) { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); });
+                gameState.enemies.splice(ei, 1); addScore(10); break;
+              }
+            }
+          }
+
+          // Update asteroids
+          for (var ai = gameState.asteroids.length - 1; ai >= 0; ai--) {
+            var a = gameState.asteroids[ai];
+            a.position.x += a.userData.velocity.x;
+            a.position.z += a.userData.velocity.z;
+            a.rotation.x += a.userData.rotSpeed || 0.01;
+            a.rotation.y += a.userData.rotSpeed || 0.01;
+            if (Math.abs(a.position.x) > 32 || Math.abs(a.position.z) > 32) {
+              scene.remove(a); if (a.geometry) a.geometry.dispose(); if (a.material) a.material.dispose();
+              gameState.asteroids.splice(ai, 1); continue;
+            }
+            if (a.position.distanceTo(pp) < 1.8) {
+              scene.remove(a); if (a.geometry) a.geometry.dispose(); if (a.material) a.material.dispose();
+              gameState.asteroids.splice(ai, 1); dmg(); continue;
+            }
+            for (var bj = gameState.bullets.length - 1; bj >= 0; bj--) {
+              var b = gameState.bullets[bj];
+              if (b.position.distanceTo(a.position) < 0.8 + (a.userData.radius || 0.5)) {
+                scene.remove(b); if (b.geometry) b.geometry.dispose(); if (b.material) b.material.dispose();
+                gameState.bullets.splice(bj, 1);
+                scene.remove(a); if (a.geometry) a.geometry.dispose(); if (a.material) a.material.dispose();
+                gameState.asteroids.splice(ai, 1); addScore(5); break;
+              }
+            }
+          }
+
+          // Camera follows player
+          camera.position.x = pp.x * 0.25;
+          camera.position.z = 18 + pp.z * 0.08;
+          camera.lookAt(pp.x, 0, pp.z);
+          renderer.render(scene, camera);
+        }
+
+        animate(performance.now());
+
+        // Cleanup on window close
+        container._cleanup = function() {
+          if (gameState.animId) { cancelAnimationFrame(gameState.animId); gameState.animId = null; }
+          if (gameState.renderer) { gameState.renderer.dispose(); gameState.renderer = null; }
+          if (gameState.scene) {
+            gameState.scene.traverse(function(obj) {
+              if (obj.geometry) obj.geometry.dispose();
+              if (obj.material) { if (Array.isArray(obj.material)) obj.material.forEach(function(m) { m.dispose(); }); else obj.material.dispose(); }
+            });
+            gameState.scene = null;
+          }
+          var cv = container.querySelector('canvas');
+          if (cv) cv.remove();
+        };
+      });
+      return container;
+    }
+
+    // ===== Calculator App =====
+    function buildCalculator() {
+      var container = document.createElement('div');
+      container.className = 'calc-container';
+
+      var currentInput = '0';
+      var previousInput = null;
+      var operator = null;
+      var shouldResetDisplay = false;
+
+      var display = document.createElement('div');
+      display.className = 'calc-display';
+      var displayText = document.createElement('span');
+      displayText.textContent = '0';
+      display.appendChild(displayText);
+
+      function updateDisplay() {
+        displayText.textContent = currentInput;
+      }
+
+      var buttonsGrid = document.createElement('div');
+      buttonsGrid.className = 'calc-buttons';
+
+      function handleNumber(num) {
+        if (shouldResetDisplay) {
+          currentInput = num;
+          shouldResetDisplay = false;
+        } else {
+          currentInput = currentInput === '0' ? num : currentInput + num;
+        }
+        updateDisplay();
+      }
+
+      function handleDecimal() {
+        if (shouldResetDisplay) {
+          currentInput = '0.';
+          shouldResetDisplay = false;
+        } else if (currentInput.indexOf('.') === -1) {
+          currentInput += '.';
+        }
+        updateDisplay();
+      }
+
+      function compute(a, b, op) {
+        switch (op) {
+          case '+': return a + b;
+          case '\u2212': return a - b;
+          case '\u00d7': return a * b;
+          case '\u00f7':
+            if (b === 0) {
+              currentInput = '\u9519\u8bef';
+              operator = null;
+              previousInput = null;
+              shouldResetDisplay = true;
+              updateDisplay();
+              return null;
+            }
+            return a / b;
+          default: return b;
+        }
+      }
+
+      function handleOperator(op) {
+        var inputNum = parseFloat(currentInput);
+        if (operator && previousInput !== null && !shouldResetDisplay) {
+          var result = compute(previousInput, inputNum, operator);
+          if (result === null) return;
+          currentInput = String(result);
+          updateDisplay();
+        }
+        previousInput = parseFloat(currentInput);
+        operator = op;
+        shouldResetDisplay = true;
+      }
+
+      function handleEquals() {
+        if (operator && previousInput !== null) {
+          var inputNum = parseFloat(currentInput);
+          var result = compute(previousInput, inputNum, operator);
+          if (result === null) return;
+          currentInput = String(result);
+          operator = null;
+          previousInput = null;
+          shouldResetDisplay = true;
+          updateDisplay();
+        }
+      }
+
+      function handleClear() {
+        currentInput = '0';
+        previousInput = null;
+        operator = null;
+        shouldResetDisplay = false;
+        updateDisplay();
+      }
+
+      function handleBackspace() {
+        if (shouldResetDisplay) return;
+        currentInput = currentInput.slice(0, -1);
+        if (currentInput === '' || currentInput === '-') {
+          currentInput = '0';
+        }
+        updateDisplay();
+      }
+
+      var btnDefs = [
+        { text: 'AC' },
+        { text: '\u232b' },
+        { text: '\u00f7' },
+        { text: '\u00d7' },
+        { text: '7' },
+        { text: '8' },
+        { text: '9' },
+        { text: '\u2212' },
+        { text: '4' },
+        { text: '5' },
+        { text: '6' },
+        { text: '+' },
+        { text: '1' },
+        { text: '2' },
+        { text: '3' },
+        { text: '=' },
+        { text: '0' },
+        { text: '.' }
+      ];
+
+      btnDefs.forEach(function(def) {
+        var btn = document.createElement('button');
+        btn.className = 'calc-btn';
+        btn.textContent = def.text;
+
+        if (def.text === 'AC') {
+          btn.classList.add('calc-btn--ac');
+          btn.addEventListener('click', handleClear);
+        } else if (def.text === '\u232b') {
+          btn.classList.add('calc-btn--fn');
+          btn.addEventListener('click', handleBackspace);
+        } else if (def.text === '\u00f7') {
+          btn.classList.add('calc-btn--op');
+          btn.addEventListener('click', function() { handleOperator('\u00f7'); });
+        } else if (def.text === '\u00d7') {
+          btn.classList.add('calc-btn--op');
+          btn.addEventListener('click', function() { handleOperator('\u00d7'); });
+        } else if (def.text === '\u2212') {
+          btn.classList.add('calc-btn--op');
+          btn.addEventListener('click', function() { handleOperator('\u2212'); });
+        } else if (def.text === '+') {
+          btn.classList.add('calc-btn--op');
+          btn.addEventListener('click', function() { handleOperator('+'); });
+        } else if (def.text === '=') {
+          btn.classList.add('calc-btn--eq');
+          btn.addEventListener('click', handleEquals);
+        } else if (def.text === '.') {
+          btn.addEventListener('click', handleDecimal);
+        } else {
+          btn.addEventListener('click', function() { handleNumber(def.text); });
+        }
+
+        buttonsGrid.appendChild(btn);
+      });
+
+      container.appendChild(display);
+      container.appendChild(buttonsGrid);
+      return container;
+    }
+    // ===== Dock Click Handlers =====
+    (function() {
+      var dockItems = document.querySelectorAll('.dock__item');
+      if (!dockItems.length) return;
+
+      // ===== Terminal Application =====
+      function createTerminalContent() {
+        var container = document.createElement('div');
+        container.style.cssText = 'display:flex;flex-direction:column;height:100%;';
+
+        // Output area
+        var output = document.createElement('div');
+        output.className = 'terminal-output';
+        output.style.cssText = 'flex:1;overflow-y:auto;padding:12px;font-family:"SF Mono",Monaco,"Cascadia Code",Consolas,monospace;font-size:13px;color:#0f0;white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,0.3);';
+
+        // Helper to append a line of text to the output area
+        function appendLine(text, opt_color) {
+          var line = document.createElement('div');
+          line.textContent = text;
+          if (opt_color) line.style.color = opt_color;
+          output.appendChild(line);
+          output.scrollTop = output.scrollHeight;
+        }
+
+        // Input line
+        var inputLine = document.createElement('div');
+        inputLine.style.cssText = 'display:flex;align-items:center;padding:4px 12px;border-top:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.4);';
+
+        var promptSpan = document.createElement('span');
+        promptSpan.textContent = '> ';
+        promptSpan.style.cssText = 'color:#0f0;font-family:"SF Mono",Monaco,"Cascadia Code",Consolas,monospace;font-size:13px;flex-shrink:0;';
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.spellcheck = false;
+        input.style.cssText = 'flex:1;background:transparent;border:none;outline:none;color:#0f0;font-family:"SF Mono",Monaco,"Cascadia Code",Consolas,monospace;font-size:13px;caret-color:#0f0;';
+
+        inputLine.appendChild(promptSpan);
+        inputLine.appendChild(input);
+
+        container.appendChild(output);
+        container.appendChild(inputLine);
+
+        // Command history for up/down arrow navigation
+        var history = [];
+        var historyIndex = -1;
+
+        // Welcome banner
+        appendLine('macOS Terminal (simulated) — v1.0');
+        appendLine('Type \'help\' to see available commands.');
+        appendLine('');
+
+        // Core command processor
+        function processCommand(cmd) {
+          var trimmed = cmd.trim();
+          if (!trimmed) {
+            appendLine('');
+            return;
+          }
+
+          history.push(trimmed);
+          historyIndex = history.length;
+
+          // Echo the entered command
+          appendLine('> ' + trimmed, '#aaa');
+
+          var parts = trimmed.split(/\s+/);
+          var command = parts[0].toLowerCase();
+          var args = parts.slice(1);
+
+          switch (command) {
+            case 'help':
+              appendLine('Available commands:');
+              appendLine('  help          - Show this help message');
+              appendLine('  clear         - Clear the terminal screen');
+              appendLine('  echo <text>   - Print the given text');
+              appendLine('  date          - Show current date and time');
+              appendLine('  whoami        - Show current user name');
+              break;
+            case 'clear':
+              while (output.firstChild) {
+                output.removeChild(output.firstChild);
+              }
+              break;
+            case 'echo':
+              appendLine(args.join(' '));
+              break;
+            case 'date':
+              appendLine(new Date().toString());
+              break;
+            case 'whoami':
+              appendLine('user');
+              break;
+            default:
+              appendLine('command not found: ' + command);
+              appendLine('Type \'help\' for available commands.');
+              break;
+          }
+        }
+
+        // Keyboard interaction
+        input.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') {
+            processCommand(input.value);
+            input.value = '';
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (history.length > 0 && historyIndex > 0) {
+              historyIndex--;
+              input.value = history[historyIndex];
+            }
+          } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (historyIndex < history.length - 1) {
+              historyIndex++;
+              input.value = history[historyIndex];
+            } else {
+              historyIndex = history.length;
+              input.value = '';
+            }
+          }
+        });
+
+        // Click anywhere on the terminal to focus the input
+        container.addEventListener('click', function() {
+          input.focus();
+        });
+
+        // Auto-focus after window animation completes
+        setTimeout(function() { input.focus(); }, 200);
+
+        return container;
+      }
+
+      var appConfigs = {
+        'terminal':   { title: '终端',       content: createTerminalContent },
+        'finder':     { title: '访达',       content: createFinderApp },
+        'text-editor': { title: '文本编辑器',   content: buildTextEditor },
+        'calculator': { title: '计算器',      content: buildCalculator },
+        'airplane':   { title: '飞机大战',    content: createAirplaneGameContent }
+      };
+
+      /**
+       * Build the text editor application DOM element.
+       * Returns an HTMLElement with line numbers synced to a textarea.
+       */
+      function buildTextEditor() {
+        var container = document.createElement('div');
+        container.className = 'text-editor';
+
+        // Toolbar
+        var toolbar = document.createElement('div');
+        toolbar.className = 'text-editor__toolbar';
+
+        var clearBtn = document.createElement('button');
+        clearBtn.className = 'text-editor__clear-btn';
+        clearBtn.textContent = '清空';
+
+        toolbar.appendChild(clearBtn);
+
+        // Body (lines + textarea)
+        var body = document.createElement('div');
+        body.className = 'text-editor__body';
+
+        var linesEl = document.createElement('div');
+        linesEl.className = 'text-editor__lines';
+
+        var textarea = document.createElement('textarea');
+        textarea.className = 'text-editor__textarea';
+        textarea.spellcheck = false;
+        textarea.placeholder = '在此输入文本…';
+
+        body.appendChild(linesEl);
+        body.appendChild(textarea);
+
+        container.appendChild(toolbar);
+        container.appendChild(body);
+
+        // ---- Line number sync ----
+        function syncLines() {
+          var lines = textarea.value.split('\n');
+          var count = Math.max(lines.length, 1);
+          var html = '';
+          for (var i = 1; i <= count; i++) {
+            html += '<div>' + i + '</div>';
+          }
+          linesEl.innerHTML = html;
+        }
+
+        textarea.addEventListener('input', syncLines);
+
+        // Scroll sync: keep line numbers aligned with textarea scroll
+        textarea.addEventListener('scroll', function() {
+          linesEl.scrollTop = textarea.scrollTop;
+        });
+
+        // Clear button
+        clearBtn.addEventListener('click', function() {
+          textarea.value = '';
+          syncLines();
+          textarea.focus();
+        });
+
+        // Initial line render
+        syncLines();
+
+        return container;
+      }
+
+      dockItems.forEach(function(item) {
+        item.addEventListener('click', function() {
+          var app = item.getAttribute('data-app');
+          if (app === 'text-editor' && window.createWindow) {
+            window.createWindow('文本编辑器', buildTextEditor());
+            return;
+          }
+          var config = appConfigs[app];
+          if (config && window.createWindow) {
+            var content = config.content;
+            if (typeof content === 'function') {
+              content = content();
+            }
+            window.createWindow(config.title, content);
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

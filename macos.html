@@ -792,8 +792,137 @@
       var dockItems = document.querySelectorAll('.dock__item');
       if (!dockItems.length) return;
 
+      // ===== Terminal Application =====
+      function createTerminalContent() {
+        var container = document.createElement('div');
+        container.style.cssText = 'display:flex;flex-direction:column;height:100%;';
+
+        // Output area
+        var output = document.createElement('div');
+        output.className = 'terminal-output';
+        output.style.cssText = 'flex:1;overflow-y:auto;padding:12px;font-family:"SF Mono",Monaco,"Cascadia Code",Consolas,monospace;font-size:13px;color:#0f0;white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,0.3);';
+
+        // Helper to append a line of text to the output area
+        function appendLine(text, opt_color) {
+          var line = document.createElement('div');
+          line.textContent = text;
+          if (opt_color) line.style.color = opt_color;
+          output.appendChild(line);
+          output.scrollTop = output.scrollHeight;
+        }
+
+        // Input line
+        var inputLine = document.createElement('div');
+        inputLine.style.cssText = 'display:flex;align-items:center;padding:4px 12px;border-top:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.4);';
+
+        var promptSpan = document.createElement('span');
+        promptSpan.textContent = '> ';
+        promptSpan.style.cssText = 'color:#0f0;font-family:"SF Mono",Monaco,"Cascadia Code",Consolas,monospace;font-size:13px;flex-shrink:0;';
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.spellcheck = false;
+        input.style.cssText = 'flex:1;background:transparent;border:none;outline:none;color:#0f0;font-family:"SF Mono",Monaco,"Cascadia Code",Consolas,monospace;font-size:13px;caret-color:#0f0;';
+
+        inputLine.appendChild(promptSpan);
+        inputLine.appendChild(input);
+
+        container.appendChild(output);
+        container.appendChild(inputLine);
+
+        // Command history for up/down arrow navigation
+        var history = [];
+        var historyIndex = -1;
+
+        // Welcome banner
+        appendLine('macOS Terminal (simulated) — v1.0');
+        appendLine('Type \'help\' to see available commands.');
+        appendLine('');
+
+        // Core command processor
+        function processCommand(cmd) {
+          var trimmed = cmd.trim();
+          if (!trimmed) {
+            appendLine('');
+            return;
+          }
+
+          history.push(trimmed);
+          historyIndex = history.length;
+
+          // Echo the entered command
+          appendLine('> ' + trimmed, '#aaa');
+
+          var parts = trimmed.split(/\s+/);
+          var command = parts[0].toLowerCase();
+          var args = parts.slice(1);
+
+          switch (command) {
+            case 'help':
+              appendLine('Available commands:');
+              appendLine('  help          - Show this help message');
+              appendLine('  clear         - Clear the terminal screen');
+              appendLine('  echo <text>   - Print the given text');
+              appendLine('  date          - Show current date and time');
+              appendLine('  whoami        - Show current user name');
+              break;
+            case 'clear':
+              while (output.firstChild) {
+                output.removeChild(output.firstChild);
+              }
+              break;
+            case 'echo':
+              appendLine(args.join(' '));
+              break;
+            case 'date':
+              appendLine(new Date().toString());
+              break;
+            case 'whoami':
+              appendLine('user');
+              break;
+            default:
+              appendLine('command not found: ' + command);
+              appendLine('Type \'help\' for available commands.');
+              break;
+          }
+        }
+
+        // Keyboard interaction
+        input.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') {
+            processCommand(input.value);
+            input.value = '';
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (history.length > 0 && historyIndex > 0) {
+              historyIndex--;
+              input.value = history[historyIndex];
+            }
+          } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (historyIndex < history.length - 1) {
+              historyIndex++;
+              input.value = history[historyIndex];
+            } else {
+              historyIndex = history.length;
+              input.value = '';
+            }
+          }
+        });
+
+        // Click anywhere on the terminal to focus the input
+        container.addEventListener('click', function() {
+          input.focus();
+        });
+
+        // Auto-focus after window animation completes
+        setTimeout(function() { input.focus(); }, 200);
+
+        return container;
+      }
+
       var appConfigs = {
-        'terminal':   { title: '终端',       content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">终端 — 命令行界面（即将实现）</div>' },
+        'terminal':   { title: '终端',       content: createTerminalContent },
         'finder':     { title: '访达',       content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">访达 — 文件浏览器（即将实现）</div>' },
         'text-editor': { title: '文本编辑器',   content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">文本编辑器 — 文本编辑区域（即将实现）</div>' },
         'calculator': { title: '计算器',      content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">计算器 — 计算器界面（即将实现）</div>' },
@@ -805,7 +934,11 @@
           var app = item.getAttribute('data-app');
           var config = appConfigs[app];
           if (config && window.createWindow) {
-            window.createWindow(config.title, config.content);
+            var content = config.content;
+            if (typeof content === 'function') {
+              content = content();
+            }
+            window.createWindow(config.title, content);
           }
         });
       });

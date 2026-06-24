@@ -423,6 +423,212 @@
       background-position: bottom right;
       background-repeat: no-repeat;
     }
+
+    /* ===== Finder App Styles ===== */
+    .finder-container {
+      display: flex;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .finder-sidebar {
+      width: 180px;
+      min-width: 180px;
+      background: rgba(0, 0, 0, 0.2);
+      border-right: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 10px 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .finder-sidebar-section {
+      padding: 8px 14px 4px;
+      font-size: 11px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.32);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .finder-sidebar-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 14px;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.72);
+      cursor: default;
+      border-radius: 5px;
+      margin: 0 6px;
+      transition: background 0.15s ease;
+    }
+
+    .finder-sidebar-item:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .finder-sidebar-item--active {
+      background: rgba(255, 255, 255, 0.14);
+      color: #fff;
+    }
+
+    .finder-sidebar-icon {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .finder-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .finder-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(0, 0, 0, 0.1);
+      flex-shrink: 0;
+    }
+
+    .finder-btn {
+      width: 26px;
+      height: 22px;
+      border: none;
+      background: rgba(255, 255, 255, 0.07);
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 13px;
+      line-height: 1;
+      transition: background 0.15s ease;
+      flex-shrink: 0;
+      padding: 0;
+    }
+
+    .finder-btn:hover {
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    .finder-btn:active {
+      background: rgba(255, 255, 255, 0.24);
+    }
+
+    .finder-btn:disabled {
+      opacity: 0.25;
+      cursor: default;
+      pointer-events: none;
+    }
+
+    .finder-path {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.55);
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .finder-path-sep {
+      color: rgba(255, 255, 255, 0.2);
+      flex-shrink: 0;
+      font-size: 10px;
+      padding: 0 2px;
+    }
+
+    .finder-path-item {
+      cursor: default;
+      padding: 2px 5px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      max-width: 120px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .finder-path-item:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .finder-path-item--current {
+      color: rgba(255, 255, 255, 0.9);
+      font-weight: 500;
+    }
+
+    .finder-filelist {
+      flex: 1;
+      display: flex;
+      flex-wrap: wrap;
+      align-content: flex-start;
+      padding: 12px;
+      gap: 4px;
+      overflow-y: auto;
+    }
+
+    .finder-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 88px;
+      padding: 8px 4px;
+      border-radius: 8px;
+      cursor: default;
+      transition: background 0.12s ease;
+    }
+
+    .finder-item:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .finder-item:active {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .finder-item-icon {
+      width: 52px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 6px;
+      flex-shrink: 0;
+    }
+
+    .finder-item-icon svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .finder-item-name {
+      font-size: 11.5px;
+      color: rgba(255, 255, 255, 0.78);
+      text-align: center;
+      word-break: break-word;
+      line-height: 1.3;
+      max-width: 100%;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   </style>
 </head>
 <body>
@@ -787,6 +993,280 @@
       window.createWindow = createWindow;
     })();
 
+    // ===== Finder File System Data =====
+    var finderData = {
+      '': ['桌面', '文稿', '下载', '应用程序', '图片', '音乐'],
+      '桌面': ['屏幕快照.png', '我的文档.docx'],
+      '桌面/屏幕快照.png': null,
+      '桌面/我的文档.docx': null,
+      '文稿': ['项目', '简历.pdf', '笔记.txt'],
+      '文稿/项目': ['README.md', 'plan.txt'],
+      '文稿/项目/README.md': null,
+      '文稿/项目/plan.txt': null,
+      '文稿/简历.pdf': null,
+      '文稿/笔记.txt': null,
+      '下载': ['photo.jpg', 'setup.dmg'],
+      '下载/photo.jpg': null,
+      '下载/setup.dmg': null,
+      '应用程序': [],
+      '图片': ['壁纸', '头像.png'],
+      '图片/壁纸': ['mountain.jpg', 'beach.jpg'],
+      '图片/壁纸/mountain.jpg': null,
+      '图片/壁纸/beach.jpg': null,
+      '图片/头像.png': null,
+      '音乐': ['playlist.m3u'],
+      '音乐/playlist.m3u': null
+    };
+
+    function isFinderFolder(path) {
+      return finderData.hasOwnProperty(path) && finderData[path] !== null;
+    }
+
+    function getFinderChildren(path) {
+      return finderData[path] || [];
+    }
+
+    function getFinderFileColor(name) {
+      var ext = name.split('.').pop().toLowerCase();
+      var colors = {
+        'png': '#e07b5a', 'jpg': '#e07b5a', 'jpeg': '#e07b5a',
+        'docx': '#4a9eff', 'doc': '#4a9eff', 'pdf': '#e74c3c',
+        'txt': '#7b8c9e', 'md': '#58c4b9',
+        'dmg': '#9575cd', 'app': '#5ac8fa',
+        'm3u': '#ab47bc'
+      };
+      return colors[ext] || '#7b8c9e';
+    }
+
+    function createFinderApp() {
+      var container = document.createElement('div');
+      container.className = 'finder-container';
+
+      var currentPath = '';
+      var pathHistory = [''];
+      var historyIndex = 0;
+      var favorites = ['桌面', '文稿', '下载', '图片', '音乐'];
+
+      /* ---- Sidebar ---- */
+      var sidebar = document.createElement('div');
+      sidebar.className = 'finder-sidebar';
+
+      var favSection = document.createElement('div');
+      favSection.className = 'finder-sidebar-section';
+      favSection.textContent = '个人收藏';
+      sidebar.appendChild(favSection);
+
+      favorites.forEach(function(name) {
+        var item = document.createElement('div');
+        item.className = 'finder-sidebar-item';
+        var icon = document.createElement('span');
+        icon.className = 'finder-sidebar-icon';
+        icon.textContent = '📁';
+        item.appendChild(icon);
+        var label = document.createElement('span');
+        label.textContent = name;
+        item.appendChild(label);
+        item.addEventListener('click', function() {
+          navigateTo(name);
+        });
+        sidebar.appendChild(item);
+      });
+
+      var locSection = document.createElement('div');
+      locSection.className = 'finder-sidebar-section';
+      locSection.textContent = '位置';
+      sidebar.appendChild(locSection);
+
+      var rootItem = document.createElement('div');
+      rootItem.className = 'finder-sidebar-item';
+      var rootIcon = document.createElement('span');
+      rootIcon.className = 'finder-sidebar-icon';
+      rootIcon.textContent = '🖥';
+      rootItem.appendChild(rootIcon);
+      var rootLabel = document.createElement('span');
+      rootLabel.textContent = 'Macintosh HD';
+      rootItem.appendChild(rootLabel);
+      rootItem.addEventListener('click', function() {
+        navigateTo('');
+      });
+      sidebar.appendChild(rootItem);
+
+      /* ---- Main area ---- */
+      var main = document.createElement('div');
+      main.className = 'finder-main';
+
+      /* Toolbar */
+      var toolbar = document.createElement('div');
+      toolbar.className = 'finder-toolbar';
+
+      var backBtn = document.createElement('button');
+      backBtn.className = 'finder-btn';
+      backBtn.textContent = '‹';
+      backBtn.title = '返回';
+      backBtn.disabled = true;
+      backBtn.addEventListener('click', function() {
+        if (historyIndex > 0) {
+          historyIndex--;
+          refreshView(pathHistory[historyIndex]);
+        }
+      });
+      toolbar.appendChild(backBtn);
+
+      var forwardBtn = document.createElement('button');
+      forwardBtn.className = 'finder-btn';
+      forwardBtn.textContent = '›';
+      forwardBtn.title = '前进';
+      forwardBtn.disabled = true;
+      forwardBtn.addEventListener('click', function() {
+        if (historyIndex < pathHistory.length - 1) {
+          historyIndex++;
+          refreshView(pathHistory[historyIndex]);
+        }
+      });
+      toolbar.appendChild(forwardBtn);
+
+      var pathEl = document.createElement('div');
+      pathEl.className = 'finder-path';
+      toolbar.appendChild(pathEl);
+
+      main.appendChild(toolbar);
+
+      /* File list */
+      var fileList = document.createElement('div');
+      fileList.className = 'finder-filelist';
+      main.appendChild(fileList);
+
+      /* ---- Assemble ---- */
+      container.appendChild(sidebar);
+      container.appendChild(main);
+
+      /* ---- Internal helpers ---- */
+      function navigateTo(targetPath) {
+        pathHistory = pathHistory.slice(0, historyIndex + 1);
+        pathHistory.push(targetPath);
+        historyIndex = pathHistory.length - 1;
+        refreshView(targetPath);
+      }
+
+      function refreshView(path) {
+        currentPath = path;
+        renderPath(currentPath);
+        renderFileList(currentPath);
+        updateButtons();
+        updateSidebar();
+      }
+
+      function renderPath(path) {
+        while (pathEl.firstChild) {
+          pathEl.removeChild(pathEl.firstChild);
+        }
+
+        var rootSpan = document.createElement('span');
+        rootSpan.className = 'finder-path-item';
+        rootSpan.textContent = 'Macintosh HD';
+        rootSpan.addEventListener('click', function() { navigateTo(''); });
+        pathEl.appendChild(rootSpan);
+
+        if (path) {
+          var parts = path.split('/');
+          var accum = '';
+          parts.forEach(function(part, i) {
+            accum = accum ? accum + '/' + part : part;
+
+            var sep = document.createElement('span');
+            sep.className = 'finder-path-sep';
+            sep.textContent = '▸';
+            pathEl.appendChild(sep);
+
+            var span = document.createElement('span');
+            span.className = 'finder-path-item';
+            if (i === parts.length - 1) {
+              span.classList.add('finder-path-item--current');
+            }
+            span.textContent = part;
+            (function(p) {
+              span.addEventListener('click', function() { navigateTo(p); });
+            })(accum);
+            pathEl.appendChild(span);
+          });
+        }
+      }
+
+      function renderFileList(path) {
+        while (fileList.firstChild) {
+          fileList.removeChild(fileList.firstChild);
+        }
+
+        var children = getFinderChildren(path);
+
+        if (children.length === 0) {
+          var empty = document.createElement('div');
+          empty.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:60px;color:rgba(255,255,255,0.28);font-size:13px;';
+          empty.textContent = '此文件夹为空';
+          fileList.appendChild(empty);
+          return;
+        }
+
+        children.forEach(function(name) {
+          var childPath = path ? path + '/' + name : name;
+          var isFolder = isFinderFolder(childPath);
+
+          var item = document.createElement('div');
+          item.className = 'finder-item';
+
+          var icon = document.createElement('div');
+          icon.className = 'finder-item-icon';
+
+          if (isFolder) {
+            icon.innerHTML = '<svg viewBox="0 0 48 48"><path d="M6 12C6 9.8 7.8 8 10 8h11l4 3h15c2.2 0 4 1.8 4 4v22c0 2.2-1.8 4-4 4H10c-2.2 0-4-1.8-4-4V12z" fill="#4a9eff"/><path d="M6 12C6 9.8 7.8 8 10 8h11l4 3h15c2.2 0 4 1.8 4 4v22c0 2.2-1.8 4-4 4H10c-2.2 0-4-1.8-4-4V12z" fill="rgba(255,255,255,0.08)"/></svg>';
+          } else {
+            var color = getFinderFileColor(name);
+            icon.innerHTML = '<svg viewBox="0 0 48 48"><path d="M12 6h14l14 14v22c0 2.2-1.8 4-4 4H12c-2.2 0-4-1.8-4-4V10c0-2.2 1.8-4 4-4z" fill="' + color + '"/><path d="M26 6v14h14" fill="rgba(255,255,255,0.12)"/></svg>';
+          }
+          item.appendChild(icon);
+
+          var nameEl = document.createElement('div');
+          nameEl.className = 'finder-item-name';
+          nameEl.textContent = name;
+          item.appendChild(nameEl);
+
+          if (isFolder) {
+            item.addEventListener('click', function() {
+              navigateTo(childPath);
+            });
+          }
+          /* Clicking a file does nothing — its name is already visible */
+
+          fileList.appendChild(item);
+        });
+      }
+
+      function updateButtons() {
+        backBtn.disabled = (historyIndex <= 0);
+        forwardBtn.disabled = (historyIndex >= pathHistory.length - 1);
+      }
+
+      function updateSidebar() {
+        var sidebarItems = sidebar.querySelectorAll('.finder-sidebar-item');
+        for (var i = 0; i < sidebarItems.length; i++) {
+          sidebarItems[i].classList.remove('finder-sidebar-item--active');
+          var label = sidebarItems[i].querySelector('span:last-child');
+          if (!label) continue;
+          var labelText = label.textContent;
+          if (currentPath === '' && labelText === 'Macintosh HD') {
+            sidebarItems[i].classList.add('finder-sidebar-item--active');
+          } else if (currentPath === labelText) {
+            sidebarItems[i].classList.add('finder-sidebar-item--active');
+          }
+        }
+      }
+
+      /* Initial render */
+      refreshView('');
+
+      return container;
+    }
+
     // ===== Dock Click Handlers =====
     (function() {
       var dockItems = document.querySelectorAll('.dock__item');
@@ -794,7 +1274,7 @@
 
       var appConfigs = {
         'terminal':   { title: '终端',       content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">终端 — 命令行界面（即将实现）</div>' },
-        'finder':     { title: '访达',       content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">访达 — 文件浏览器（即将实现）</div>' },
+        'finder':     { title: '访达',       content: createFinderApp },
         'text-editor': { title: '文本编辑器',   content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">文本编辑器 — 文本编辑区域（即将实现）</div>' },
         'calculator': { title: '计算器',      content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">计算器 — 计算器界面（即将实现）</div>' },
         'airplane':   { title: '飞机大战',    content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">飞机大战 — 3D 飞机大战游戏（即将实现）</div>' }
@@ -805,7 +1285,11 @@
           var app = item.getAttribute('data-app');
           var config = appConfigs[app];
           if (config && window.createWindow) {
-            window.createWindow(config.title, config.content);
+            var content = config.content;
+            if (typeof content === 'function') {
+              content = content();
+            }
+            window.createWindow(config.title, content);
           }
         });
       });

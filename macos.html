@@ -222,6 +222,161 @@
       font-size: 12px;
       letter-spacing: 0.02em;
     }
+
+    /* ===== Window System ===== */
+    .window {
+      position: absolute;
+      background: rgba(30, 30, 30, 0.92);
+      backdrop-filter: blur(30px) saturate(180%);
+      -webkit-backdrop-filter: blur(30px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      box-shadow:
+        0 10px 40px rgba(0, 0, 0, 0.35),
+        0 0 0 1px rgba(0, 0, 0, 0.1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 280px;
+      min-height: 180px;
+      animation: window-open 0.2s ease-out;
+    }
+
+    @keyframes window-open {
+      from {
+        opacity: 0;
+        transform: scale(0.85);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    .window--focused {
+      box-shadow:
+        0 10px 40px rgba(0, 0, 0, 0.5),
+        0 0 0 1px rgba(255, 255, 255, 0.18);
+    }
+
+    /* Minimized: shrink to titlebar only */
+    .window--minimized {
+      height: auto !important;
+      min-height: 0 !important;
+    }
+
+    .window--minimized .window__content,
+    .window--minimized .window__resize-handle {
+      display: none;
+    }
+
+    /* Maximized: fill desktop-main */
+    .window--maximized {
+      left: 0 !important;
+      top: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      border-radius: 0 !important;
+    }
+
+    .window--maximized .window__resize-handle {
+      display: none;
+    }
+
+    /* ===== Title Bar ===== */
+    .window__titlebar {
+      display: flex;
+      align-items: center;
+      height: 40px;
+      padding: 0 12px;
+      background: rgba(45, 45, 45, 0.5);
+      cursor: default;
+      flex-shrink: 0;
+    }
+
+    /* Traffic Lights Container */
+    .window__traffic-lights {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-right: 12px;
+      flex-shrink: 0;
+    }
+
+    .window__tl {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: filter 0.15s ease;
+      line-height: 0;
+    }
+
+    .window__tl:hover {
+      filter: brightness(0.8);
+    }
+
+    .window__tl:active {
+      filter: brightness(0.65);
+    }
+
+    .window__tl--close    { background: #ff5f57; }
+    .window__tl--minimize { background: #febc2e; }
+    .window__tl--maximize { background: #28c840; }
+
+    .window__tl svg {
+      opacity: 0;
+      transition: opacity 0.12s ease;
+    }
+
+    .window__titlebar:hover .window__tl svg,
+    .window__tl:hover svg {
+      opacity: 1;
+    }
+
+    .window__title {
+      flex: 1;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.85);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      pointer-events: none;
+    }
+
+    /* ===== Window Content ===== */
+    .window__content {
+      flex: 1;
+      overflow: auto;
+      color: #e0e0e0;
+      font-size: 14px;
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    /* ===== Resize Handle ===== */
+    .window__resize-handle {
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 18px;
+      height: 18px;
+      cursor: nwse-resize;
+      z-index: 10;
+      background:
+        linear-gradient(135deg, transparent 60%, rgba(255,255,255,0.12) 60%),
+        linear-gradient(135deg, transparent 60%, rgba(255,255,255,0.08) 60%);
+      background-size: 6px 6px, 10px 10px;
+      background-position: bottom right;
+      background-repeat: no-repeat;
+    }
   </style>
 </head>
 <body>
@@ -289,6 +444,239 @@
       // Schedule next update at the beginning of the next minute
       const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
       setTimeout(updateTime, msUntilNextMinute + 50);
+    })();
+
+    // ===== Window System =====
+    (function() {
+      var desktopMain = document.querySelector('.desktop-main');
+      if (!desktopMain) return;
+
+      var zIndexCounter = 100;
+      var windows = [];
+
+      /**
+       * Bring the given window to the front (highest z-index).
+       */
+      function bringToFront(win) {
+        zIndexCounter++;
+        win.style.zIndex = zIndexCounter;
+        windows.forEach(function(w) { w.classList.remove('window--focused'); });
+        win.classList.add('window--focused');
+      }
+
+      function savePosition(win) {
+        win._prevLeft = win.style.left;
+        win._prevTop = win.style.top;
+        win._prevWidth = win.style.width;
+        win._prevHeight = win.style.height;
+      }
+
+      function restoreMaximize(win) {
+        win.classList.remove('window--maximized');
+        win.style.left = win._prevLeft || '100px';
+        win.style.top = win._prevTop || '80px';
+        win.style.width = win._prevWidth || '620px';
+        win.style.height = win._prevHeight || '420px';
+      }
+
+      /**
+       * Factory: createWindow(title, content)
+       *  - title: string for the window title bar
+       *  - content: string (HTML) or HTMLElement to place in the window body
+       * Returns the window DOM element.
+       */
+      function createWindow(title, content) {
+        // ---- Build elements ----
+        var win = document.createElement('div');
+        win.className = 'window';
+
+        // Position: cascade offset for each new window
+        var offset = (windows.length % 10) * 28;
+        win.style.left = (100 + offset) + 'px';
+        win.style.top = (80 + offset) + 'px';
+        win.style.width = '620px';
+        win.style.height = '420px';
+
+        // Title bar
+        var titlebar = document.createElement('div');
+        titlebar.className = 'window__titlebar';
+
+        // Traffic lights
+        var lights = document.createElement('div');
+        lights.className = 'window__traffic-lights';
+
+        // Close button
+        var closeBtn = document.createElement('button');
+        closeBtn.className = 'window__tl window__tl--close';
+        closeBtn.title = '关闭';
+        closeBtn.innerHTML = '<svg width="7" height="7" viewBox="0 0 7 7"><line x1="0.5" y1="0.5" x2="6.5" y2="6.5" stroke="#4a0000" stroke-width="1.2"/><line x1="6.5" y1="0.5" x2="0.5" y2="6.5" stroke="#4a0000" stroke-width="1.2"/></svg>';
+        closeBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          win.remove();
+          windows = windows.filter(function(w) { return w !== win; });
+        });
+
+        // Minimize button
+        var minBtn = document.createElement('button');
+        minBtn.className = 'window__tl window__tl--minimize';
+        minBtn.title = '最小化';
+        minBtn.innerHTML = '<svg width="7" height="7" viewBox="0 0 7 7"><line x1="1" y1="3.5" x2="6" y2="3.5" stroke="#7a5500" stroke-width="1.2"/></svg>';
+        minBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          if (win.classList.contains('window--minimized')) {
+            win.classList.remove('window--minimized');
+          } else {
+            if (win.classList.contains('window--maximized')) {
+              restoreMaximize(win);
+            }
+            win.classList.add('window--minimized');
+          }
+          bringToFront(win);
+        });
+
+        // Maximize button
+        var maxBtn = document.createElement('button');
+        maxBtn.className = 'window__tl window__tl--maximize';
+        maxBtn.title = '最大化';
+        maxBtn.innerHTML = '<svg width="7" height="7" viewBox="0 0 7 7"><polygon points="1,1 6,1 6,2.5 6,6 1,6 1,2.5" fill="none" stroke="#004d00" stroke-width="1"/></svg>';
+        maxBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          if (win.classList.contains('window--minimized')) {
+            win.classList.remove('window--minimized');
+          }
+          if (win.classList.contains('window--maximized')) {
+            restoreMaximize(win);
+          } else {
+            savePosition(win);
+            win.classList.add('window--maximized');
+          }
+          bringToFront(win);
+        });
+
+        lights.appendChild(closeBtn);
+        lights.appendChild(minBtn);
+        lights.appendChild(maxBtn);
+
+        // Title text
+        var titleSpan = document.createElement('span');
+        titleSpan.className = 'window__title';
+        titleSpan.textContent = title;
+
+        titlebar.appendChild(lights);
+        titlebar.appendChild(titleSpan);
+
+        // Content area
+        var contentDiv = document.createElement('div');
+        contentDiv.className = 'window__content';
+        if (typeof content === 'string') {
+          contentDiv.innerHTML = content;
+        } else if (content instanceof HTMLElement) {
+          contentDiv.appendChild(content);
+        }
+
+        // Resize handle
+        var resizeHandle = document.createElement('div');
+        resizeHandle.className = 'window__resize-handle';
+
+        // Assemble window
+        win.appendChild(titlebar);
+        win.appendChild(contentDiv);
+        win.appendChild(resizeHandle);
+
+        // ---- Events ----
+
+        // Focus on any mousedown within the window
+        win.addEventListener('mousedown', function() {
+          bringToFront(win);
+        });
+
+        // ---- Drag (titlebar) ----
+        var isDragging = false;
+        var dragStartX, dragStartY, winStartLeft, winStartTop;
+
+        function onDragMouseMove(e) {
+          if (!isDragging) return;
+          var dx = e.clientX - dragStartX;
+          var dy = e.clientY - dragStartY;
+          var newLeft = winStartLeft + dx;
+          var newTop = winStartTop + dy;
+
+          var parentRect = desktopMain.getBoundingClientRect();
+          newLeft = Math.max(-200, Math.min(newLeft, parentRect.width - 120));
+          newTop = Math.max(0, Math.min(newTop, parentRect.height - 24));
+
+          win.style.left = newLeft + 'px';
+          win.style.top = newTop + 'px';
+        }
+
+        function onDragMouseUp() {
+          if (!isDragging) return;
+          isDragging = false;
+          document.removeEventListener('mousemove', onDragMouseMove);
+          document.removeEventListener('mouseup', onDragMouseUp);
+        }
+
+        titlebar.addEventListener('mousedown', function(e) {
+          if (e.target.closest('.window__tl')) return;
+          if (win.classList.contains('window--minimized')) return;
+          if (win.classList.contains('window--maximized')) return;
+
+          isDragging = true;
+          dragStartX = e.clientX;
+          dragStartY = e.clientY;
+          winStartLeft = win.offsetLeft;
+          winStartTop = win.offsetTop;
+
+          document.addEventListener('mousemove', onDragMouseMove);
+          document.addEventListener('mouseup', onDragMouseUp);
+          e.preventDefault();
+        });
+
+        // ---- Resize (bottom-right handle) ----
+        var isResizing = false;
+        var resizeStartX, resizeStartY, winStartWidth, winStartHeight;
+
+        function onResizeMouseMove(e) {
+          if (!isResizing) return;
+          var dx = e.clientX - resizeStartX;
+          var dy = e.clientY - resizeStartY;
+          win.style.width = Math.max(280, winStartWidth + dx) + 'px';
+          win.style.height = Math.max(180, winStartHeight + dy) + 'px';
+        }
+
+        function onResizeMouseUp() {
+          if (!isResizing) return;
+          isResizing = false;
+          document.removeEventListener('mousemove', onResizeMouseMove);
+          document.removeEventListener('mouseup', onResizeMouseUp);
+        }
+
+        resizeHandle.addEventListener('mousedown', function(e) {
+          if (win.classList.contains('window--minimized')) return;
+          if (win.classList.contains('window--maximized')) return;
+
+          isResizing = true;
+          resizeStartX = e.clientX;
+          resizeStartY = e.clientY;
+          winStartWidth = win.offsetWidth;
+          winStartHeight = win.offsetHeight;
+
+          document.addEventListener('mousemove', onResizeMouseMove);
+          document.addEventListener('mouseup', onResizeMouseUp);
+          e.preventDefault();
+          e.stopPropagation();
+        });
+
+        // ---- Attach to DOM ----
+        desktopMain.appendChild(win);
+        windows.push(win);
+        bringToFront(win);
+
+        return win;
+      }
+
+      // Expose globally for console testing
+      window.createWindow = createWindow;
     })();
   </script>
 </body>

@@ -407,6 +407,82 @@
       background: rgba(0, 0, 0, 0.15);
     }
 
+    /* ===== Text Editor Application ===== */
+    .text-editor {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: #1e1e1e;
+    }
+
+    .text-editor__toolbar {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px;
+      background: rgba(45, 45, 45, 0.6);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      flex-shrink: 0;
+      gap: 8px;
+    }
+
+    .text-editor__clear-btn {
+      padding: 4px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #d0d0d0;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      font-family: var(--font-system);
+    }
+
+    .text-editor__clear-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .text-editor__body {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .text-editor__lines {
+      width: 44px;
+      min-width: 44px;
+      padding: 10px 0;
+      background: rgba(0, 0, 0, 0.2);
+      border-right: 1px solid rgba(255, 255, 255, 0.06);
+      overflow: hidden;
+      text-align: right;
+      font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #6a6a6a;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .text-editor__lines div {
+      padding-right: 10px;
+      height: 1.6em;
+    }
+
+    .text-editor__textarea {
+      flex: 1;
+      padding: 10px 12px;
+      background: transparent;
+      border: none;
+      outline: none;
+      resize: none;
+      color: #d4d4d4;
+      font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      overflow-y: auto;
+      tab-size: 4;
+    }
+
     /* ===== Resize Handle ===== */
     .window__resize-handle {
       position: absolute;
@@ -1404,14 +1480,85 @@
       var appConfigs = {
         'terminal':   { title: '终端',       content: createTerminalContent },
         'finder':     { title: '访达',       content: createFinderApp },
-        'text-editor': { title: '文本编辑器',   content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">文本编辑器 — 文本编辑区域（即将实现）</div>' },
+        'text-editor': { title: '文本编辑器',   content: buildTextEditor },
         'calculator': { title: '计算器',      content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">计算器 — 计算器界面（即将实现）</div>' },
         'airplane':   { title: '飞机大战',    content: '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:15px;">飞机大战 — 3D 飞机大战游戏（即将实现）</div>' }
       };
 
+      /**
+       * Build the text editor application DOM element.
+       * Returns an HTMLElement with line numbers synced to a textarea.
+       */
+      function buildTextEditor() {
+        var container = document.createElement('div');
+        container.className = 'text-editor';
+
+        // Toolbar
+        var toolbar = document.createElement('div');
+        toolbar.className = 'text-editor__toolbar';
+
+        var clearBtn = document.createElement('button');
+        clearBtn.className = 'text-editor__clear-btn';
+        clearBtn.textContent = '清空';
+
+        toolbar.appendChild(clearBtn);
+
+        // Body (lines + textarea)
+        var body = document.createElement('div');
+        body.className = 'text-editor__body';
+
+        var linesEl = document.createElement('div');
+        linesEl.className = 'text-editor__lines';
+
+        var textarea = document.createElement('textarea');
+        textarea.className = 'text-editor__textarea';
+        textarea.spellcheck = false;
+        textarea.placeholder = '在此输入文本…';
+
+        body.appendChild(linesEl);
+        body.appendChild(textarea);
+
+        container.appendChild(toolbar);
+        container.appendChild(body);
+
+        // ---- Line number sync ----
+        function syncLines() {
+          var lines = textarea.value.split('\n');
+          var count = Math.max(lines.length, 1);
+          var html = '';
+          for (var i = 1; i <= count; i++) {
+            html += '<div>' + i + '</div>';
+          }
+          linesEl.innerHTML = html;
+        }
+
+        textarea.addEventListener('input', syncLines);
+
+        // Scroll sync: keep line numbers aligned with textarea scroll
+        textarea.addEventListener('scroll', function() {
+          linesEl.scrollTop = textarea.scrollTop;
+        });
+
+        // Clear button
+        clearBtn.addEventListener('click', function() {
+          textarea.value = '';
+          syncLines();
+          textarea.focus();
+        });
+
+        // Initial line render
+        syncLines();
+
+        return container;
+      }
+
       dockItems.forEach(function(item) {
         item.addEventListener('click', function() {
           var app = item.getAttribute('data-app');
+          if (app === 'text-editor' && window.createWindow) {
+            window.createWindow('文本编辑器', buildTextEditor());
+            return;
+          }
           var config = appConfigs[app];
           if (config && window.createWindow) {
             var content = config.content;

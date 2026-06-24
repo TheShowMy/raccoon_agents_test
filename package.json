@@ -3,7 +3,5 @@
   "version": "1.0.0",
   "private": true,
   "description": "多语言 Hello World 展示网页",
-  "scripts": {
-    "check": "node check.js"
-  }
+  "scripts": {}
 }

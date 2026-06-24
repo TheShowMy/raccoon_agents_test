@@ -671,16 +671,16 @@
           });
         }
 
-        /* ---- 5. 数字 ---- */
-        html = html.replace(/\b(\d+\.?\d*)\b/g, '<span class="token number">$1</span>');
-
-        /* ---- 6. 布尔 / 空值字面量 ---- */
-        html = html.replace(/\b(true|false|nil|null|undefined|None|True|False)\b/g, '<span class="token boolean">$1</span>');
-
-        /* ---- 7. 还原占位符 ---- */
+        /* ---- 5. 还原占位符 ---- */
         html = html.replace(/\x00(\d+)\x01/g, function (_, i) {
           return placeholders[parseInt(i, 10)];
         });
+
+        /* ---- 6. 数字 ---- */
+        html = html.replace(/\b(\d+\.?\d*)\b/g, '<span class="token number">$1</span>');
+
+        /* ---- 7. 布尔 / 空值字面量 ---- */
+        html = html.replace(/\b(true|false|nil|null|undefined|None|True|False)\b/g, '<span class="token boolean">$1</span>');
 
         /* ---- 8. PHP 开放标签 ---- */
         if (lang.toLowerCase() === 'php') {

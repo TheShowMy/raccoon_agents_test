@@ -1284,8 +1284,10 @@
         }
       });
 
-      // Expose globally for console testing
+      // Expose globally for menu action dispatch (task 2)
       window.createWindow = createWindow;
+      window._windows = windows;
+      window._bringToFront = bringToFront;
     })();
 
     // ===== Finder File System Data =====
@@ -1558,6 +1560,11 @@
 
       /* Initial render */
       refreshView('');
+
+      // Expose navigation API for menu handlers
+      container._finderNavigateTo = navigateTo;
+      container._finderRefreshView = refreshView;
+      container._finderGetCurrentPath = function() { return currentPath; };
 
       return container;
     }
@@ -1994,6 +2001,14 @@
           var cv = container.querySelector('canvas');
           if (cv) cv.remove();
         };
+        // Expose game API for menu handlers
+        container._gameState = gameState;
+        container._resetGame = resetGame;
+        container._endGame = endGame;
+        container._togglePause = function() {
+          if (gameState.gameOver) return;
+          gameState.running = !gameState.running;
+        };
       });
       return container;
     }
@@ -2013,6 +2028,18 @@
       var displayText = document.createElement('span');
       displayText.textContent = '0';
       display.appendChild(displayText);
+
+      // Mode and base state for menu handler switching
+      var currentMode = '基本';
+      var currentBase = '十进制';
+      var statusBar = document.createElement('div');
+      statusBar.style.cssText = 'display:flex;gap:12px;padding:0 20px 6px;font-size:11px;color:rgba(255,255,255,0.35);background:#1c1c1e;';
+      var modeLabel = document.createElement('span');
+      modeLabel.textContent = currentMode;
+      statusBar.appendChild(modeLabel);
+      var baseLabel = document.createElement('span');
+      baseLabel.textContent = currentBase;
+      statusBar.appendChild(baseLabel);
 
       function updateDisplay() {
         displayText.textContent = currentInput;
@@ -2160,7 +2187,17 @@
       });
 
       container.appendChild(display);
+      container.appendChild(statusBar);
       container.appendChild(buttonsGrid);
+      // Expose mode/base switching API for menu handlers
+      container._calcSetMode = function(mode) {
+        currentMode = mode;
+        modeLabel.textContent = mode;
+      };
+      container._calcSetBase = function(base) {
+        currentBase = base;
+        baseLabel.textContent = base;
+      };
       return container;
     }
     // ===== Dock Click Handlers =====
@@ -2304,6 +2341,7 @@
         'calculator': { title: '计算器',      content: buildCalculator },
         'airplane':   { title: '飞机大战',    content: createAirplaneGameContent }
       };
+      window._appConfigs = appConfigs;
 
       /**
        * Build the text editor application DOM element.
@@ -2482,9 +2520,117 @@
             label.className = 'menu-dropdown__item-label';
             label.textContent = itemText;
             itemEl.appendChild(label);
+            (function(text) {
+              itemEl.addEventListener('click', function(e) {
+                e.stopPropagation();
+                closeMenu();
+                handleMenuItemClick(_currentAppId, text);
+              });
+            })(itemText);
             _menuDropdownItems.appendChild(itemEl);
           }
         }
+      }
+
+      /**
+       * Dispatch handler for menu item clicks.
+       * Tries app-specific handlers first, then window operations, then alert fallback.
+       */
+      function handleMenuItemClick(appId, itemText) {
+        // Try app-specific handler first
+        if (window._menuActionHandlers && window._menuActionHandlers[appId]) {
+          if (window._menuActionHandlers[appId](appId, itemText)) {
+            return;
+          }
+        }
+        // Try window operations
+        if (handleWindowOperation(appId, itemText)) {
+          return;
+        }
+        // Fallback: alert with item name
+        alert(itemText);
+      }
+
+      /**
+       * Handle window operation menu items (close, minimize, zoom, all in front, new window).
+       * Returns true if handled, false otherwise.
+       */
+      function handleWindowOperation(appId, itemText) {
+        var windows = window._windows || [];
+        // Find the focused window belonging to this app
+        var focusedWin = null;
+        for (var i = windows.length - 1; i >= 0; i--) {
+          if (windows[i]._appId === appId && windows[i].classList.contains('window--focused')) {
+            focusedWin = windows[i];
+            break;
+          }
+        }
+
+        // --- Close operations ---
+        if (itemText === '关闭窗口' || itemText === '关闭' || itemText === '退出' || itemText === '退出终端' || itemText === '退出计算器') {
+          if (focusedWin) {
+            var closeBtn = focusedWin.querySelector('.window__tl--close');
+            if (closeBtn) closeBtn.click();
+          }
+          return true;
+        }
+
+        // --- Hide operations (minimize) ---
+        if (itemText === '隐藏' || itemText === '隐藏终端' || itemText === '隐藏文本编辑器') {
+          if (focusedWin) {
+            var minBtn = focusedWin.querySelector('.window__tl--minimize');
+            if (minBtn) minBtn.click();
+          }
+          return true;
+        }
+
+        // --- Minimize ---
+        if (itemText === '最小化') {
+          if (focusedWin) {
+            var minBtn = focusedWin.querySelector('.window__tl--minimize');
+            if (minBtn) minBtn.click();
+          }
+          return true;
+        }
+
+        // --- Zoom (toggle maximize) ---
+        if (itemText === '缩放') {
+          if (focusedWin) {
+            var maxBtn = focusedWin.querySelector('.window__tl--maximize');
+            if (maxBtn) maxBtn.click();
+          }
+          return true;
+        }
+
+        // --- All in front ---
+        if (itemText === '全部前置') {
+          if (window._bringToFront) {
+            for (var j = 0; j < windows.length; j++) {
+              if (windows[j]._appId === appId) {
+                window._bringToFront(windows[j]);
+              }
+            }
+          }
+          return true;
+        }
+
+        // --- New window operations ---
+        if (itemText === '新 Finder 窗口' || itemText === '新建窗口' || itemText === '新建标签页' || itemText === '新建') {
+          var appConfigs = window._appConfigs || {};
+          var configKey = appId;
+          if (itemText === '新 Finder 窗口') configKey = 'finder';
+          var config = appConfigs[configKey];
+          if (config && window.createWindow) {
+            var content = config.content;
+            if (typeof content === 'function') {
+              content = content();
+            }
+            window.createWindow(config.title, content, configKey);
+          }
+          return true;
+        }
+
+        return false;
       }
 
       /**
@@ -2500,10 +2646,16 @@
         _activeMenuIndex = menuIndex;
 
         // Position dropdown below the clicked menu title
+        // When the first menu title was skipped (menus[0].title === app.name),
+        // the DOM has one fewer span than app.menus, so map menuIndex to domIndex.
         var container = document.getElementById('menuTitlesContainer');
         if (container) {
           var titleSpans = container.querySelectorAll('.menu-bar__menu');
-          var targetSpan = titleSpans[menuIndex];
+          var domIndex = menuIndex;
+          if (app.menus.length > 0 && app.menus[0].title === app.name) {
+            domIndex = menuIndex - 1;
+          }
+          var targetSpan = titleSpans[domIndex];
           if (targetSpan) {
             var rect = targetSpan.getBoundingClientRect();
             _menuDropdown.style.left = rect.left + 'px';
@@ -2576,8 +2728,13 @@
         nameEl.textContent = app.name;
 
         // Rebuild menu title row with click handlers
+        // Skip the first menu title when it duplicates the app name
+        // (e.g., app name '终端' + first menu title '终端')
+        // Finder is unaffected because its first menu is '文件', not '访达'
         container.innerHTML = '';
+        var skipFirst = (app.menus.length > 0 && app.menus[0].title === app.name);
         for (var i = 0; i < app.menus.length; i++) {
+          if (skipFirst && i === 0) continue;
           var span = document.createElement('span');
           span.className = 'menu-bar__menu';
           span.textContent = app.menus[i].title;
@@ -2595,6 +2752,195 @@
       // Expose globally for console testing (task 2 verification)
       window.appMenuRegistry = appMenuRegistry;
       window.renderAppMenu = renderAppMenu;
+    })();
+
+    // ===== App-Specific Menu Action Handlers =====
+    (function() {
+      window._menuActionHandlers = {};
+
+      // ---- Finder ----
+      window._menuActionHandlers['finder'] = function(appId, itemText) {
+        var windows = window._windows || [];
+        var container = null;
+        for (var i = windows.length - 1; i >= 0; i--) {
+          if (windows[i]._appId === 'finder' && windows[i].classList.contains('window--focused')) {
+            container = windows[i].querySelector('.finder-container');
+            if (container) break;
+          }
+        }
+        if (!container) return false;
+
+        if (itemText === '新建文件夹') {
+          var path = container._finderGetCurrentPath();
+          var children = finderData[path] || [];
+          // Dedup: find next available name (未命名文件夹, 未命名文件夹 2, …)
+          var baseName = '未命名文件夹';
+          var folderName = baseName;
+          var counter = 1;
+          while (children.indexOf(folderName) !== -1) {
+            counter++;
+            folderName = baseName + ' ' + counter;
+          }
+          children.push(folderName);
+          finderData[path] = children;
+          var newPath = path ? path + '/' + folderName : folderName;
+          finderData[newPath] = [];
+          container._finderRefreshView(path);
+          return true;
+        }
+
+        if (itemText === '打开') {
+          var path = container._finderGetCurrentPath();
+          var children = finderData[path] || [];
+          var firstFolder = null;
+          for (var j = 0; j < children.length; j++) {
+            var childPath = path ? path + '/' + children[j] : children[j];
+            if (isFinderFolder(childPath)) {
+              firstFolder = children[j];
+              break;
+            }
+          }
+          if (firstFolder) {
+            container._finderNavigateTo(path ? path + '/' + firstFolder : firstFolder);
+          } else {
+            alert('当前文件夹中没有可打开的文件夹');
+          }
+          return true;
+        }
+
+        return false;
+      };
+
+      // ---- Text Editor ----
+      window._menuActionHandlers['text-editor'] = function(appId, itemText) {
+        var windows = window._windows || [];
+        var textarea = null;
+        for (var i = windows.length - 1; i >= 0; i--) {
+          if (windows[i]._appId === 'text-editor' && windows[i].classList.contains('window--focused')) {
+            textarea = windows[i].querySelector('.text-editor__textarea');
+            if (textarea) break;
+          }
+        }
+        if (!textarea) return false;
+
+        switch (itemText) {
+          case '撤销':
+            textarea.focus();
+            document.execCommand('undo');
+            return true;
+          case '重做':
+            textarea.focus();
+            document.execCommand('redo');
+            return true;
+          case '剪切':
+            textarea.focus();
+            document.execCommand('cut');
+            return true;
+          case '拷贝':
+            textarea.focus();
+            document.execCommand('copy');
+            return true;
+          case '粘贴':
+            textarea.focus();
+            document.execCommand('paste');
+            return true;
+          case '全选':
+            textarea.focus();
+            textarea.select();
+            return true;
+          case '自动换行':
+            if (textarea.style.whiteSpace === 'nowrap' || textarea.style.whiteSpace === '') {
+              textarea.style.whiteSpace = 'pre-wrap';
+              textarea.style.wordBreak = 'break-all';
+            } else {
+              textarea.style.whiteSpace = 'nowrap';
+              textarea.style.wordBreak = 'normal';
+            }
+            return true;
+          case '存储':
+          case '存储为…':
+            var content = textarea.value;
+            var blob = new Blob([content], { type: 'text/plain' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'untitled.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            return true;
+        }
+
+        return false;
+      };
+
+      // ---- Calculator ----
+      window._menuActionHandlers['calculator'] = function(appId, itemText) {
+        var windows = window._windows || [];
+        var container = null;
+        for (var i = windows.length - 1; i >= 0; i--) {
+          if (windows[i]._appId === 'calculator' && windows[i].classList.contains('window--focused')) {
+            container = windows[i].querySelector('.calc-container');
+            if (container) break;
+          }
+        }
+        if (!container) return false;
+
+        var modes = ['基本', '科学', '程序员', '统计'];
+        var bases = ['十进制', '十六进制'];
+
+        if (modes.indexOf(itemText) !== -1) {
+          container._calcSetMode(itemText);
+          return true;
+        }
+
+        if (bases.indexOf(itemText) !== -1) {
+          container._calcSetBase(itemText);
+          return true;
+        }
+
+        return false;
+      };
+
+      // ---- Airplane Game ----
+      window._menuActionHandlers['airplane'] = function(appId, itemText) {
+        var windows = window._windows || [];
+        var container = null;
+        for (var i = windows.length - 1; i >= 0; i--) {
+          if (windows[i]._appId === 'airplane' && windows[i].classList.contains('window--focused')) {
+            var contentDiv = windows[i].querySelector('.window__content');
+            if (contentDiv) {
+              var children = contentDiv.children;
+              for (var c = 0; c < children.length; c++) {
+                if (children[c]._gameState) {
+                  container = children[c];
+                  break;
+                }
+              }
+            }
+            if (container) break;
+          }
+        }
+        if (!container) return false;
+
+        if (itemText === '暂停') {
+          container._togglePause();
+          return true;
+        }
+
+        if (itemText === '开始新游戏' || itemText === '重新开始') {
+          container._resetGame();
+          return true;
+        }
+
+        if (itemText === '结束游戏') {
+          container._endGame(false);
+          return true;
+        }
+
+        return false;
+      };
     })();
   </script>
 </body>

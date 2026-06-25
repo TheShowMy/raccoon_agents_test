@@ -1284,8 +1284,10 @@
         }
       });
 
-      // Expose globally for console testing
+      // Expose globally for menu action dispatch (task 2)
       window.createWindow = createWindow;
+      window._windows = windows;
+      window._bringToFront = bringToFront;
     })();
 
     // ===== Finder File System Data =====
@@ -2304,6 +2306,7 @@
         'calculator': { title: '计算器',      content: buildCalculator },
         'airplane':   { title: '飞机大战',    content: createAirplaneGameContent }
       };
+      window._appConfigs = appConfigs;
 
       /**
        * Build the text editor application DOM element.
@@ -2482,9 +2485,117 @@
             label.className = 'menu-dropdown__item-label';
             label.textContent = itemText;
             itemEl.appendChild(label);
+            (function(text) {
+              itemEl.addEventListener('click', function(e) {
+                e.stopPropagation();
+                closeMenu();
+                handleMenuItemClick(_currentAppId, text);
+              });
+            })(itemText);
             _menuDropdownItems.appendChild(itemEl);
           }
         }
+      }
+
+      /**
+       * Dispatch handler for menu item clicks.
+       * Tries app-specific handlers first, then window operations, then alert fallback.
+       */
+      function handleMenuItemClick(appId, itemText) {
+        // Try app-specific handler first
+        if (window._menuActionHandlers && window._menuActionHandlers[appId]) {
+          if (window._menuActionHandlers[appId](appId, itemText)) {
+            return;
+          }
+        }
+        // Try window operations
+        if (handleWindowOperation(appId, itemText)) {
+          return;
+        }
+        // Fallback: alert with item name
+        alert(itemText);
+      }
+
+      /**
+       * Handle window operation menu items (close, minimize, zoom, all in front, new window).
+       * Returns true if handled, false otherwise.
+       */
+      function handleWindowOperation(appId, itemText) {
+        var windows = window._windows || [];
+        // Find the focused window belonging to this app
+        var focusedWin = null;
+        for (var i = windows.length - 1; i >= 0; i--) {
+          if (windows[i]._appId === appId && windows[i].classList.contains('window--focused')) {
+            focusedWin = windows[i];
+            break;
+          }
+        }
+
+        // --- Close operations ---
+        if (itemText === '关闭窗口' || itemText === '关闭' || itemText === '退出' || itemText === '退出终端' || itemText === '退出计算器') {
+          if (focusedWin) {
+            var closeBtn = focusedWin.querySelector('.window__tl--close');
+            if (closeBtn) closeBtn.click();
+          }
+          return true;
+        }
+
+        // --- Hide operations (minimize) ---
+        if (itemText === '隐藏' || itemText === '隐藏终端' || itemText === '隐藏文本编辑器') {
+          if (focusedWin) {
+            var minBtn = focusedWin.querySelector('.window__tl--minimize');
+            if (minBtn) minBtn.click();
+          }
+          return true;
+        }
+
+        // --- Minimize ---
+        if (itemText === '最小化') {
+          if (focusedWin) {
+            var minBtn = focusedWin.querySelector('.window__tl--minimize');
+            if (minBtn) minBtn.click();
+          }
+          return true;
+        }
+
+        // --- Zoom (toggle maximize) ---
+        if (itemText === '缩放') {
+          if (focusedWin) {
+            var maxBtn = focusedWin.querySelector('.window__tl--maximize');
+            if (maxBtn) maxBtn.click();
+          }
+          return true;
+        }
+
+        // --- All in front ---
+        if (itemText === '全部前置') {
+          if (window._bringToFront) {
+            for (var j = 0; j < windows.length; j++) {
+              if (windows[j]._appId === appId) {
+                window._bringToFront(windows[j]);
+              }
+            }
+          }
+          return true;
+        }
+
+        // --- New window operations ---
+        if (itemText === '新 Finder 窗口' || itemText === '新建窗口' || itemText === '新建标签页' || itemText === '新建') {
+          var appConfigs = window._appConfigs || {};
+          var configKey = appId;
+          if (itemText === '新 Finder 窗口') configKey = 'finder';
+          var config = appConfigs[configKey];
+          if (config && window.createWindow) {
+            var content = config.content;
+            if (typeof content === 'function') {
+              content = content();
+            }
+            window.createWindow(config.title, content, configKey);
+          }
+          return true;
+        }
+
+        return false;
       }
 
       /**

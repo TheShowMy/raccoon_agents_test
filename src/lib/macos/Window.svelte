@@ -104,9 +104,10 @@
     window.removeEventListener('mouseup', onResizeEnd);
   });
 
-  // --- Compute placeholder content ---
+  // --- Compute app component ---
   $: appDef = APP_REGISTRY[win.appId];
-  $: placeholderHtml = appDef ? appDef.placeholder() : '';
+  $: AppComponent = appDef?.component || null;
+  $: placeholderHtml = appDef && !appDef.component ? appDef.placeholder() : '';
 </script>
 
 <div
@@ -155,7 +156,9 @@
 
   <!-- Content Area -->
   <div class="window__content">
-    {#if placeholderHtml}
+    {#if AppComponent}
+      <svelte:component this={AppComponent} {win} />
+    {:else if placeholderHtml}
       {@html placeholderHtml}
     {:else}
       <div class="window__placeholder-missing">未知应用</div>

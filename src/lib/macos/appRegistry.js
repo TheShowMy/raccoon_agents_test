@@ -1,8 +1,12 @@
 /**
  * macOS application registry.
- * Each app has an id, display name, icon SVG, menus, and a placeholder
- * content function (returns HTML string).
+ * Each app has an id, display name, icon SVG, menus, and either:
+ * - a `component` field (Svelte component constructor) for real apps
+ * - a `placeholder` function (returns HTML string) for not-yet-implemented apps
  */
+
+import Terminal from './apps/Terminal.svelte';
+import Finder from './apps/Finder.svelte';
 
 function placeholderContent(appName) {
   return `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:rgba(255,255,255,0.45);font-size:18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;user-select:none;">${appName} — 占位组件</div>`;
@@ -24,7 +28,7 @@ export const APP_REGISTRY = {
       { title: '窗口', items: ['最小化', '缩放', '---', '全部前置'] },
       { title: '帮助', items: ['终端帮助'] },
     ],
-    placeholder: () => placeholderContent('终端'),
+    component: Terminal,
   },
   finder: {
     id: 'finder',
@@ -41,7 +45,7 @@ export const APP_REGISTRY = {
       { title: '窗口', items: ['最小化', '缩放', '---', '全部合并', '全部前置'] },
       { title: '帮助', items: ['访达帮助', 'macOS 帮助'] },
     ],
-    placeholder: () => placeholderContent('访达'),
+    component: Finder,
   },
   'text-editor': {
     id: 'text-editor',

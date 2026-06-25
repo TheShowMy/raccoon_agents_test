@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { activeAppId } from '../stores/windows.js';
   import { APP_REGISTRY } from './appRegistry.js';
+  import { pendingMenuAction } from '../stores/menuActions.js';
 
   // --- Clock state ---
   let timeStr = '00:00';
@@ -68,20 +69,9 @@
     handleMenuAction($activeAppId, itemText);
   }
 
-  /** Dispatch menu item clicks. Future tasks will wire real handlers. */
+  /** Dispatch menu item clicks to the active app via the pendingMenuAction store. */
   function handleMenuAction(appId, itemText) {
-    // Try window operations first
-    if (handleWindowOperation(appId, itemText)) return;
-    // For actions not handled yet, log (or eventually alert)
-    console.log(`Menu action: ${appId} -> ${itemText}`);
-  }
-
-  /** Handle common window operations */
-  function handleWindowOperation(appId, itemText) {
-    // Close / hide / etc. operations require finding the focused window
-    // These will be wired when actual app content is implemented.
-    // For now, no-op on all menu clicks — the shell is functional without menu actions.
-    return false;
+    pendingMenuAction.set({ appId, action: itemText });
   }
 
   // Close dropdown on outside click

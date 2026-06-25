@@ -137,6 +137,22 @@
       font-weight: 600;
     }
 
+    /* Dynamic menu injection container — fills available space flexibly */
+    .menu-bar__dynamic {
+      display: flex;
+      align-items: center;
+      height: 100%;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .menu-bar__menus {
+      display: flex;
+      align-items: center;
+      height: 100%;
+      overflow: hidden;
+    }
+
     /* ---- Right Section (Status Icons + Time) ---- */
     .menu-bar__right {
       display: flex;
@@ -783,6 +799,93 @@
     .calc-btn--eq:active {
       filter: brightness(1.4);
     }
+
+    /* ===== Dropdown Menu Panel ===== */
+    .menu-dropdown {
+      position: absolute;
+      top: var(--menu-bar-height);
+      left: 0;
+      z-index: 200;
+      min-width: 240px;
+      max-width: 320px;
+      background: rgba(35, 35, 38, 0.95);
+      backdrop-filter: blur(30px) saturate(180%);
+      -webkit-backdrop-filter: blur(30px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.45),
+        0 2px 8px rgba(0, 0, 0, 0.25);
+      padding: 5px 0;
+      opacity: 0;
+      transform: translateY(-6px) scale(0.97);
+      pointer-events: none;
+      transition: opacity 0.12s ease, transform 0.12s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      font-size: 13px;
+      color: #e5e5e7;
+    }
+
+    .menu-dropdown--visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+
+    .menu-dropdown__items {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .menu-dropdown__item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 18px;
+      cursor: default;
+      white-space: nowrap;
+      line-height: 1.4;
+      transition: background 0.1s ease;
+    }
+
+    .menu-dropdown__item:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .menu-dropdown__item--disabled {
+      opacity: 0.35;
+      pointer-events: none;
+    }
+
+    .menu-dropdown__item--separator {
+      height: 1px;
+      margin: 4px 14px;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 0;
+      pointer-events: none;
+    }
+
+    .menu-dropdown__item--checked::before {
+      content: '✓';
+      margin-right: 6px;
+      font-size: 11px;
+    }
+
+    .menu-dropdown__item-shortcut {
+      margin-left: 24px;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+      flex-shrink: 0;
+    }
+
+    .menu-dropdown__item-label {
+      flex: 1;
+    }
+
+    .menu-dropdown__item--has-submenu::after {
+      content: '▸';
+      margin-left: 8px;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.4);
     }
   </style>
 </head>
@@ -797,13 +900,18 @@
       <!-- Left: Apple logo + app menu placeholders -->
       <div class="menu-bar__left">
         <span class="menu-bar__apple" title="Apple"></span>
-        <span class="menu-bar__menu menu-bar__menu--bold">访达</span>
-        <span class="menu-bar__menu">文件</span>
-        <span class="menu-bar__menu">编辑</span>
-        <span class="menu-bar__menu">显示</span>
-        <span class="menu-bar__menu">前往</span>
-        <span class="menu-bar__menu">窗口</span>
-        <span class="menu-bar__menu">帮助</span>
+        <!-- Dynamic app name & menu titles — injected by JS -->
+        <div class="menu-bar__dynamic" id="menuBarDynamic">
+          <span class="menu-bar__menu menu-bar__menu--bold" id="appNameDisplay">访达</span>
+          <div class="menu-bar__menus" id="menuTitlesContainer">
+            <span class="menu-bar__menu">文件</span>
+            <span class="menu-bar__menu">编辑</span>
+            <span class="menu-bar__menu">显示</span>
+            <span class="menu-bar__menu">前往</span>
+            <span class="menu-bar__menu">窗口</span>
+            <span class="menu-bar__menu">帮助</span>
+          </div>
+        </div>
       </div>
 
       <!-- Right: Status icons + time -->
@@ -826,6 +934,13 @@
         <span class="menu-bar__time" id="menuBarTime">00:00</span>
       </div>
     </header>
+
+    <!-- Dropdown Menu Panel -->
+    <div class="menu-dropdown" id="menuDropdown">
+      <div class="menu-dropdown__items" id="menuDropdownItems">
+        <!-- Menu items injected here by JS -->
+      </div>
+    </div>
 
     <!-- Desktop Main Area -->
     <main class="desktop-main"></main>
@@ -931,6 +1046,9 @@
         win.style.zIndex = zIndexCounter;
         windows.forEach(function(w) { w.classList.remove('window--focused'); });
         win.classList.add('window--focused');
+        if (win._appId && window.renderAppMenu) {
+          window.renderAppMenu(win._appId);
+        }
       }
 
       function savePosition(win) {
@@ -954,10 +1072,11 @@
        *  - content: string (HTML) or HTMLElement to place in the window body
        * Returns the window DOM element.
        */
-      function createWindow(title, content) {
+      function createWindow(title, content, appId) {
         // ---- Build elements ----
         var win = document.createElement('div');
         win.className = 'window';
+        win._appId = appId || '';
 
         // Position: cascade offset for each new window
         var offset = (windows.length % 10) * 28;
@@ -988,6 +1107,10 @@
           }
           win.remove();
           windows = windows.filter(function(w) { return w !== win; });
+          // When last window closes, revert to Finder/desktop
+          if (windows.length === 0 && window.renderAppMenu) {
+            window.renderAppMenu('finder');
+          }
         });
 
         // Minimize button
@@ -1153,6 +1276,13 @@
 
         return win;
       }
+
+      // Click on desktop background → revert to Finder
+      desktopMain.addEventListener('mousedown', function(e) {
+        if (e.target === desktopMain && window.renderAppMenu) {
+          window.renderAppMenu('finder');
+        }
+      });
 
       // Expose globally for console testing
       window.createWindow = createWindow;
@@ -2246,7 +2376,7 @@
         item.addEventListener('click', function() {
           var app = item.getAttribute('data-app');
           if (app === 'text-editor' && window.createWindow) {
-            window.createWindow('文本编辑器', buildTextEditor());
+            window.createWindow('文本编辑器', buildTextEditor(), app);
             return;
           }
           var config = appConfigs[app];
@@ -2255,10 +2385,216 @@
             if (typeof content === 'function') {
               content = content();
             }
-            window.createWindow(config.title, content);
+            window.createWindow(config.title, content, app);
           }
         });
       });
+    })();
+
+    // ===== Application Menu Registry, Renderer & Dropdown Interaction =====
+    (function() {
+      /**
+       * Application menu registry.
+       * Each app has:
+       *   - name: display name in the menu bar (first bold item)
+       *   - menus: array of { title, items } where items[] are placeholder strings
+       *     ('---' denotes a separator, used by future dropdown rendering)
+       */
+      var appMenuRegistry = {
+        'finder': {
+          name: '访达',
+          menus: [
+            { title: '文件',         items: ['新 Finder 窗口', '新建文件夹', '---', '打开', '关闭窗口'] },
+            { title: '编辑',         items: ['撤销', '剪切', '拷贝', '粘贴', '全选'] },
+            { title: '显示',         items: ['为列表', '为图标', '为分栏', '为封面流', '---', '显示路径栏'] },
+            { title: '前往',         items: ['前往文件夹…', '---', '个人收藏', '最近使用', '---', '连接到服务器…'] },
+            { title: '窗口',         items: ['最小化', '缩放', '---', '全部合并', '全部前置'] },
+            { title: '帮助',         items: ['访达帮助', 'macOS 帮助'] }
+          ]
+        },
+        'terminal': {
+          name: '终端',
+          menus: [
+            { title: '终端',         items: ['关于终端', '---', '偏好设置…', '---', '服务', '隐藏终端', '退出终端'] },
+            { title: '文件',         items: ['新建窗口', '新建标签页', '---', '打开…', '关闭窗口', '关闭'] },
+            { title: '编辑',         items: ['撤销', '重做', '---', '剪切', '拷贝', '粘贴', '---', '全选', '查找'] },
+            { title: '显示',         items: ['显示标签页栏', '显示所有窗口', '---', '放大', '缩小', '实际大小'] },
+            { title: '窗口',         items: ['最小化', '缩放', '---', '全部前置'] },
+            { title: '帮助',         items: ['终端帮助'] }
+          ]
+        },
+        'text-editor': {
+          name: '文本编辑器',
+          menus: [
+            { title: '文本编辑器',   items: ['关于文本编辑器', '---', '偏好设置…', '---', '隐藏文本编辑器', '退出'] },
+            { title: '文件',         items: ['新建', '打开…', '---', '存储', '存储为…', '---', '关闭'] },
+            { title: '编辑',         items: ['撤销', '重做', '---', '剪切', '拷贝', '粘贴', '---', '全选'] },
+            { title: '格式',         items: ['显示字体', '显示颜色', '---', '制表符', '自动换行'] },
+            { title: '窗口',         items: ['最小化', '缩放', '---', '全部前置'] },
+            { title: '帮助',         items: ['文本编辑器帮助'] }
+          ]
+        },
+        'calculator': {
+          name: '计算器',
+          menus: [
+            { title: '计算器',       items: ['关于计算器', '---', '偏好设置…', '---', '隐藏', '退出计算器'] },
+            { title: '文件',         items: ['新建', '打开…', '保存'] },
+            { title: '编辑',         items: ['撤销', '剪切', '拷贝', '粘贴'] },
+            { title: '显示',         items: ['基本', '科学', '程序员', '统计', '---', '十进制', '十六进制'] },
+            { title: '窗口',         items: ['最小化', '缩放', '---', '全部前置'] },
+            { title: '帮助',         items: ['计算器帮助'] }
+          ]
+        },
+        'airplane': {
+          name: '飞机大战',
+          menus: [
+            { title: '飞机大战',     items: ['关于飞机大战', '排行榜', '---', '偏好设置…', '---', '退出'] },
+            { title: '游戏',         items: ['开始新游戏', '暂停', '重新开始', '---', '结束游戏'] },
+            { title: '编辑',         items: ['撤销', '剪切', '拷贝', '粘贴'] },
+            { title: '窗口',         items: ['最小化', '缩放', '---', '全部前置'] },
+            { title: '帮助',         items: ['操作说明', '关于'] }
+          ]
+        }
+      };
+
+      // ---- Dropdown state & helpers ----
+      var _menuDropdown = document.getElementById('menuDropdown');
+      var _menuDropdownItems = document.getElementById('menuDropdownItems');
+      var _currentAppId = '';
+      var _activeMenuIndex = -1;
+
+      /**
+       * Render menu items into the dropdown panel.
+       * Handles strings, '---' separators, and ignores null/undefined entries.
+       */
+      function renderDropdownItems(items) {
+        _menuDropdownItems.innerHTML = '';
+        for (var i = 0; i < items.length; i++) {
+          var itemText = items[i];
+          if (itemText === '---') {
+            var sep = document.createElement('div');
+            sep.className = 'menu-dropdown__item menu-dropdown__item--separator';
+            _menuDropdownItems.appendChild(sep);
+          } else if (itemText) {
+            var itemEl = document.createElement('div');
+            itemEl.className = 'menu-dropdown__item';
+            var label = document.createElement('span');
+            label.className = 'menu-dropdown__item-label';
+            label.textContent = itemText;
+            itemEl.appendChild(label);
+            _menuDropdownItems.appendChild(itemEl);
+          }
+        }
+      }
+
+      /**
+       * Open the dropdown for the menu at the given index.
+       * Positions the panel below the clicked menu title.
+       */
+      function openMenu(menuIndex) {
+        var app = appMenuRegistry[_currentAppId];
+        if (!app || !app.menus[menuIndex]) return;
+
+        var menu = app.menus[menuIndex];
+        renderDropdownItems(menu.items);
+        _activeMenuIndex = menuIndex;
+
+        // Position dropdown below the clicked menu title
+        var container = document.getElementById('menuTitlesContainer');
+        if (container) {
+          var titleSpans = container.querySelectorAll('.menu-bar__menu');
+          var targetSpan = titleSpans[menuIndex];
+          if (targetSpan) {
+            var rect = targetSpan.getBoundingClientRect();
+            _menuDropdown.style.left = rect.left + 'px';
+          }
+        }
+
+        _menuDropdown.classList.add('menu-dropdown--visible');
+      }
+
+      /**
+       * Close the dropdown panel and reset active state.
+       */
+      function closeMenu() {
+        if (_activeMenuIndex === -1) return;
+        _menuDropdown.classList.remove('menu-dropdown--visible');
+        _activeMenuIndex = -1;
+      }
+
+      /**
+       * Toggle dropdown for the given menu index.
+       * If already open on the same menu → close.
+       * Otherwise → open (switching content if another menu was open).
+       */
+      function toggleMenu(menuIndex) {
+        if (_activeMenuIndex === menuIndex) {
+          closeMenu();
+        } else {
+          openMenu(menuIndex);
+        }
+      }
+
+      // ---- Close dropdown on outside click ----
+      document.addEventListener('mousedown', function(e) {
+        if (_activeMenuIndex === -1) return;
+        // Don't close if clicking inside the dropdown panel
+        if (_menuDropdown && _menuDropdown.contains(e.target)) return;
+        // Don't close if clicking on a menu title (its own click handler handles toggling)
+        if (e.target.closest('#menuTitlesContainer') && e.target.closest('.menu-bar__menu')) return;
+        closeMenu();
+      });
+
+      // ---- Close dropdown on Esc key ----
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && _activeMenuIndex !== -1) {
+          closeMenu();
+        }
+      });
+
+      /**
+       * Render the menu bar for a given app ID.
+       * Updates the first bold item (app name), the menu title row,
+       * and attaches click handlers for dropdown toggling.
+       * @param {string} appId - one of 'finder', 'terminal', 'text-editor', 'calculator', 'airplane'
+       */
+      function renderAppMenu(appId) {
+        var app = appMenuRegistry[appId];
+        if (!app) return;
+
+        var nameEl = document.getElementById('appNameDisplay');
+        var container = document.getElementById('menuTitlesContainer');
+        if (!nameEl || !container) return;
+
+        // Close any open dropdown when switching apps
+        closeMenu();
+
+        // Store current app
+        _currentAppId = appId;
+
+        // Set the bold app name
+        nameEl.textContent = app.name;
+
+        // Rebuild menu title row with click handlers
+        container.innerHTML = '';
+        for (var i = 0; i < app.menus.length; i++) {
+          var span = document.createElement('span');
+          span.className = 'menu-bar__menu';
+          span.textContent = app.menus[i].title;
+          // Bind click handler via closure to capture index
+          (function(idx) {
+            span.addEventListener('click', function(e) {
+              e.stopPropagation();
+              toggleMenu(idx);
+            });
+          })(i);
+          container.appendChild(span);
+        }
+      }
+
+      // Expose globally for console testing (task 2 verification)
+      window.appMenuRegistry = appMenuRegistry;
+      window.renderAppMenu = renderAppMenu;
     })();
   </script>
 </body>

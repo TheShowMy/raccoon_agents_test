@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>子页面列表</title>
+  <style>
+    /* ===== Reset & Base ===== */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      /* Surface / background */
+      --bg-primary: #1a1b26;
+      --bg-secondary: #16171f;
+      --bg-card: #24253a;
+
+      /* Text */
+      --text-primary: #c0caf5;
+      --text-secondary: #9aa5ce;
+      --text-muted: #565f89;
+
+      /* Accent */
+      --accent: #7aa2f7;
+      --accent-hover: #89b4fa;
+
+      /* Borders & effects */
+      --border: #3b3d54;
+      --border-light: #454766;
+      --radius: 10px;
+      --radius-sm: 6px;
+      --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.45);
+      --transition: 0.2s ease;
+
+      /* Typography */
+      --font-mono: 'Cascadia Code', 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Menlo', 'Monaco', monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', system-ui, sans-serif;
+
+      /* Layout */
+      --page-max-width: 800px;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.6;
+    }
+
+    /* ===== Scrollbar ===== */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--border-light);
+    }
+
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+
+    /* Firefox */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    /* ===== Header ===== */
+    .header {
+      padding: 2.5rem 1.5rem 2rem;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .header::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 200px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .header__title {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.02em;
+      font-family: var(--font-mono);
+    }
+
+    .header__subtitle {
+      margin-top: 0.5rem;
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+    }
+
+    /* ===== Main & List ===== */
+    .main {
+      flex: 1;
+      padding: 2rem 1.5rem;
+      max-width: var(--page-max-width);
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .list {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    /* ===== List Card ===== */
+    .list-card {
+      display: block;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      text-decoration: none;
+      color: inherit;
+      transition:
+        transform var(--transition),
+        box-shadow var(--transition),
+        border-color var(--transition);
+    }
+
+    .list-card:hover {
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-lg);
+      border-color: var(--accent);
+    }
+
+    /* ---- List Card Header ---- */
+    .list-card__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.85rem 1.1rem;
+      background: #1f2137;
+      border-bottom: 1px solid var(--border);
+      user-select: none;
+    }
+
+    .list-card__header-left {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    /* macOS-style traffic light dots */
+    .card__dots {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .card__dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      transition: opacity var(--transition);
+    }
+
+    .card__dot--red    { background: #ff5f57; }
+    .card__dot--yellow { background: #febc2e; }
+    .card__dot--green  { background: #28c840; }
+
+    .list-card:hover .card__dot {
+      opacity: 0.85;
+    }
+
+    .list-card__title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      letter-spacing: 0.01em;
+    }
+
+    .list-card__arrow {
+      color: var(--text-muted);
+      transition:
+        transform var(--transition),
+        color var(--transition);
+    }
+
+    .list-card:hover .list-card__arrow {
+      color: var(--accent);
+      transform: translateX(3px);
+    }
+
+    /* ---- List Card Body ---- */
+    .list-card__body {
+      padding: 1rem 1.1rem;
+    }
+
+    .list-card__desc {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      margin: 0;
+    }
+
+    /* ===== Footer ===== */
+    .footer {
+      padding: 1.25rem 1.5rem;
+      text-align: center;
+      border-top: 1px solid var(--border);
+      background: var(--bg-secondary);
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    /* ===== Animations ===== */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .list-card {
+      animation: fadeIn 0.35s ease both;
+    }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 600px) {
+      .header {
+        padding: 1.8rem 1rem 1.5rem;
+      }
+
+      .header__title {
+        font-size: 1.5rem;
+      }
+
+      .main {
+        padding: 1rem;
+      }
+
+      .list-card__header {
+        padding: 0.7rem 0.9rem;
+      }
+
+      .list-card__body {
+        padding: 0.85rem 0.9rem;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ===== Header ===== -->
+  <header class="header">
+    <h1 class="header__title">子页面列表</h1>
+    <p class="header__subtitle">浏览所有示例页面</p>
+  </header>
+
+  <!-- ===== Main List ===== -->
+  <main class="main">
+    <div class="list" id="listContainer">
+      <a href="hello-world.html" class="list-card">
+        <div class="list-card__header">
+          <div class="list-card__header-left">
+            <span class="card__dots">
+              <span class="card__dot card__dot--red"></span>
+              <span class="card__dot card__dot--yellow"></span>
+              <span class="card__dot card__dot--green"></span>
+            </span>
+            <span class="list-card__title">Hello World</span>
+          </div>
+          <span class="list-card__arrow">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+          </span>
+        </div>
+        <div class="list-card__body">
+          <p class="list-card__desc">浏览 20+ 种编程语言的经典问候</p>
+        </div>
+      </a>
+
+      <a href="macos.html" class="list-card">
+        <div class="list-card__header">
+          <div class="list-card__header-left">
+            <span class="card__dots">
+              <span class="card__dot card__dot--red"></span>
+              <span class="card__dot card__dot--yellow"></span>
+              <span class="card__dot card__dot--green"></span>
+            </span>
+            <span class="list-card__title">macOS</span>
+          </div>
+          <span class="list-card__arrow">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+          </span>
+        </div>
+        <div class="list-card__body">
+          <p class="list-card__desc">一个模拟 macOS 的页面</p>
+        </div>
+      </a>
+    </div>
+  </main>
+
+  <!-- ===== Footer ===== -->
+  <footer class="footer">
+    <p>子页面列表 · 点击卡片进入对应页面</p>
+  </footer>
+
+</body>
+</html>

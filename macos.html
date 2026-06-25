@@ -1046,6 +1046,9 @@
         win.style.zIndex = zIndexCounter;
         windows.forEach(function(w) { w.classList.remove('window--focused'); });
         win.classList.add('window--focused');
+        if (win._appId && window.renderAppMenu) {
+          window.renderAppMenu(win._appId);
+        }
       }
 
       function savePosition(win) {
@@ -1069,10 +1072,11 @@
        *  - content: string (HTML) or HTMLElement to place in the window body
        * Returns the window DOM element.
        */
-      function createWindow(title, content) {
+      function createWindow(title, content, appId) {
         // ---- Build elements ----
         var win = document.createElement('div');
         win.className = 'window';
+        win._appId = appId || '';
 
         // Position: cascade offset for each new window
         var offset = (windows.length % 10) * 28;
@@ -1103,6 +1107,10 @@
           }
           win.remove();
           windows = windows.filter(function(w) { return w !== win; });
+          // When last window closes, revert to Finder/desktop
+          if (windows.length === 0 && window.renderAppMenu) {
+            window.renderAppMenu('finder');
+          }
         });
 
         // Minimize button
@@ -1268,6 +1276,13 @@
 
         return win;
       }
+
+      // Click on desktop background → revert to Finder
+      desktopMain.addEventListener('mousedown', function(e) {
+        if (e.target === desktopMain && window.renderAppMenu) {
+          window.renderAppMenu('finder');
+        }
+      });
 
       // Expose globally for console testing
       window.createWindow = createWindow;
@@ -2361,7 +2376,7 @@
         item.addEventListener('click', function() {
           var app = item.getAttribute('data-app');
           if (app === 'text-editor' && window.createWindow) {
-            window.createWindow('文本编辑器', buildTextEditor());
+            window.createWindow('文本编辑器', buildTextEditor(), app);
             return;
           }
           var config = appConfigs[app];
@@ -2370,7 +2385,7 @@
             if (typeof content === 'function') {
               content = content();
             }
-            window.createWindow(config.title, content);
+            window.createWindow(config.title, content, app);
           }
         });
       });

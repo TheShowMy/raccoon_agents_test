@@ -1,10 +1,10 @@
-function escapeHTML(code) {
+export function escapeHTML(code) {
   return code.replace(/&/g, '&amp;')
              .replace(/</g, '&lt;')
              .replace(/>/g, '&gt;');
 }
 
-function highlightCode(code, lang) {
+export function highlightCode(code, lang) {
   var def = { k:'function return', b:'console log', t:'', lc:'//', bc:['/*','*/'], sq:['"',"'",'`'] };
   var html = escapeHTML(code);
   var placeholders = [];
@@ -63,15 +63,18 @@ function highlightCode(code, lang) {
   return html;
 }
 
-var samples = [
-  'var x = "Hello 123";',
-  '// comment 42\nvar a = 0;',
-  '/* block 99 */ var b = 7;',
-  'var y = 0;'
-];
+// Self-test when run directly: `node legacy/test_highlight.js`
+if (typeof process !== 'undefined' && process.argv[1] && process.argv[1].endsWith('test_highlight.js')) {
+  var samples = [
+    'var x = "Hello 123";',
+    '// comment 42\nvar a = 0;',
+    '/* block 99 */ var b = 7;',
+    'var y = 0;'
+  ];
 
-samples.forEach(function(s){
-  console.log('IN :', s);
-  console.log('OUT:', highlightCode(s, 'js'));
-  console.log('');
-});
+  samples.forEach(function(s){
+    console.log('IN :', s);
+    console.log('OUT:', highlightCode(s, 'js'));
+    console.log('');
+  });
+}

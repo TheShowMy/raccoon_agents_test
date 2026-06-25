@@ -1,23 +1,16 @@
 <script>
-  // Route placeholder — will be replaced in later tasks
+  import Layout from './lib/components/Layout.svelte';
 </script>
 
-<main>
-  <p>Hello World Collection — Svelte + Vite</p>
-</main>
-
-<style>
-  :global(body) {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    background: #1a1b26;
-    color: #c0caf5;
-  }
-
-  main {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-  }
-</style>
+<Layout
+  showHeader={true}
+  headerTitle="子页面列表"
+  headerSubtitle="浏览所有示例页面"
+  showBackNav={false}
+  showFooter={true}
+  footerText="子页面列表 · 点击卡片进入对应页面"
+>
+  <p style="text-align: center; color: var(--text-secondary);">
+    内容区域 — 后续任务将在此渲染子页面卡片
+  </p>
+</Layout>

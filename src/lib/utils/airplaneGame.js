@@ -1,6 +1,8 @@
 /**
- * Synchronize Three.js renderer and camera dimensions with a container element.
- * Pure function — no side effects beyond the passed renderer/camera.
+ * Update Three.js renderer and camera dimensions to match a container element.
+ *
+ * Reads the container's bounding rect, applies the dimensions to the camera
+ * (aspect ratio + projection matrix) and the renderer (pixel ratio + size).
  *
  * @param {Element} container - The DOM element whose bounding rect provides dimensions.
  * @param {THREE.PerspectiveCamera} camera - The Three.js camera to update aspect ratio.
@@ -13,6 +15,6 @@ export function syncRendererSize(container, camera, renderer) {
   const h = Math.max(rect.height, 1);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(w, h);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(w, h);
 }

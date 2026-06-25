@@ -2773,9 +2773,17 @@
         if (itemText === '新建文件夹') {
           var path = container._finderGetCurrentPath();
           var children = finderData[path] || [];
-          children.push('未命名文件夹');
+          // Dedup: find next available name (未命名文件夹, 未命名文件夹 2, …)
+          var baseName = '未命名文件夹';
+          var folderName = baseName;
+          var counter = 1;
+          while (children.indexOf(folderName) !== -1) {
+            counter++;
+            folderName = baseName + ' ' + counter;
+          }
+          children.push(folderName);
           finderData[path] = children;
-          var newPath = path ? path + '/未命名文件夹' : '未命名文件夹';
+          var newPath = path ? path + '/' + folderName : folderName;
           finderData[newPath] = [];
           container._finderRefreshView(path);
           return true;
@@ -2817,15 +2825,19 @@
 
         switch (itemText) {
           case '撤销':
-            textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+            textarea.focus();
+            document.execCommand('undo');
             return true;
           case '重做':
-            textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true }));
+            textarea.focus();
+            document.execCommand('redo');
             return true;
           case '剪切':
+            textarea.focus();
             document.execCommand('cut');
             return true;
           case '拷贝':
+            textarea.focus();
             document.execCommand('copy');
             return true;
           case '粘贴':

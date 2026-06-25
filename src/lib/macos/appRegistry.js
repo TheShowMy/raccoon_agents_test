@@ -7,6 +7,8 @@
 
 import Terminal from './apps/Terminal.svelte';
 import Finder from './apps/Finder.svelte';
+import TextEditor from './apps/TextEditor.svelte';
+import Calculator from './apps/Calculator.svelte';
 
 function placeholderContent(appName) {
   return `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:rgba(255,255,255,0.45);font-size:18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;user-select:none;">${appName} — 占位组件</div>`;
@@ -65,7 +67,7 @@ export const APP_REGISTRY = {
       { title: '窗口', items: ['最小化', '缩放', '---', '全部前置'] },
       { title: '帮助', items: ['文本编辑器帮助'] },
     ],
-    placeholder: () => placeholderContent('文本编辑器'),
+    component: TextEditor,
   },
   calculator: {
     id: 'calculator',
@@ -85,7 +87,7 @@ export const APP_REGISTRY = {
       { title: '窗口', items: ['最小化', '缩放', '---', '全部前置'] },
       { title: '帮助', items: ['计算器帮助'] },
     ],
-    placeholder: () => placeholderContent('计算器'),
+    component: Calculator,
   },
   airplane: {
     id: 'airplane',

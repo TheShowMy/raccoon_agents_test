@@ -1,0 +1,9 @@
+{
+  "terminal.integrated.profiles.windows": {
+    "CommandPrompt": {
+      "path": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/c"]
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "CommandPrompt"
+}

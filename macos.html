@@ -2375,6 +2375,103 @@
         });
       });
     })();
+
+    // ===== Application Menu Registry & Renderer =====
+    (function() {
+      /**
+       * Application menu registry.
+       * Each app has:
+       *   - name: display name in the menu bar (first bold item)
+       *   - menus: array of { title, items } where items[] are placeholder strings
+       *     ('---' denotes a separator, used by future dropdown rendering)
+       */
+      var appMenuRegistry = {
+        'finder': {
+          name: '访达',
+          menus: [
+            { title: '文件',         items: ['新 Finder 窗口', '新建文件夹', '---', '打开', '关闭窗口'] },
+            { title: '编辑',         items: ['撤销', '剪切', '拷贝', '粘贴', '全选'] },
+            { title: '显示',         items: ['为列表', '为图标', '为分栏', '为封面流', '---', '显示路径栏'] },
+            { title: '前往',         items: ['前往文件夹…', '---', '个人收藏', '最近使用', '---', '连接到服务器…'] },
+            { title: '窗口',         items: ['最小化', '缩放', '---', '全部合并', '全部前置'] },
+            { title: '帮助',         items: ['访达帮助', 'macOS 帮助'] }
+          ]
+        },
+        'terminal': {
+          name: '终端',
+          menus: [
+            { title: '终端',         items: ['关于终端', '---', '偏好设置…', '---', '服务', '隐藏终端', '退出终端'] },
+            { title: '文件',         items: ['新建窗口', '新建标签页', '---', '打开…', '关闭窗口', '关闭'] },
+            { title: '编辑',         items: ['撤销', '重做', '---', '剪切', '拷贝', '粘贴', '---', '全选', '查找'] },
+            { title: '显示',         items: ['显示标签页栏', '显示所有窗口', '---', '放大', '缩小', '实际大小'] },
+            { title: '窗口',         items: ['最小化', '缩放', '---', '全部前置'] },
+            { title: '帮助',         items: ['终端帮助'] }
+          ]
+        },
+        'text-editor': {
+          name: '文本编辑器',
+          menus: [
+            { title: '文本编辑器',   items: ['关于文本编辑器', '---', '偏好设置…', '---', '隐藏文本编辑器', '退出'] },
+            { title: '文件',         items: ['新建', '打开…', '---', '存储', '存储为…', '---', '关闭'] },
+            { title: '编辑',         items: ['撤销', '重做', '---', '剪切', '拷贝', '粘贴', '---', '全选'] },
+            { title: '格式',         items: ['显示字体', '显示颜色', '---', '制表符', '自动换行'] },
+            { title: '窗口',         items: ['最小化', '缩放', '---', '全部前置'] },
+            { title: '帮助',         items: ['文本编辑器帮助'] }
+          ]
+        },
+        'calculator': {
+          name: '计算器',
+          menus: [
+            { title: '计算器',       items: ['关于计算器', '---', '偏好设置…', '---', '隐藏', '退出计算器'] },
+            { title: '文件',         items: ['新建', '打开…', '保存'] },
+            { title: '编辑',         items: ['撤销', '剪切', '拷贝', '粘贴'] },
+            { title: '显示',         items: ['基本', '科学', '程序员', '统计', '---', '十进制', '十六进制'] },
+            { title: '窗口',         items: ['最小化', '缩放', '---', '全部前置'] },
+            { title: '帮助',         items: ['计算器帮助'] }
+          ]
+        },
+        'airplane': {
+          name: '飞机大战',
+          menus: [
+            { title: '飞机大战',     items: ['关于飞机大战', '排行榜', '---', '偏好设置…', '---', '退出'] },
+            { title: '游戏',         items: ['开始新游戏', '暂停', '重新开始', '---', '结束游戏'] },
+            { title: '编辑',         items: ['撤销', '剪切', '拷贝', '粘贴'] },
+            { title: '窗口',         items: ['最小化', '缩放', '---', '全部前置'] },
+            { title: '帮助',         items: ['操作说明', '关于'] }
+          ]
+        }
+      };
+
+      /**
+       * Render the menu bar for a given app ID.
+       * Updates the first bold item (app name) and the menu title row.
+       * @param {string} appId - one of 'finder', 'terminal', 'text-editor', 'calculator', 'airplane'
+       */
+      function renderAppMenu(appId) {
+        var app = appMenuRegistry[appId];
+        if (!app) return;
+
+        var nameEl = document.getElementById('appNameDisplay');
+        var container = document.getElementById('menuTitlesContainer');
+        if (!nameEl || !container) return;
+
+        // Set the bold app name
+        nameEl.textContent = app.name;
+
+        // Rebuild menu title row
+        container.innerHTML = '';
+        for (var i = 0; i < app.menus.length; i++) {
+          var span = document.createElement('span');
+          span.className = 'menu-bar__menu';
+          span.textContent = app.menus[i].title;
+          container.appendChild(span);
+        }
+      }
+
+      // Expose globally for console testing (task 2 verification)
+      window.appMenuRegistry = appMenuRegistry;
+      window.renderAppMenu = renderAppMenu;
+    })();
   </script>
 </body>
 </html>

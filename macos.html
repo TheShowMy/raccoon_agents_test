@@ -1561,6 +1561,11 @@
       /* Initial render */
       refreshView('');
 
+      // Expose navigation API for menu handlers
+      container._finderNavigateTo = navigateTo;
+      container._finderRefreshView = refreshView;
+      container._finderGetCurrentPath = function() { return currentPath; };
+
       return container;
     }
 
@@ -1996,6 +2001,14 @@
           var cv = container.querySelector('canvas');
           if (cv) cv.remove();
         };
+        // Expose game API for menu handlers
+        container._gameState = gameState;
+        container._resetGame = resetGame;
+        container._endGame = endGame;
+        container._togglePause = function() {
+          if (gameState.gameOver) return;
+          gameState.running = !gameState.running;
+        };
       });
       return container;
     }
@@ -2015,6 +2028,18 @@
       var displayText = document.createElement('span');
       displayText.textContent = '0';
       display.appendChild(displayText);
+
+      // Mode and base state for menu handler switching
+      var currentMode = '基本';
+      var currentBase = '十进制';
+      var statusBar = document.createElement('div');
+      statusBar.style.cssText = 'display:flex;gap:12px;padding:0 20px 6px;font-size:11px;color:rgba(255,255,255,0.35);background:#1c1c1e;';
+      var modeLabel = document.createElement('span');
+      modeLabel.textContent = currentMode;
+      statusBar.appendChild(modeLabel);
+      var baseLabel = document.createElement('span');
+      baseLabel.textContent = currentBase;
+      statusBar.appendChild(baseLabel);
 
       function updateDisplay() {
         displayText.textContent = currentInput;
@@ -2162,7 +2187,17 @@
       });
 
       container.appendChild(display);
+      container.appendChild(statusBar);
       container.appendChild(buttonsGrid);
+      // Expose mode/base switching API for menu handlers
+      container._calcSetMode = function(mode) {
+        currentMode = mode;
+        modeLabel.textContent = mode;
+      };
+      container._calcSetBase = function(base) {
+        currentBase = base;
+        baseLabel.textContent = base;
+      };
       return container;
     }
     // ===== Dock Click Handlers =====
@@ -2717,6 +2752,183 @@
       // Expose globally for console testing (task 2 verification)
       window.appMenuRegistry = appMenuRegistry;
       window.renderAppMenu = renderAppMenu;
+    })();
+
+    // ===== App-Specific Menu Action Handlers =====
+    (function() {
+      window._menuActionHandlers = {};
+
+      // ---- Finder ----
+      window._menuActionHandlers['finder'] = function(appId, itemText) {
+        var windows = window._windows || [];
+        var container = null;
+        for (var i = windows.length - 1; i >= 0; i--) {
+          if (windows[i]._appId === 'finder' && windows[i].classList.contains('window--focused')) {
+            container = windows[i].querySelector('.finder-container');
+            if (container) break;
+          }
+        }
+        if (!container) return false;
+
+        if (itemText === '新建文件夹') {
+          var path = container._finderGetCurrentPath();
+          var children = finderData[path] || [];
+          children.push('未命名文件夹');
+          finderData[path] = children;
+          var newPath = path ? path + '/未命名文件夹' : '未命名文件夹';
+          finderData[newPath] = [];
+          container._finderRefreshView(path);
+          return true;
+        }
+
+        if (itemText === '打开') {
+          var path = container._finderGetCurrentPath();
+          var children = finderData[path] || [];
+          var firstFolder = null;
+          for (var j = 0; j < children.length; j++) {
+            var childPath = path ? path + '/' + children[j] : children[j];
+            if (isFinderFolder(childPath)) {
+              firstFolder = children[j];
+              break;
+            }
+          }
+          if (firstFolder) {
+            container._finderNavigateTo(path ? path + '/' + firstFolder : firstFolder);
+          } else {
+            alert('当前文件夹中没有可打开的文件夹');
+          }
+          return true;
+        }
+
+        return false;
+      };
+
+      // ---- Text Editor ----
+      window._menuActionHandlers['text-editor'] = function(appId, itemText) {
+        var windows = window._windows || [];
+        var textarea = null;
+        for (var i = windows.length - 1; i >= 0; i--) {
+          if (windows[i]._appId === 'text-editor' && windows[i].classList.contains('window--focused')) {
+            textarea = windows[i].querySelector('.text-editor__textarea');
+            if (textarea) break;
+          }
+        }
+        if (!textarea) return false;
+
+        switch (itemText) {
+          case '撤销':
+            textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+            return true;
+          case '重做':
+            textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true }));
+            return true;
+          case '剪切':
+            document.execCommand('cut');
+            return true;
+          case '拷贝':
+            document.execCommand('copy');
+            return true;
+          case '粘贴':
+            textarea.focus();
+            document.execCommand('paste');
+            return true;
+          case '全选':
+            textarea.focus();
+            textarea.select();
+            return true;
+          case '自动换行':
+            if (textarea.style.whiteSpace === 'nowrap' || textarea.style.whiteSpace === '') {
+              textarea.style.whiteSpace = 'pre-wrap';
+              textarea.style.wordBreak = 'break-all';
+            } else {
+              textarea.style.whiteSpace = 'nowrap';
+              textarea.style.wordBreak = 'normal';
+            }
+            return true;
+          case '存储':
+          case '存储为…':
+            var content = textarea.value;
+            var blob = new Blob([content], { type: 'text/plain' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'untitled.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            return true;
+        }
+
+        return false;
+      };
+
+      // ---- Calculator ----
+      window._menuActionHandlers['calculator'] = function(appId, itemText) {
+        var windows = window._windows || [];
+        var container = null;
+        for (var i = windows.length - 1; i >= 0; i--) {
+          if (windows[i]._appId === 'calculator' && windows[i].classList.contains('window--focused')) {
+            container = windows[i].querySelector('.calc-container');
+            if (container) break;
+          }
+        }
+        if (!container) return false;
+
+        var modes = ['基本', '科学', '程序员', '统计'];
+        var bases = ['十进制', '十六进制'];
+
+        if (modes.indexOf(itemText) !== -1) {
+          container._calcSetMode(itemText);
+          return true;
+        }
+
+        if (bases.indexOf(itemText) !== -1) {
+          container._calcSetBase(itemText);
+          return true;
+        }
+
+        return false;
+      };
+
+      // ---- Airplane Game ----
+      window._menuActionHandlers['airplane'] = function(appId, itemText) {
+        var windows = window._windows || [];
+        var container = null;
+        for (var i = windows.length - 1; i >= 0; i--) {
+          if (windows[i]._appId === 'airplane' && windows[i].classList.contains('window--focused')) {
+            var contentDiv = windows[i].querySelector('.window__content');
+            if (contentDiv) {
+              var children = contentDiv.children;
+              for (var c = 0; c < children.length; c++) {
+                if (children[c]._gameState) {
+                  container = children[c];
+                  break;
+                }
+              }
+            }
+            if (container) break;
+          }
+        }
+        if (!container) return false;
+
+        if (itemText === '暂停') {
+          container._togglePause();
+          return true;
+        }
+
+        if (itemText === '开始新游戏' || itemText === '重新开始') {
+          container._resetGame();
+          return true;
+        }
+
+        if (itemText === '结束游戏') {
+          container._endGame(false);
+          return true;
+        }
+
+        return false;
+      };
     })();
   </script>
 </body>

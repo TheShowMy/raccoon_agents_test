@@ -349,6 +349,12 @@
 
   // --- Game logic ---
 
+  function planarDistance(a, b) {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
   function fireBullet() {
     if (!playerGroup || gameState !== 'playing') return;
     const px = playerGroup.position.x;
@@ -443,7 +449,7 @@
 
       for (let j = enemies.length - 1; j >= 0; j--) {
         const e = enemies[j];
-        if (b.position.distanceTo(e.position) < 0.8) {
+        if (planarDistance(b.position, e.position) < 0.8) {
           b.userData.active = false;
           e.userData.health--;
           used = true;
@@ -469,7 +475,7 @@
 
       for (let j = asteroids.length - 1; j >= 0; j--) {
         const a = asteroids[j];
-        if (b.position.distanceTo(a.position) < 1.0) {
+        if (planarDistance(b.position, a.position) < 1.0) {
           b.userData.active = false;
           a.userData.health--;
           used = true;
@@ -497,7 +503,7 @@
     if (playerGroup && gameState === 'playing') {
       for (let i = enemies.length - 1; i >= 0; i--) {
         const e = enemies[i];
-        if (playerGroup.position.distanceTo(e.position) < 1.4) {
+        if (planarDistance(playerGroup.position, e.position) < 1.4) {
           createExplosion(e.position);
           scene.remove(e);
           e.geometry.dispose();
@@ -510,7 +516,7 @@
 
       for (let i = asteroids.length - 1; i >= 0; i--) {
         const a = asteroids[i];
-        if (playerGroup.position.distanceTo(a.position) < 1.4) {
+        if (planarDistance(playerGroup.position, a.position) < 1.4) {
           createExplosion(a.position);
           scene.remove(a);
           a.geometry.dispose();

@@ -2576,8 +2576,13 @@
         nameEl.textContent = app.name;
 
         // Rebuild menu title row with click handlers
+        // Skip the first menu title when it duplicates the app name
+        // (e.g., app name '终端' + first menu title '终端')
+        // Finder is unaffected because its first menu is '文件', not '访达'
         container.innerHTML = '';
+        var skipFirst = (app.menus.length > 0 && app.menus[0].title === app.name);
         for (var i = 0; i < app.menus.length; i++) {
+          if (skipFirst && i === 0) continue;
           var span = document.createElement('span');
           span.className = 'menu-bar__menu';
           span.textContent = app.menus[i].title;

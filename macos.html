@@ -2500,10 +2500,16 @@
         _activeMenuIndex = menuIndex;
 
         // Position dropdown below the clicked menu title
+        // When the first menu title was skipped (menus[0].title === app.name),
+        // the DOM has one fewer span than app.menus, so map menuIndex to domIndex.
         var container = document.getElementById('menuTitlesContainer');
         if (container) {
           var titleSpans = container.querySelectorAll('.menu-bar__menu');
-          var targetSpan = titleSpans[menuIndex];
+          var domIndex = menuIndex;
+          if (app.menus.length > 0 && app.menus[0].title === app.name) {
+            domIndex = menuIndex - 1;
+          }
+          var targetSpan = titleSpans[domIndex];
           if (targetSpan) {
             var rect = targetSpan.getBoundingClientRect();
             _menuDropdown.style.left = rect.left + 'px';

@@ -18,3 +18,39 @@ export function syncRendererSize(container, camera, renderer) {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(w, h);
 }
+
+/**
+ * Map mouse client-space coordinates to play-area coordinates.
+ *
+ * A pure function that normalizes the mouse position relative to a container
+ * rect, then maps the result into the game play area (x on the horizontal axis,
+ * z on the depth axis). Both axes are clamped to the play-area boundaries.
+ * Returns a neutral origin (0, 0) when the rect has zero or negative dimensions.
+ *
+ * @param {number} clientX - Mouse event clientX.
+ * @param {number} clientY - Mouse event clientY.
+ * @param {DOMRect} rect - Container bounding rect (from getBoundingClientRect).
+ * @param {number} playAreaWidth - Total width of the play area in world units.
+ * @param {number} zRange - Total range of the depth (z) axis in world units.
+ * @returns {{ x: number, z: number }} Mapped and clamped play-area coordinates.
+ */
+export function mapMouseToPlayArea(clientX, clientY, rect, playAreaWidth, zRange) {
+  if (!rect || rect.width <= 0 || rect.height <= 0) {
+    return { x: 0, z: 0 };
+  }
+
+  const nx = (clientX - rect.left) / rect.width;
+  const ny = (clientY - rect.top) / rect.height;
+
+  const halfW = playAreaWidth / 2;
+  const halfZ = zRange / 2;
+
+  let x = (nx - 0.5) * playAreaWidth;
+  let z = (0.5 - ny) * zRange;
+
+  // Clamp to play-area boundaries
+  x = Math.max(-halfW, Math.min(halfW, x));
+  z = Math.max(-halfZ, Math.min(halfZ, z));
+
+  return { x, z };
+}

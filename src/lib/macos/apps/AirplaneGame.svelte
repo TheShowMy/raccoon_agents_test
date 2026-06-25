@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { pendingMenuAction } from '../../stores/menuActions.js';
-  import { syncRendererSize } from '../../utils/airplaneGame.js';
+  import { syncRendererSize, mapMouseToPlayArea } from '../../utils/airplaneGame.js';
   import * as THREE from 'three';
 
   /** @type {{ id: string, appId: string }} */
@@ -559,10 +559,9 @@
   function onMouseMove(e) {
     if (!containerEl) return;
     const rect = containerEl.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    targetX = (x - 0.5) * PLAY_AREA.width;
-    targetZ = (0.5 - y) * 12;
+    const result = mapMouseToPlayArea(e.clientX, e.clientY, rect, PLAY_AREA.width, 8);
+    targetX = result.x;
+    targetZ = result.z;
   }
 
 

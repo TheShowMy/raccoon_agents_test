@@ -1592,9 +1592,9 @@
         scene.add(pGroup);
         gameState.player = pGroup;
 
-        // --- Bounds ---
-        var bnd = { minX: -15, maxX: 15, minZ: -11, maxZ: 11 };
-        var spawnR = 22;
+        // --- Edge spawn config: entities spawn in a ring around the player ---
+        var spawnMinR = 10;
+        var spawnMaxR = 20;
 
         // --- Mouse tracking ---
         var mouse = new THREE.Vector2();
@@ -1649,7 +1649,9 @@
 
         function edgePos() {
           var a = Math.random() * Math.PI * 2;
-          return new THREE.Vector3(Math.cos(a) * spawnR, 0, Math.sin(a) * spawnR);
+          var r = spawnMinR + Math.random() * (spawnMaxR - spawnMinR);
+          var pp = gameState.player.position;
+          return new THREE.Vector3(pp.x + Math.cos(a) * r, 0, pp.z + Math.sin(a) * r);
         }
 
         function spawnEnemy() { gameState.enemies.push(mkEnemy(edgePos())); }
@@ -1737,9 +1739,6 @@
             pp.z += mv.z * spd;
             gameState.player.rotation.y = Math.atan2(mv.x, mv.z);
           }
-          pp.x = Math.max(bnd.minX, Math.min(bnd.maxX, pp.x));
-          pp.z = Math.max(bnd.minZ, Math.min(bnd.maxZ, pp.z));
-
           // Auto-fire
           if (time - gameState.lastFireTime > gameState.fireInterval) {
             gameState.lastFireTime = time;

@@ -2391,7 +2391,7 @@
       });
     })();
 
-    // ===== Application Menu Registry & Renderer =====
+    // ===== Application Menu Registry, Renderer & Dropdown Interaction =====
     (function() {
       /**
        * Application menu registry.
@@ -2457,9 +2457,105 @@
         }
       };
 
+      // ---- Dropdown state & helpers ----
+      var _menuDropdown = document.getElementById('menuDropdown');
+      var _menuDropdownItems = document.getElementById('menuDropdownItems');
+      var _currentAppId = '';
+      var _activeMenuIndex = -1;
+
+      /**
+       * Render menu items into the dropdown panel.
+       * Handles strings, '---' separators, and ignores null/undefined entries.
+       */
+      function renderDropdownItems(items) {
+        _menuDropdownItems.innerHTML = '';
+        for (var i = 0; i < items.length; i++) {
+          var itemText = items[i];
+          if (itemText === '---') {
+            var sep = document.createElement('div');
+            sep.className = 'menu-dropdown__item menu-dropdown__item--separator';
+            _menuDropdownItems.appendChild(sep);
+          } else if (itemText) {
+            var itemEl = document.createElement('div');
+            itemEl.className = 'menu-dropdown__item';
+            var label = document.createElement('span');
+            label.className = 'menu-dropdown__item-label';
+            label.textContent = itemText;
+            itemEl.appendChild(label);
+            _menuDropdownItems.appendChild(itemEl);
+          }
+        }
+      }
+
+      /**
+       * Open the dropdown for the menu at the given index.
+       * Positions the panel below the clicked menu title.
+       */
+      function openMenu(menuIndex) {
+        var app = appMenuRegistry[_currentAppId];
+        if (!app || !app.menus[menuIndex]) return;
+
+        var menu = app.menus[menuIndex];
+        renderDropdownItems(menu.items);
+        _activeMenuIndex = menuIndex;
+
+        // Position dropdown below the clicked menu title
+        var container = document.getElementById('menuTitlesContainer');
+        if (container) {
+          var titleSpans = container.querySelectorAll('.menu-bar__menu');
+          var targetSpan = titleSpans[menuIndex];
+          if (targetSpan) {
+            var rect = targetSpan.getBoundingClientRect();
+            _menuDropdown.style.left = rect.left + 'px';
+          }
+        }
+
+        _menuDropdown.classList.add('menu-dropdown--visible');
+      }
+
+      /**
+       * Close the dropdown panel and reset active state.
+       */
+      function closeMenu() {
+        if (_activeMenuIndex === -1) return;
+        _menuDropdown.classList.remove('menu-dropdown--visible');
+        _activeMenuIndex = -1;
+      }
+
+      /**
+       * Toggle dropdown for the given menu index.
+       * If already open on the same menu → close.
+       * Otherwise → open (switching content if another menu was open).
+       */
+      function toggleMenu(menuIndex) {
+        if (_activeMenuIndex === menuIndex) {
+          closeMenu();
+        } else {
+          openMenu(menuIndex);
+        }
+      }
+
+      // ---- Close dropdown on outside click ----
+      document.addEventListener('mousedown', function(e) {
+        if (_activeMenuIndex === -1) return;
+        // Don't close if clicking inside the dropdown panel
+        if (_menuDropdown && _menuDropdown.contains(e.target)) return;
+        // Don't close if clicking on a menu title (its own click handler handles toggling)
+        if (e.target.closest('#menuTitlesContainer') && e.target.closest('.menu-bar__menu')) return;
+        closeMenu();
+      });
+
+      // ---- Close dropdown on Esc key ----
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && _activeMenuIndex !== -1) {
+          closeMenu();
+        }
+      });
+
       /**
        * Render the menu bar for a given app ID.
-       * Updates the first bold item (app name) and the menu title row.
+       * Updates the first bold item (app name), the menu title row,
+       * and attaches click handlers for dropdown toggling.
        * @param {string} appId - one of 'finder', 'terminal', 'text-editor', 'calculator', 'airplane'
        */
       function renderAppMenu(appId) {
@@ -2470,15 +2566,28 @@
         var container = document.getElementById('menuTitlesContainer');
         if (!nameEl || !container) return;
 
+        // Close any open dropdown when switching apps
+        closeMenu();
+
+        // Store current app
+        _currentAppId = appId;
+
         // Set the bold app name
         nameEl.textContent = app.name;
 
-        // Rebuild menu title row
+        // Rebuild menu title row with click handlers
         container.innerHTML = '';
         for (var i = 0; i < app.menus.length; i++) {
           var span = document.createElement('span');
           span.className = 'menu-bar__menu';
           span.textContent = app.menus[i].title;
+          // Bind click handler via closure to capture index
+          (function(idx) {
+            span.addEventListener('click', function(e) {
+              e.stopPropagation();
+              toggleMenu(idx);
+            });
+          })(i);
           container.appendChild(span);
         }
       }

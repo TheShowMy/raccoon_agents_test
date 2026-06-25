@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { pendingMenuAction } from '../../stores/menuActions.js';
+  import { syncRendererSize } from '../../utils/airplaneGame.js';
   import * as THREE from 'three';
 
   /** @type {{ id: string, appId: string }} */
@@ -57,9 +58,9 @@
   let targetX = 0;
   let targetZ = 0;
 
-  // Intervals for cleanup
-  let resizeHandler = null;
+  // Refs for cleanup
   let mouseHandler = null;
+  let resizeObserver = null;
 
   // --- Three.js initialization ---
 
@@ -564,15 +565,7 @@
     targetZ = (0.5 - y) * 12;
   }
 
-  function onResize() {
-    if (!containerEl || !renderer || !camera) return;
-    const rect = containerEl.getBoundingClientRect();
-    const w = Math.max(rect.width, 1);
-    const h = Math.max(rect.height, 1);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    renderer.setSize(w, h);
-  }
+
 
   // --- Menu actions ---
 
@@ -662,9 +655,11 @@
       if (containerEl) {
         initThree();
         mouseHandler = onMouseMove.bind(this);
-        resizeHandler = onResize.bind(this);
         containerEl.addEventListener('mousemove', mouseHandler);
-        window.addEventListener('resize', resizeHandler);
+        resizeObserver = new ResizeObserver(() => {
+          syncRendererSize(containerEl, camera, renderer);
+        });
+        resizeObserver.observe(containerEl);
       }
     }, 50);
 
@@ -690,8 +685,9 @@
     if (containerEl && mouseHandler) {
       containerEl.removeEventListener('mousemove', mouseHandler);
     }
-    if (resizeHandler) {
-      window.removeEventListener('resize', resizeHandler);
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
     }
 
     // Dispose all Three.js resources recursively

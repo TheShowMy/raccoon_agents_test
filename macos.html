@@ -1754,7 +1754,7 @@
             b.position.x += b.userData.velocity.x;
             b.position.z += b.userData.velocity.z;
             b.position.y = 0.2;
-            if (Math.abs(b.position.x) > 28 || Math.abs(b.position.z) > 28) {
+            if (b.position.distanceTo(pp) > 30) {
               scene.remove(b); if (b.geometry) b.geometry.dispose(); if (b.material) b.material.dispose();
               gameState.bullets.splice(bi, 1);
             }
@@ -1787,7 +1787,7 @@
             var e = gameState.enemies[ei];
             e.position.x += e.userData.velocity.x;
             e.position.z += e.userData.velocity.z;
-            if (Math.abs(e.position.x) > 32 || Math.abs(e.position.z) > 32) {
+            if (e.position.distanceTo(pp) > 35) {
               scene.remove(e); e.children.forEach(function(c) { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); });
               gameState.enemies.splice(ei, 1); continue;
             }
@@ -1813,7 +1813,7 @@
             a.position.z += a.userData.velocity.z;
             a.rotation.x += a.userData.rotSpeed || 0.01;
             a.rotation.y += a.userData.rotSpeed || 0.01;
-            if (Math.abs(a.position.x) > 32 || Math.abs(a.position.z) > 32) {
+            if (a.position.distanceTo(pp) > 35) {
               scene.remove(a); if (a.geometry) a.geometry.dispose(); if (a.material) a.material.dispose();
               gameState.asteroids.splice(ai, 1); continue;
             }

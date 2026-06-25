@@ -286,7 +286,7 @@
     });
     const asteroid = new THREE.Mesh(geo, mat);
     const x = (Math.random() - 0.5) * PLAY_AREA.width;
-    asteroid.position.set(x, PLAY_AREA.height / 2 + 3, (Math.random() - 0.5) * 8);
+    asteroid.position.set(x, PLAY_AREA.height / 2 + 3, 0);
     asteroid.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
     asteroid.castShadow = true;
     asteroid.userData = {
@@ -353,7 +353,7 @@
     if (!playerGroup || gameState !== 'playing') return;
     const px = playerGroup.position.x;
     const py = playerGroup.position.y + 1.5;
-    const pz = playerGroup.position.z;
+    const pz = 0;
     createBullet(px - 0.2, py, pz);
     createBullet(px + 0.2, py, pz);
   }

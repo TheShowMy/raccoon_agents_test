@@ -1841,9 +1841,8 @@
             }
           }
 
-          // Camera follows player
-          camera.position.x = pp.x * 0.25;
-          camera.position.z = 18 + pp.z * 0.08;
+          // Camera follows player with fixed relative offset (0, 32, 18)
+          camera.position.set(pp.x, 32, pp.z + 18);
           camera.lookAt(pp.x, 0, pp.z);
           renderer.render(scene, camera);
         }

@@ -1,16 +1,38 @@
 <script>
-  import Layout from './lib/components/Layout.svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import Home from './routes/Home.svelte';
+  import HelloWorld from './routes/HelloWorld.svelte';
+  import MacOS from './routes/MacOS.svelte';
+
+  let currentRoute = 'home';
+
+  function getRoute() {
+    const hash = window.location.hash.slice(1) || '/';
+    switch (hash) {
+      case '/hello-world': return 'hello-world';
+      case '/macos': return 'macos';
+      default: return 'home';
+    }
+  }
+
+  function onHashChange() {
+    currentRoute = getRoute();
+  }
+
+  onMount(() => {
+    currentRoute = getRoute();
+    window.addEventListener('hashchange', onHashChange);
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('hashchange', onHashChange);
+  });
 </script>
 
-<Layout
-  showHeader={true}
-  headerTitle="子页面列表"
-  headerSubtitle="浏览所有示例页面"
-  showBackNav={false}
-  showFooter={true}
-  footerText="子页面列表 · 点击卡片进入对应页面"
->
-  <p style="text-align: center; color: var(--text-secondary);">
-    内容区域 — 后续任务将在此渲染子页面卡片
-  </p>
-</Layout>
+{#if currentRoute === 'home'}
+  <Home />
+{:else if currentRoute === 'hello-world'}
+  <HelloWorld />
+{:else if currentRoute === 'macos'}
+  <MacOS />
+{/if}

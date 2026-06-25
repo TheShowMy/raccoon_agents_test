@@ -46,7 +46,7 @@
   let isPaused = false;
 
   // Game config
-  const PLAY_AREA = { width: 50, height: 70 };
+  const PLAY_AREA = { width: 50, height: 70, zRange: 12 };
   const BULLET_SPEED = 0.7;
   const ENEMY_SPEED = 0.12;
   const ASTEROID_SPEED = 0.08;
@@ -559,7 +559,7 @@
   function onMouseMove(e) {
     if (!containerEl) return;
     const rect = containerEl.getBoundingClientRect();
-    const result = mapMouseToPlayArea(e.clientX, e.clientY, rect, PLAY_AREA.width, 8);
+    const result = mapMouseToPlayArea(e.clientX, e.clientY, rect, PLAY_AREA.width, PLAY_AREA.zRange);
     targetX = result.x;
     targetZ = result.z;
   }

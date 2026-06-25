@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { syncRendererSize } from '../src/lib/utils/airplaneGame.js';
+import { syncRendererSize, mapMouseToPlayArea } from '../src/lib/utils/airplaneGame.js';
 
 // Vitest runs in Node by default; provide a minimal window mock so
 // the implementation can read devicePixelRatio.
@@ -159,3 +159,158 @@ describe('syncRendererSize — negative dimensions', () => {
     expect(renderer.setSize).toHaveBeenCalledWith(1024, 1);
   });
 });
+
+/* ===================================================================
+   mapMouseToPlayArea — degenerate rect guards
+   =================================================================== */
+describe('mapMouseToPlayArea — degenerate rect guards', () => {
+  it('returns origin when rect is null', () => {
+    const result = mapMouseToPlayArea(100, 200, null, 50, 12);
+    expect(result).toEqual({ x: 0, z: 0 });
+  });
+
+  it('returns origin when rect is undefined', () => {
+    const result = mapMouseToPlayArea(100, 200, undefined, 50, 12);
+    expect(result).toEqual({ x: 0, z: 0 });
+  });
+
+  it('returns origin when rect.width is zero', () => {
+    const rect = { left: 0, top: 0, width: 0, height: 600 };
+    const result = mapMouseToPlayArea(400, 300, rect, 50, 12);
+    expect(result).toEqual({ x: 0, z: 0 });
+  });
+
+  it('returns origin when rect.height is zero', () => {
+    const rect = { left: 0, top: 0, width: 800, height: 0 };
+    const result = mapMouseToPlayArea(400, 300, rect, 50, 12);
+    expect(result).toEqual({ x: 0, z: 0 });
+  });
+
+  it('returns origin when rect.width is negative', () => {
+    const rect = { left: 0, top: 0, width: -10, height: 600 };
+    const result = mapMouseToPlayArea(400, 300, rect, 50, 12);
+    expect(result).toEqual({ x: 0, z: 0 });
+  });
+
+  it('returns origin when rect.height is negative', () => {
+    const rect = { left: 0, top: 0, width: 800, height: -20 };
+    const result = mapMouseToPlayArea(400, 300, rect, 50, 12);
+    expect(result).toEqual({ x: 0, z: 0 });
+  });
+});
+
+/* ===================================================================
+   mapMouseToPlayArea — normalized mapping
+   =================================================================== */
+describe('mapMouseToPlayArea — normalized mapping', () => {
+  const rect = { left: 10, top: 20, width: 800, height: 600 };
+  const playAreaWidth = 50;
+  const zRange = 12;
+
+  it('maps center of container to origin', () => {
+    const result = mapMouseToPlayArea(410, 320, rect, playAreaWidth, zRange);
+    expect(result.x).toBeCloseTo(0);
+    expect(result.z).toBeCloseTo(0);
+  });
+
+  it('maps top-left corner to (-halfW, +halfZ)', () => {
+    const result = mapMouseToPlayArea(10, 20, rect, playAreaWidth, zRange);
+    expect(result.x).toBeCloseTo(-25);
+    expect(result.z).toBeCloseTo(6);
+  });
+
+  it('maps bottom-right corner to (+halfW, -halfZ)', () => {
+    const result = mapMouseToPlayArea(810, 620, rect, playAreaWidth, zRange);
+    expect(result.x).toBeCloseTo(25);
+    expect(result.z).toBeCloseTo(-6);
+  });
+
+  it('maps center-right edge to (+halfW, 0)', () => {
+    const result = mapMouseToPlayArea(810, 320, rect, playAreaWidth, zRange);
+    expect(result.x).toBeCloseTo(25);
+    expect(result.z).toBeCloseTo(0);
+  });
+
+  it('maps center-top edge to (0, +halfZ)', () => {
+    const result = mapMouseToPlayArea(410, 20, rect, playAreaWidth, zRange);
+    expect(result.x).toBeCloseTo(0);
+    expect(result.z).toBeCloseTo(6);
+  });
+
+  it('maps x increasing when mouse moves right within container', () => {
+    const left = mapMouseToPlayArea(210, 320, rect, playAreaWidth, zRange);
+    const right = mapMouseToPlayArea(610, 320, rect, playAreaWidth, zRange);
+    expect(right.x).toBeGreaterThan(left.x);
+  });
+
+  it('maps z decreasing when mouse moves down within container (Y inversion)', () => {
+    const top = mapMouseToPlayArea(410, 120, rect, playAreaWidth, zRange);
+    const bottom = mapMouseToPlayArea(410, 520, rect, playAreaWidth, zRange);
+    expect(bottom.z).toBeLessThan(top.z);
+  });
+});
+
+/* ===================================================================
+   mapMouseToPlayArea — boundary clamping
+   =================================================================== */
+describe('mapMouseToPlayArea — boundary clamping', () => {
+  const rect = { left: 10, top: 20, width: 800, height: 600 };
+  const playAreaWidth = 50;
+  const zRange = 12;
+
+  it('clamps x to -halfW when mouse is far left of container', () => {
+    const result = mapMouseToPlayArea(0, 320, rect, playAreaWidth, zRange);
+    expect(result.x).toBeCloseTo(-25);
+  });
+
+  it('clamps x to +halfW when mouse is far right of container', () => {
+    const result = mapMouseToPlayArea(900, 320, rect, playAreaWidth, zRange);
+    expect(result.x).toBeCloseTo(25);
+  });
+
+  it('clamps z to +halfZ when mouse is far above container', () => {
+    const result = mapMouseToPlayArea(410, 0, rect, playAreaWidth, zRange);
+    expect(result.z).toBeCloseTo(6);
+  });
+
+  it('clamps z to -halfZ when mouse is far below container', () => {
+    const result = mapMouseToPlayArea(410, 700, rect, playAreaWidth, zRange);
+    expect(result.z).toBeCloseTo(-6);
+  });
+
+  it('clamps both x and z when mouse is far outside top-left', () => {
+    const result = mapMouseToPlayArea(0, 0, rect, playAreaWidth, zRange);
+    expect(result.x).toBeCloseTo(-25);
+    expect(result.z).toBeCloseTo(6);
+  });
+
+  it('clamps both x and z when mouse is far outside bottom-right', () => {
+    const result = mapMouseToPlayArea(900, 700, rect, playAreaWidth, zRange);
+    expect(result.x).toBeCloseTo(25);
+    expect(result.z).toBeCloseTo(-6);
+  });
+});
+
+/* ===================================================================
+   mapMouseToPlayArea — custom playAreaWidth / zRange
+   =================================================================== */
+describe('mapMouseToPlayArea — custom dimensions', () => {
+  it('respects a different playAreaWidth', () => {
+    const rect = { left: 0, top: 0, width: 100, height: 100 };
+    const result = mapMouseToPlayArea(0, 50, rect, 100, 12);
+    expect(result.x).toBeCloseTo(-50);
+  });
+
+  it('respects a different zRange', () => {
+    const rect = { left: 0, top: 0, width: 100, height: 100 };
+    const result = mapMouseToPlayArea(50, 0, rect, 50, 20);
+    expect(result.z).toBeCloseTo(10);
+  });
+
+  it('uses zRange=0 -> both halves are 0, output always 0', () => {
+    const rect = { left: 0, top: 0, width: 100, height: 100 };
+    const result = mapMouseToPlayArea(50, 0, rect, 50, 0);
+    expect(result.z).toBeCloseTo(0);
+  });
+});
+

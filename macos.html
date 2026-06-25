@@ -1525,17 +1525,19 @@
         container.insertBefore(renderer.domElement, container.firstChild);
 
         // --- Handle container resize: update camera & renderer ---
-        gameState.ro = new ResizeObserver(function(entries) {
-          var entry = entries[0];
-          if (!entry) return;
-          var cw = entry.contentRect.width;
-          var ch = entry.contentRect.height;
-          if (cw === 0 || ch === 0) return;
-          camera.aspect = cw / ch;
-          camera.updateProjectionMatrix();
-          renderer.setSize(cw, ch);
-        });
-        gameState.ro.observe(container);
+        if (typeof ResizeObserver !== 'undefined') {
+          gameState.ro = new ResizeObserver(function(entries) {
+            var entry = entries[0];
+            if (!entry) return;
+            var cw = entry.contentRect.width;
+            var ch = entry.contentRect.height;
+            if (cw === 0 || ch === 0) return;
+            camera.aspect = cw / ch;
+            camera.updateProjectionMatrix();
+            renderer.setSize(cw, ch);
+          });
+          gameState.ro.observe(container);
+        }
 
         // --- Lighting ---
         scene.add(new THREE.AmbientLight(0x444466, 0.6));

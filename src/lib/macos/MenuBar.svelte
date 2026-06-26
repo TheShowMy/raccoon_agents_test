@@ -109,14 +109,20 @@
       <span class="menu-bar__menu menu-bar__menu--bold">{appName}</span>
       <div class="menu-bar__menus">
         {#each displayMenus as menu, i (menu.title)}
-          <!-- svelte-ignore a11y-click-events-have-key-events -->
-          <span
+          <button
+            type="button"
             class="menu-bar__menu"
             on:click|stopPropagation={() => toggleMenu(i)}
             on:mouseenter={() => { if (dropdownVisible) openMenu(i); }}
+            on:keydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggleMenu(i);
+              }
+            }}
           >
             {menu.title}
-          </span>
+          </button>
         {/each}
       </div>
     </div>
@@ -154,13 +160,19 @@
       {#if item === '---'}
         <div class="menu-dropdown__item menu-dropdown__item--separator"></div>
       {:else}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <div
+        <button
+          type="button"
           class="menu-dropdown__item"
           on:click|stopPropagation={() => onMenuItemClick(item)}
+          on:keydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onMenuItemClick(item);
+            }
+          }}
         >
           <span class="menu-dropdown__item-label">{item}</span>
-        </div>
+        </button>
       {/if}
     {/each}
   </div>
@@ -220,11 +232,20 @@
     opacity: 0.85;
     border-radius: 5px;
     transition: background 0.15s ease, opacity 0.15s ease;
+    background: transparent;
+    border: none;
+    margin: 0;
+    font: inherit;
   }
 
   .menu-bar__menu:hover {
     background: var(--glass-border);
     opacity: 1;
+  }
+
+  .menu-bar__menu:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .menu-bar__menu--bold {
@@ -333,15 +354,22 @@
     white-space: nowrap;
     line-height: 1.4;
     transition: background 0.1s ease;
+    background: transparent;
+    border: none;
+    margin: 0;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    color: inherit;
   }
 
   .menu-dropdown__item:hover {
     background: var(--glass-border);
   }
 
-  .menu-dropdown__item--disabled {
-    opacity: 0.35;
-    pointer-events: none;
+  .menu-dropdown__item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .menu-dropdown__item--separator {

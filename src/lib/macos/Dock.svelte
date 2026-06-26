@@ -29,10 +29,11 @@
       {@const app = APP_REGISTRY[appId]}
       {#if app}
         {@const isOpen = findAppWindow(appId) !== null}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <div
+        <button
+          type="button"
           class="dock__item"
           class:dock__item--open={isOpen}
+          aria-label={app.name}
           on:click={() => handleDockClick(appId)}
         >
           <span class="dock__item-icon">
@@ -42,7 +43,7 @@
           {#if isOpen}
             <span class="dock__item-indicator" aria-hidden="true"></span>
           {/if}
-        </div>
+        </button>
       {/if}
     {/each}
   </nav>
@@ -84,6 +85,17 @@
     transition: transform 0.18s cubic-bezier(0.25, 0.46, 0.45, 0.94);
     transform-origin: bottom center;
     flex-shrink: 0;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+  }
+
+  .dock__item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .dock__item:hover {

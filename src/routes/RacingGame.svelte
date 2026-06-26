@@ -76,16 +76,124 @@
   const PLAYER_VISUAL_Z = Z_VISUAL_OFFSET; // 引擎 playerZ=0 → 渲染 z=90
   const ROAD_EDGE_HALF_THICKNESS = 0.12;
 
-  // 状态展示（仅渲染层状态：是否已就绪；HUD 由后续任务提供）
+  // 渲染层状态：是否已就绪
   let sceneReady = false;
   let sceneInitError = '';
+
+  // UI 状态镜像（每帧由 syncUI 从引擎状态拉取，避免外部引用泄漏）
+  let status = RACING_STATUS.MENU;
+  let score = 0;
+  let health = 5;
+  let maxHealth = 5;
+  /**
+   * 结算界面展示的累计统计，由 syncUI 每帧从引擎 state.stats 拉取。
+   * 形状见 src/lib/utils/racingEngine.js freshState() 中的 stats 字段。
+   * @type {{passedObstacles:number, passedVehicles:number, collectedPickups:number, hits:number, obstacleScore:number, vehicleScore:number}|null}
+   */
+  let stats = null;
+  /** @type {HTMLButtonElement|null} */
+  let startBtn = null;
+  /** @type {HTMLButtonElement|null} */
+  let restartBtn = null;
+
+  /**
+   * 菜单 / 结算界面上"开始游戏"或"重新开始"统一入口：
+   *   - MENU 或 GAMEOVER → 调 engine.start() 切到 PLAYING
+   *   - PLAYING → no-op
+   * 同时把视觉层的 roadProgress 归零，让赛道滚动从起点开始。
+   */
+  function startGame() {
+    if (!engine) return;
+    const cur = engine.getState();
+    if (cur.status === RACING_STATUS.PLAYING) return;
+    engine.start();
+    roadProgress = 0;
+  }
+
+  /**
+   * 把引擎当前状态投影到 UI 镜像变量，触发 Svelte 响应式更新。
+   * 每帧由 animate 末尾调用，状态变化即时反映到 HUD 与菜单切换。
+   */
+  function syncUI() {
+    if (!engine) return;
+    const s = engine.getState();
+    status = s.status;
+    score = s.score;
+    health = s.health;
+    maxHealth = s.maxHealth;
+    stats = s.stats;
+  }
+
+  /**
+   * 键盘事件：桌面端 ←/→ 或 A/D 切车道，空格 / ↑ 跳跃。
+   * 仅在 PLAYING 状态生效；菜单 / 结算状态由按钮或 Enter 触发开始/重新开始。
+   */
+  function onKeyDown(e) {
+    if (!engine) return;
+    // 若焦点在表单控件或可编辑元素上，不抢键（防止误触发跳跃 / 切道）
+    const target = /** @type {HTMLElement|null} */ (e.target);
+    if (target) {
+      const tag = target.tagName;
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+    }
+    const key = e.key;
+    const cur = engine.getState();
+
+    if (cur.status === RACING_STATUS.PLAYING) {
+      // 游戏中拦截这些键避免页面滚动 / 浏览器快捷键
+      if (
+        key === 'ArrowLeft' ||
+        key === 'ArrowRight' ||
+        key === 'ArrowUp' ||
+        key === ' '
+      ) {
+        e.preventDefault();
+      }
+      switch (key) {
+        case 'ArrowLeft':
+        case 'a':
+        case 'A':
+          engine.changeLane(-1);
+          break;
+        case 'ArrowRight':
+        case 'd':
+        case 'D':
+          engine.changeLane(1);
+          break;
+        case 'ArrowUp':
+        case ' ':
+          engine.jump();
+          break;
+        default:
+          break;
+      }
+      return;
+    }
+
+    // 菜单 / 结算界面：Enter 也可以开始或重新开始（空格留给按钮原生激活）
+    if (key === 'Enter') {
+      e.preventDefault();
+      startGame();
+    }
+  }
+
+  // 状态切换时自动把焦点放到主按钮上，便于键盘用户继续操作
+  // 依赖 status 与按钮引用，任一变化都会重跑；按钮未挂载时条件不成立
+  $: if (status === RACING_STATUS.MENU && startBtn) startBtn.focus();
+  $: if (status === RACING_STATUS.GAMEOVER && restartBtn) restartBtn.focus();
 
   onMount(() => {
     try {
       initThree();
       engine = createRacingEngine();
-      // 渲染层负责让场景活着：进入页面即开始游戏状态，便于验证
-      engine.start();
+      // 注意：不再自动 start()，保留 MENU 状态让开始菜单可见
       initPlayerMesh();
       initRoadSegments();
       initGroundPlane();
@@ -96,7 +204,11 @@
       });
       if (sceneEl) resizeObserver.observe(sceneEl);
 
+      document.addEventListener('keydown', onKeyDown);
+
       sceneReady = true;
+      // 首次同步 UI 镜像，让开始菜单立即拿到正确的血量等数值
+      syncUI();
     } catch (err) {
       sceneInitError = err && err.message ? err.message : String(err);
       // eslint-disable-next-line no-console
@@ -113,6 +225,7 @@
       resizeObserver.disconnect();
       resizeObserver = null;
     }
+    document.removeEventListener('keydown', onKeyDown);
     disposeScene();
     scene = null;
     camera = null;
@@ -340,7 +453,7 @@
     const dt = computeFrameDt(timestamp);
     const state = engine.getState();
 
-    // 引擎仅在 PLAYING 状态推进；其他状态保持场景冻结（任务边界：不实现菜单）
+    // 引擎仅在 PLAYING 状态推进；菜单 / 结算界面下场景冻结
     if (state.status === RACING_STATUS.PLAYING) {
       engine.update(dt);
       const nextState = engine.getState();
@@ -364,6 +477,9 @@
     }
 
     renderer.render(scene, camera);
+
+    // 渲染完成后把引擎状态投影到 UI 镜像变量，驱动菜单 / HUD / 结算界面响应式更新
+    syncUI();
   }
 
   function computeFrameDt(timestamp) {
@@ -468,15 +584,135 @@
           <div class="scene-loading__text">3D 场景初始化中…</div>
         </div>
       {/if}
+
+      {#if sceneReady && status === RACING_STATUS.MENU}
+        <div
+          class="overlay overlay--menu"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="racing-menu-title"
+        >
+          <div class="overlay__card">
+            <h2 id="racing-menu-title" class="overlay__title">准备出发</h2>
+            <p class="overlay__lede">桌面端键盘操控 · 无尽模式</p>
+            <ul class="rules">
+              <li>
+                <span class="rules__key">← / →</span>
+                <span class="rules__sep">或</span>
+                <span class="rules__key">A / D</span>
+                <span class="rules__desc">切换车道</span>
+              </li>
+              <li>
+                <span class="rules__key">空格</span>
+                <span class="rules__sep">或</span>
+                <span class="rules__key">↑</span>
+                <span class="rules__desc">跳跃越过障碍物</span>
+              </li>
+              <li>
+                <span class="rules__desc">越过障碍物 <strong>+1</strong> 分 · 越过车辆 <strong>+5</strong> 分</span>
+              </li>
+              <li>
+                <span class="rules__desc">撞击障碍物 <strong>−1</strong> 血 · 撞击车辆 <strong>−2</strong> 血</span>
+              </li>
+              <li>
+                <span class="rules__desc">拾取加血道具 <strong>+1</strong> 血</span>
+              </li>
+              <li>
+                <span class="rules__desc">血量归零即结束 · 难度随时间提升</span>
+              </li>
+            </ul>
+            <button
+              bind:this={startBtn}
+              type="button"
+              class="btn btn--primary"
+              on:click={startGame}
+            >
+              开始游戏
+            </button>
+            <p class="overlay__hint">按 Enter 也可开始</p>
+          </div>
+        </div>
+      {/if}
+
+      {#if sceneReady && status === RACING_STATUS.PLAYING}
+        <div class="overlay overlay--hud" aria-hidden="false">
+          <div class="hud-health" aria-label={`生命值 ${health} / ${maxHealth}`}>
+            <span class="hud-health__label" aria-hidden="true">生命</span>
+            <span class="hud-health__hearts" aria-hidden="true">
+              {#each Array(maxHealth) as _, i}
+                <span
+                  class="heart"
+                  class:heart--lost={i >= health}
+                  aria-hidden="true"
+                >♥</span>
+              {/each}
+            </span>
+            <span class="hud-health__count" aria-hidden="true">{health} / {maxHealth}</span>
+          </div>
+          <div class="hud-score" aria-label={`分数 ${score}`}>
+            <span class="hud-score__label" aria-hidden="true">分数</span>
+            <span class="hud-score__value" aria-hidden="true">{score}</span>
+          </div>
+        </div>
+      {/if}
+
+      {#if sceneReady && status === RACING_STATUS.GAMEOVER}
+        <div
+          class="overlay overlay--gameover"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="racing-gameover-title"
+        >
+          <div class="overlay__card">
+            <h2 id="racing-gameover-title" class="overlay__title">游戏结束</h2>
+            <div class="final-score">
+              最终得分 <strong class="final-score__value">{score}</strong>
+            </div>
+            {#if stats}
+              <ul class="gameover-stats">
+                <li>
+                  <span class="gameover-stats__label">越过障碍物</span>
+                  <span class="gameover-stats__value">{stats.passedObstacles}</span>
+                </li>
+                <li>
+                  <span class="gameover-stats__label">越过车辆</span>
+                  <span class="gameover-stats__value">{stats.passedVehicles}</span>
+                </li>
+                <li>
+                  <span class="gameover-stats__label">拾取加血</span>
+                  <span class="gameover-stats__value">{stats.collectedPickups}</span>
+                </li>
+                <li>
+                  <span class="gameover-stats__label">累计受击</span>
+                  <span class="gameover-stats__value">{stats.hits}</span>
+                </li>
+              </ul>
+            {/if}
+            <button
+              bind:this={restartBtn}
+              type="button"
+              class="btn btn--primary"
+              on:click={startGame}
+            >
+              重新开始
+            </button>
+            <p class="overlay__hint">按 Enter 也可重新开始</p>
+          </div>
+        </div>
+      {/if}
     </section>
 
     <p class="status-line" aria-live="polite">
-      {#if sceneReady}
-        ✓ 渲染层与游戏引擎已接入 · 键盘控制与 HUD 待后续任务接入
-      {:else if sceneInitError}
+      {#if sceneInitError}
         渲染层初始化失败，请刷新页面或更换浏览器
-      {:else}
+      {:else if !sceneReady}
         渲染层正在准备…
+      {:else if status === RACING_STATUS.MENU}
+        使用 ← / → 或 A / D 切换车道，空格 / ↑ 跳跃
+      {:else if status === RACING_STATUS.PLAYING}
+        越野车正在无尽狂奔 · 注意躲避对向车辆
+      {:else}
+        本局已结束 · 点击「重新开始」再来一局
       {/if}
     </p>
   </main>
@@ -559,6 +795,281 @@
     max-width: 480px;
   }
 
+  /* ===== 菜单 / 结算覆盖层 ===== */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    pointer-events: auto;
+    background: color-mix(in srgb, var(--bg-primary) 72%, transparent);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    animation: overlayFadeIn 0.25s ease both;
+  }
+
+  .overlay--hud {
+    /* HUD 不需要屏蔽点击，也不加背景雾化 */
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    pointer-events: none;
+    padding: 0;
+    align-items: flex-start;
+    animation: none;
+  }
+
+  .overlay__card {
+    width: min(420px, 100%);
+    background: var(--bg-card);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+    padding: 1.5rem 1.4rem 1.4rem;
+    box-shadow: var(--shadow-lg);
+    text-align: center;
+    color: var(--text-primary);
+  }
+
+  .overlay__title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    letter-spacing: 0.02em;
+    margin-bottom: 0.35rem;
+  }
+
+  .overlay__lede {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+    font-family: var(--font-mono);
+  }
+
+  .overlay__hint {
+    margin-top: 0.7rem;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .rules {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    text-align: left;
+  }
+
+  .rules li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .rules__key {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    line-height: 1.3;
+  }
+
+  .rules__sep {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+
+  .rules__desc {
+    flex-basis: 100%;
+    color: var(--text-secondary);
+  }
+
+  .rules li:has(.rules__desc:only-child) .rules__desc {
+    flex-basis: auto;
+  }
+
+  .rules strong {
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  /* ===== 主按钮 ===== */
+  .btn {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.95rem;
+    padding: 0.7rem 1.6rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition:
+      transform var(--transition),
+      box-shadow var(--transition),
+      background var(--transition),
+      color var(--transition);
+  }
+
+  .btn--primary {
+    background: var(--accent);
+    color: var(--bg-secondary);
+    box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+
+  .btn--primary:hover {
+    background: var(--accent-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+
+  .btn--primary:focus-visible {
+    outline: 2px solid var(--accent-hover);
+    outline-offset: 2px;
+  }
+
+  .btn--primary:active {
+    transform: translateY(0);
+  }
+
+  /* ===== 游戏中 HUD ===== */
+  .hud-health {
+    position: absolute;
+    top: 0.85rem;
+    left: 0.95rem;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.5rem 0.85rem;
+    background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    font-family: var(--font-mono);
+    pointer-events: none;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .hud-health__label {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+  }
+
+  .hud-health__hearts {
+    display: inline-flex;
+    gap: 0.2rem;
+    font-size: 1.05rem;
+    line-height: 1;
+  }
+
+  .heart {
+    color: #ff6b81;
+    text-shadow: 0 0 6px color-mix(in srgb, #ff6b81 55%, transparent);
+    transition: opacity var(--transition);
+  }
+
+  .heart--lost {
+    color: var(--text-muted);
+    text-shadow: none;
+    opacity: 0.4;
+  }
+
+  .hud-health__count {
+    font-size: 0.78rem;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hud-score {
+    position: absolute;
+    top: 0.85rem;
+    right: 0.95rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.95rem;
+    background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    font-family: var(--font-mono);
+    pointer-events: none;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .hud-score__label {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+  }
+
+  .hud-score__value {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ===== 结算面板 ===== */
+  .final-score {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.9rem;
+    font-family: var(--font-mono);
+  }
+
+  .final-score__value {
+    color: var(--accent);
+    font-size: 1.6rem;
+    font-weight: 800;
+    margin-left: 0.4rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .gameover-stats {
+    list-style: none;
+    padding: 0.7rem 0.2rem;
+    margin: 0 0 1.1rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem 1rem;
+    border-top: 1px solid var(--glass-border);
+    border-bottom: 1px solid var(--glass-border);
+  }
+
+  .gameover-stats li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-family: var(--font-mono);
+  }
+
+  .gameover-stats__label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+
+  .gameover-stats__value {
+    font-size: 1rem;
+    color: var(--text-primary);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
   /* ===== 状态提示行 ===== */
   .status-line {
     margin: 0.85rem auto 0;
@@ -580,8 +1091,23 @@
     }
   }
 
+  @keyframes overlayFadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .scene-loading__dot {
+      animation: none;
+    }
+
+    .overlay {
       animation: none;
     }
   }
@@ -594,6 +1120,28 @@
     .scene-stage {
       height: clamp(320px, 56vh, 560px);
       border-radius: calc(var(--radius) - 2px);
+    }
+
+    .overlay__card {
+      padding: 1.15rem 1rem 1rem;
+    }
+
+    .overlay__title {
+      font-size: 1.3rem;
+    }
+
+    .hud-health,
+    .hud-score {
+      padding: 0.4rem 0.65rem;
+      font-size: 0.85rem;
+    }
+
+    .hud-health__hearts {
+      font-size: 0.95rem;
+    }
+
+    .gameover-stats {
+      grid-template-columns: 1fr;
     }
   }
 </style>

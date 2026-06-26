@@ -4,6 +4,10 @@
   import Footer from '../lib/components/Footer.svelte';
 </script>
 
+<svelte:head>
+  <title>3D 越野车竞速</title>
+</svelte:head>
+
 <div class="racing-game-page">
   <BackNav href="#/" />
 
@@ -13,6 +17,10 @@
   />
 
   <main class="main">
+    <div class="hero" aria-hidden="true">
+      <div class="hero__glow"></div>
+    </div>
+
     <section class="placeholder" aria-label="3D 越野车竞速占位">
       <div class="placeholder__icon" aria-hidden="true">🏎️</div>
       <h2 class="placeholder__title">游戏场景正在搭建中</h2>
@@ -20,8 +28,28 @@
         后续将依次接入：游戏状态引擎、蜿蜒道路与车道、three.js 模型工厂、3D 场景与渲染循环、键盘控制与 HUD。
       </p>
       <ul class="placeholder__hints" aria-label="即将支持的操作">
-        <li><span class="placeholder__key">← / →</span><span class="placeholder__sep">或</span><span class="placeholder__key">A / D</span><span class="placeholder__hint-text">切换车道</span></li>
-        <li><span class="placeholder__key">空格</span><span class="placeholder__sep">或</span><span class="placeholder__key">↑</span><span class="placeholder__hint-text">跳跃越过障碍</span></li>
+        <li>
+          <span class="placeholder__keys">
+            <span class="placeholder__key">←</span>
+            <span class="placeholder__key">→</span>
+          </span>
+          <span class="placeholder__sep">或</span>
+          <span class="placeholder__keys">
+            <span class="placeholder__key">A</span>
+            <span class="placeholder__key">D</span>
+          </span>
+          <span class="placeholder__hint-text">切换车道</span>
+        </li>
+        <li>
+          <span class="placeholder__keys">
+            <span class="placeholder__key">空格</span>
+          </span>
+          <span class="placeholder__sep">或</span>
+          <span class="placeholder__keys">
+            <span class="placeholder__key">↑</span>
+          </span>
+          <span class="placeholder__hint-text">跳跃越过障碍</span>
+        </li>
       </ul>
     </section>
   </main>
@@ -32,9 +60,11 @@
 <style>
   .racing-game-page {
     --page-max-width: 1480px;
+    position: relative;
   }
 
   .main {
+    position: relative;
     flex: 1;
     padding: 2rem 1.5rem;
     max-width: var(--page-max-width);
@@ -42,8 +72,33 @@
     width: 100%;
   }
 
+  .hero {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .hero__glow {
+    position: absolute;
+    top: -10%;
+    left: 50%;
+    width: 140%;
+    height: 140%;
+    transform: translateX(-50%);
+    background: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--accent) 22%, transparent) 0%,
+      transparent 60%
+    );
+    opacity: 0.55;
+  }
+
   .placeholder {
-    margin: 2.5rem auto 0;
+    position: relative;
+    z-index: 1;
+    margin: 1.5rem auto 0;
     max-width: 640px;
     padding: 2.5rem 2rem 2.25rem;
     text-align: center;
@@ -52,6 +107,7 @@
     border-radius: var(--radius);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-lg);
     animation: fadeIn 0.35s ease both;
   }
 
@@ -99,6 +155,12 @@
     flex-wrap: wrap;
   }
 
+  .placeholder__keys {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
   .placeholder__key {
     display: inline-flex;
     align-items: center;
@@ -112,6 +174,12 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     box-shadow: 0 1px 0 var(--border);
+    transition: transform var(--transition), border-color var(--transition);
+  }
+
+  .placeholder__hints li:hover .placeholder__key {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+    transform: translateY(-1px);
   }
 
   .placeholder__sep {
@@ -138,7 +206,7 @@
   @media (max-width: 600px) {
     .placeholder {
       padding: 1.75rem 1.25rem;
-      margin-top: 1.5rem;
+      margin-top: 1rem;
     }
 
     .placeholder__title {

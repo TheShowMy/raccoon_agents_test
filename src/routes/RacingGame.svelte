@@ -351,11 +351,16 @@
     syncPlayerMesh();
     syncEntityMeshes();
 
-    // 相机微随玩家 y 抖动，提升动感（跳跃时尤为明显）
-    if (camera && state.player.jumping) {
-      camera.position.y = 4.5 + state.player.y * 0.25;
-    } else if (camera) {
-      camera.position.y += (4.5 - camera.position.y) * 0.15;
+    // 相机微随玩家 y 抖动 + 横向阻尼跟随：让切换车道时玩家始终居中在视野中
+    if (camera && playerMesh) {
+      const targetX = playerMesh.position.x;
+      camera.position.x += (targetX - camera.position.x) * 0.15;
+      if (state.player.jumping) {
+        camera.position.y = 4.5 + state.player.y * 0.25;
+      } else {
+        camera.position.y += (4.5 - camera.position.y) * 0.15;
+      }
+      camera.lookAt(camera.position.x, 0.8, PLAYER_VISUAL_Z - 30);
     }
 
     renderer.render(scene, camera);

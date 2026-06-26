@@ -117,6 +117,7 @@
     font-size: 3rem;
     margin-bottom: 0.75rem;
     filter: drop-shadow(0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent));
+    animation: floaty 3.6s ease-in-out infinite;
   }
 
   .placeholder__title {
@@ -239,6 +240,28 @@
     to {
       opacity: 1;
       transform: translateY(0);
+    }
+  }
+
+  @keyframes floaty {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-4px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .placeholder,
+    .placeholder__icon {
+      animation: none;
+    }
+
+    .placeholder__cta,
+    .placeholder__key {
+      transition: none;
+    }
+
+    .placeholder__cta:hover,
+    .placeholder__hints li:hover .placeholder__key {
+      transform: none;
     }
   }
 

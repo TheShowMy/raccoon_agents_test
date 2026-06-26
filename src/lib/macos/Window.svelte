@@ -22,12 +22,9 @@
   // --- Refs ---
   let winEl;
 
-  function handleMouseDown(e) {
-    focusWindow(win.id);
-  }
-
   // ----- Title bar drag -----
   function onDragStart(e) {
+    focusWindow(win.id);
     if (e.target.closest('.window__tl')) return;
     if (win.minimized || win.maximized) return;
 
@@ -40,6 +37,20 @@
     window.addEventListener('mousemove', onDragMove);
     window.addEventListener('mouseup', onDragEnd);
     e.preventDefault();
+  }
+
+  function onDragKeyDown(e) {
+    if (win.minimized || win.maximized) return;
+    const step = 20;
+    let dx = 0;
+    let dy = 0;
+    if (e.key === 'ArrowRight') dx = step;
+    else if (e.key === 'ArrowLeft') dx = -step;
+    else if (e.key === 'ArrowDown') dy = step;
+    else if (e.key === 'ArrowUp') dy = -step;
+    else return;
+    e.preventDefault();
+    moveWindow(win.id, win.x + dx, win.y + dy);
   }
 
   function onDragMove(e) {
@@ -81,6 +92,20 @@
     e.stopPropagation();
   }
 
+  function onResizeKeyDown(e) {
+    if (win.minimized || win.maximized) return;
+    const step = 20;
+    let dw = 0;
+    let dh = 0;
+    if (e.key === 'ArrowRight') dw = step;
+    else if (e.key === 'ArrowLeft') dw = -step;
+    else if (e.key === 'ArrowDown') dh = step;
+    else if (e.key === 'ArrowUp') dh = -step;
+    else return;
+    e.preventDefault();
+    resizeWindow(win.id, Math.max(280, win.width + dw), Math.max(180, win.height + dh));
+  }
+
   function onResizeMove(e) {
     if (!isResizing) return;
     const dx = e.clientX - resizeStartX;
@@ -113,6 +138,8 @@
 <div
   bind:this={winEl}
   class="window"
+  role="dialog"
+  aria-label={win.title}
   class:window--focused={win.id === $focusedWindowId}
   class:window--minimized={win.minimized}
   class:window--maximized={win.maximized}
@@ -123,10 +150,16 @@
     height: {win.maximized ? '100%' : win.height + 'px'};
     z-index: {win.zIndex};
   "
-  on:mousedown={handleMouseDown}
 >
   <!-- Title Bar -->
-  <div class="window__titlebar" on:mousedown={onDragStart}>
+  <div
+    class="window__titlebar"
+    role="button"
+    tabindex="0"
+    aria-label="拖动窗口，使用方向键移动"
+    on:mousedown={onDragStart}
+    on:keydown={onDragKeyDown}
+  >
     <div class="window__traffic-lights">
       <button class="window__tl window__tl--close" title="关闭"
         on:mousedown={e => e.stopPropagation()}
@@ -165,8 +198,28 @@
     {/if}
   </div>
 
-  <!-- Resize Handle -->
-  <div class="window__resize-handle" on:mousedown={onResizeStart}></div>
+  <!-- Resize Handles -->
+  <button
+    type="button"
+    class="window__resize-handle window__resize-handle--corner"
+    aria-label="调整窗口大小"
+    on:mousedown={onResizeStart}
+    on:keydown={onResizeKeyDown}
+  ></button>
+  <button
+    type="button"
+    class="window__resize-handle window__resize-handle--bottom"
+    aria-label="调整窗口高度"
+    on:mousedown={onResizeStart}
+    on:keydown={onResizeKeyDown}
+  ></button>
+  <button
+    type="button"
+    class="window__resize-handle window__resize-handle--right"
+    aria-label="调整窗口宽度"
+    on:mousedown={onResizeStart}
+    on:keydown={onResizeKeyDown}
+  ></button>
 </div>
 
 <style>
@@ -208,6 +261,16 @@
   .window--minimized {
     height: auto !important;
     min-height: 0 !important;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .window--minimized .window__titlebar {
+    background: var(--dock-bg);
+    border-radius: 8px;
+    height: 34px;
   }
 
   .window--minimized .window__content,
@@ -236,6 +299,11 @@
     background: rgba(45, 45, 45, 0.5);
     cursor: default;
     flex-shrink: 0;
+  }
+
+  .window__titlebar:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .window__traffic-lights {
@@ -274,13 +342,13 @@
   .window__tl--maximize { background: #28c840; }
 
   .window__tl svg {
-    opacity: 0;
+    opacity: 0.45;
     transition: opacity 0.12s ease;
   }
 
   .window__titlebar:hover .window__tl svg,
   .window__tl:hover svg {
-    opacity: 1;
+    opacity: 0.95;
   }
 
   .window__title {
@@ -314,17 +382,45 @@
 
   .window__resize-handle {
     position: absolute;
+    z-index: 10;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .window__resize-handle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .window__resize-handle--corner {
     bottom: 0;
     right: 0;
     width: 18px;
     height: 18px;
     cursor: nwse-resize;
-    z-index: 10;
     background:
       linear-gradient(135deg, transparent 60%, rgba(255,255,255,0.12) 60%),
       linear-gradient(135deg, transparent 60%, rgba(255,255,255,0.08) 60%);
     background-size: 6px 6px, 10px 10px;
     background-position: bottom right;
     background-repeat: no-repeat;
+  }
+
+  .window__resize-handle--bottom {
+    bottom: 0;
+    left: 0;
+    right: 18px;
+    height: 6px;
+    cursor: ns-resize;
+  }
+
+  .window__resize-handle--right {
+    top: 40px;
+    right: 0;
+    bottom: 18px;
+    width: 6px;
+    cursor: ew-resize;
   }
 </style>

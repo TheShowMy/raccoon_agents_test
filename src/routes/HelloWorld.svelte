@@ -40,8 +40,8 @@
 
   <main class="main">
     <div class="grid">
-      {#each filtered as item (item.lang)}
-        <CodeCard lang={item.lang} code={item.code} />
+      {#each filtered as item, i (item.lang)}
+        <CodeCard lang={item.lang} code={item.code} index={i} />
       {/each}
     </div>
 
@@ -142,18 +142,6 @@
     font-size: 1.05rem;
     color: var(--text-secondary, #9aa5ce);
   }
-
-  /* Stagger card entrance */
-  .grid > :nth-child(1)  { animation-delay: 0.02s; }
-  .grid > :nth-child(2)  { animation-delay: 0.04s; }
-  .grid > :nth-child(3)  { animation-delay: 0.06s; }
-  .grid > :nth-child(4)  { animation-delay: 0.08s; }
-  .grid > :nth-child(5)  { animation-delay: 0.10s; }
-  .grid > :nth-child(6)  { animation-delay: 0.12s; }
-  .grid > :nth-child(7)  { animation-delay: 0.14s; }
-  .grid > :nth-child(8)  { animation-delay: 0.16s; }
-  .grid > :nth-child(9)  { animation-delay: 0.18s; }
-  .grid > :nth-child(10) { animation-delay: 0.20s; }
 
   @keyframes fadeIn {
     from {

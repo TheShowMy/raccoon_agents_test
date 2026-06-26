@@ -165,8 +165,10 @@
     {/if}
   </div>
 
-  <!-- Resize Handle -->
-  <div class="window__resize-handle" on:mousedown={onResizeStart}></div>
+  <!-- Resize Handles -->
+  <div class="window__resize-handle window__resize-handle--corner" on:mousedown={onResizeStart}></div>
+  <div class="window__resize-handle window__resize-handle--bottom" on:mousedown={onResizeStart}></div>
+  <div class="window__resize-handle window__resize-handle--right" on:mousedown={onResizeStart}></div>
 </div>
 
 <style>
@@ -208,6 +210,16 @@
   .window--minimized {
     height: auto !important;
     min-height: 0 !important;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .window--minimized .window__titlebar {
+    background: rgba(45, 45, 45, 0.75);
+    border-radius: 8px;
+    height: 34px;
   }
 
   .window--minimized .window__content,
@@ -274,13 +286,13 @@
   .window__tl--maximize { background: #28c840; }
 
   .window__tl svg {
-    opacity: 0;
+    opacity: 0.45;
     transition: opacity 0.12s ease;
   }
 
   .window__titlebar:hover .window__tl svg,
   .window__tl:hover svg {
-    opacity: 1;
+    opacity: 0.95;
   }
 
   .window__title {
@@ -314,17 +326,36 @@
 
   .window__resize-handle {
     position: absolute;
+    z-index: 10;
+  }
+
+  .window__resize-handle--corner {
     bottom: 0;
     right: 0;
     width: 18px;
     height: 18px;
     cursor: nwse-resize;
-    z-index: 10;
     background:
       linear-gradient(135deg, transparent 60%, rgba(255,255,255,0.12) 60%),
       linear-gradient(135deg, transparent 60%, rgba(255,255,255,0.08) 60%);
     background-size: 6px 6px, 10px 10px;
     background-position: bottom right;
     background-repeat: no-repeat;
+  }
+
+  .window__resize-handle--bottom {
+    bottom: 0;
+    left: 0;
+    right: 18px;
+    height: 6px;
+    cursor: ns-resize;
+  }
+
+  .window__resize-handle--right {
+    top: 40px;
+    right: 0;
+    bottom: 18px;
+    width: 6px;
+    cursor: ew-resize;
   }
 </style>

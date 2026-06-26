@@ -1,0 +1,153 @@
+<script>
+  import BackNav from '../lib/components/BackNav.svelte';
+  import PageHeader from '../lib/components/PageHeader.svelte';
+  import Footer from '../lib/components/Footer.svelte';
+</script>
+
+<div class="racing-game-page">
+  <BackNav href="#/" />
+
+  <PageHeader
+    title="&lt;3D 越野车竞速 /&gt;"
+    subtitle="three.js 打造的 3D 蜿蜒赛道 · 桌面端键盘操控"
+  />
+
+  <main class="main">
+    <section class="placeholder" aria-label="3D 越野车竞速占位">
+      <div class="placeholder__icon" aria-hidden="true">🏎️</div>
+      <h2 class="placeholder__title">游戏场景正在搭建中</h2>
+      <p class="placeholder__desc">
+        后续将依次接入：游戏状态引擎、蜿蜒道路与车道、three.js 模型工厂、3D 场景与渲染循环、键盘控制与 HUD。
+      </p>
+      <ul class="placeholder__hints" aria-label="即将支持的操作">
+        <li><span class="placeholder__key">← / →</span><span class="placeholder__sep">或</span><span class="placeholder__key">A / D</span><span class="placeholder__hint-text">切换车道</span></li>
+        <li><span class="placeholder__key">空格</span><span class="placeholder__sep">或</span><span class="placeholder__key">↑</span><span class="placeholder__hint-text">跳跃越过障碍</span></li>
+      </ul>
+    </section>
+  </main>
+
+  <Footer text="3D 越野车竞速 · 无尽模式 · 桌面端键盘操作" />
+</div>
+
+<style>
+  .racing-game-page {
+    --page-max-width: 1480px;
+  }
+
+  .main {
+    flex: 1;
+    padding: 2rem 1.5rem;
+    max-width: var(--page-max-width);
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  .placeholder {
+    margin: 2.5rem auto 0;
+    max-width: 640px;
+    padding: 2.5rem 2rem 2.25rem;
+    text-align: center;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    animation: fadeIn 0.35s ease both;
+  }
+
+  .placeholder__icon {
+    font-size: 3rem;
+    margin-bottom: 0.75rem;
+    filter: drop-shadow(0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent));
+  }
+
+  .placeholder__title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 0.6rem;
+    font-family: var(--font-mono);
+    letter-spacing: 0.01em;
+  }
+
+  .placeholder__desc {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.65;
+    margin: 0 0 1.5rem;
+  }
+
+  .placeholder__hints {
+    list-style: none;
+    margin: 0;
+    padding: 1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) - 2px);
+    text-align: left;
+  }
+
+  .placeholder__hints li {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    flex-wrap: wrap;
+  }
+
+  .placeholder__key {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.2rem;
+    padding: 0.2rem 0.55rem;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 1px 0 var(--border);
+  }
+
+  .placeholder__sep {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .placeholder__hint-text {
+    margin-left: auto;
+    color: var(--text-secondary);
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @media (max-width: 600px) {
+    .placeholder {
+      padding: 1.75rem 1.25rem;
+      margin-top: 1.5rem;
+    }
+
+    .placeholder__title {
+      font-size: 1.1rem;
+    }
+
+    .placeholder__hint-text {
+      margin-left: 0;
+      width: 100%;
+    }
+  }
+</style>

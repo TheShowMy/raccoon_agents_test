@@ -1,5 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
+  import { fly, fade } from 'svelte/transition';
   import Home from './routes/Home.svelte';
   import HelloWorld from './routes/HelloWorld.svelte';
   import MacOS from './routes/MacOS.svelte';
@@ -30,9 +31,15 @@
 </script>
 
 {#if currentRoute === 'home'}
-  <Home />
+  <div in:fly={{ x: 20, duration: 300 }} out:fade={{ duration: 200 }}>
+    <Home />
+  </div>
 {:else if currentRoute === 'hello-world'}
-  <HelloWorld />
+  <div in:fly={{ x: 20, duration: 300 }} out:fade={{ duration: 200 }}>
+    <HelloWorld />
+  </div>
 {:else if currentRoute === 'macos'}
-  <MacOS />
+  <div in:fly={{ x: 20, duration: 300 }} out:fade={{ duration: 200 }}>
+    <MacOS />
+  </div>
 {/if}

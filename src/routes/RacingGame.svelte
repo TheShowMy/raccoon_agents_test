@@ -13,7 +13,6 @@
     buildRoadSegments,
     advanceRoadProgress,
     laneCenterXAt,
-    roadCenterOffsetAt,
     ROAD_SEGMENT_COUNT,
     ROAD_SEGMENT_LENGTH,
     ROAD_HALF_WIDTH,
@@ -65,7 +64,8 @@
 
   // 道路与动画状态
   let roadProgress = 0;
-  let lastFrameTime = 0;
+  /** @type {number|null} */
+  let lastFrameTime = null;
   /** @type {number|null} */
   let animationId = null;
   /** @type {ResizeObserver|null} */
@@ -74,7 +74,6 @@
   // 视觉常量
   const Z_VISUAL_OFFSET = 90;
   const PLAYER_VISUAL_Z = Z_VISUAL_OFFSET; // 引擎 playerZ=0 → 渲染 z=90
-  const ROAD_DIVIDER_HALF_THICKNESS = 0.08;
   const ROAD_EDGE_HALF_THICKNESS = 0.12;
 
   // 状态展示（仅渲染层状态：是否已就绪；HUD 由后续任务提供）
@@ -363,7 +362,7 @@
   }
 
   function computeFrameDt(timestamp) {
-    if (!lastFrameTime) {
+    if (lastFrameTime === null) {
       lastFrameTime = timestamp;
       return 0;
     }
@@ -392,6 +391,7 @@
   function disposeScene() {
     if (!scene) return;
 
+    // 渲染层创建的所有 mesh / group 都在已知对象池里，逐项清理即可
     for (const [, mesh] of entityMeshes) {
       scene.remove(mesh);
       disposeObject(mesh);
@@ -415,17 +415,6 @@
       const el = renderer.domElement;
       if (el && el.parentNode) el.parentNode.removeChild(el);
     }
-
-    // 释放剩余的灯光 / 雾等无法遍历到但归属于场景的资源
-    scene.traverse((obj) => {
-      if (obj === scene) return;
-      if (obj.isMesh || obj.isPoints || obj.isLine) {
-        if (obj.geometry) obj.geometry.dispose();
-        const mat = obj.material;
-        if (Array.isArray(mat)) mat.forEach((m) => m && m.dispose && m.dispose());
-        else if (mat && mat.dispose) mat.dispose();
-      }
-    });
   }
 
   /**

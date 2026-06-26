@@ -28,15 +28,20 @@
     {#each DOCK_APPS as appId (appId)}
       {@const app = APP_REGISTRY[appId]}
       {#if app}
+        {@const isOpen = findAppWindow(appId) !== null}
         <!-- svelte-ignore a11y-click-events-have-key-events -->
         <div
           class="dock__item"
+          class:dock__item--open={isOpen}
           on:click={() => handleDockClick(appId)}
         >
           <span class="dock__item-icon">
             {@html app.icon}
           </span>
           <span class="dock__item-tooltip">{app.name}</span>
+          {#if isOpen}
+            <span class="dock__item-indicator" aria-hidden="true"></span>
+          {/if}
         </div>
       {/if}
     {/each}
@@ -60,10 +65,10 @@
     align-items: flex-end;
     gap: 8px;
     padding: 6px 12px;
-    background: rgba(255, 255, 255, 0.12);
+    background: var(--dock-bg);
     backdrop-filter: blur(30px) saturate(200%);
     -webkit-backdrop-filter: blur(30px) saturate(200%);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid var(--glass-border);
     border-radius: 20px;
   }
 
@@ -108,7 +113,7 @@
     bottom: calc(100% + 12px);
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(30, 30, 30, 0.92);
+    background: var(--glass-bg);
     color: #fff;
     font-size: 12px;
     padding: 4px 10px;
@@ -121,5 +126,17 @@
 
   .dock__item:hover .dock__item-tooltip {
     opacity: 1;
+  }
+
+  .dock__item-indicator {
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    width: 4px;
+    height: 4px;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: var(--text-primary);
+    pointer-events: none;
   }
 </style>

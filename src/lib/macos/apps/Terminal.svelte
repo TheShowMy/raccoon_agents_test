@@ -186,9 +186,23 @@
   function onContentClick() {
     if (inputEl) inputEl.focus();
   }
+
+  function onContentKeyDown(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onContentClick();
+    }
+  }
 </script>
 
-<div class="terminal" on:click={onContentClick}>
+<div
+  class="terminal"
+  role="button"
+  tabindex="0"
+  aria-label="点击或按 Enter 聚焦终端输入"
+  on:click={onContentClick}
+  on:keydown={onContentKeyDown}
+>
   <div class="terminal__output" bind:this={outputEl}>
     {#each output as line, i}
       <div class="terminal__line">{line}</div>
@@ -222,6 +236,11 @@
     line-height: 1.5;
     cursor: text;
     overflow: hidden;
+  }
+
+  .terminal:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .terminal__output {

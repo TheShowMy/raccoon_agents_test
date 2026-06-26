@@ -5,6 +5,8 @@
   export let lang = '';
   /** 代码文本 */
   export let code = '';
+  /** 列表中的索引，用于 stagger 入场动画 */
+  export let index = 0;
 
   let copyState = 'idle'; // 'idle' | 'copied' | 'failed'
   let timer = null;
@@ -50,7 +52,7 @@
   }
 </script>
 
-<div class="card">
+<div class="card" style="--stagger-delay: {index * 0.03}s">
   <div class="card__header">
     <div class="card__header-left">
       <span class="card__dots">
@@ -66,6 +68,7 @@
       class:card__copy-btn--failed={copyState === 'failed'}
       on:click={handleCopy}
       title="复制代码"
+      aria-label={copyBtnLabel}
     >
       {#if copyState === 'idle'}
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -104,6 +107,7 @@
       box-shadow var(--transition, 0.2s ease),
       border-color var(--transition, 0.2s ease);
     animation: fadeIn 0.35s ease both;
+    animation-delay: var(--stagger-delay, 0s);
   }
 
   .card:hover {
@@ -193,6 +197,11 @@
     transform: scale(0.96);
   }
 
+  .card__copy-btn:focus-visible {
+    outline: 2px solid var(--accent, #7aa2f7);
+    outline-offset: 2px;
+  }
+
   .card__copy-btn--copied {
     color: #9ece6a !important;
     border-color: #9ece6a !important;
@@ -246,57 +255,57 @@
 
   /* ---- Syntax Highlighting Tokens ---- */
   :global(.token.keyword) {
-    color: #bb9af7;
+    color: var(--token-keyword, #bb9af7);
     font-style: italic;
   }
 
   :global(.token.builtin) {
-    color: #7dcfff;
+    color: var(--token-function, #7aa2f7);
   }
 
   :global(.token.type) {
-    color: #e0af68;
+    color: var(--token-number, #ff9e64);
   }
 
   :global(.token.function) {
-    color: #7aa2f7;
+    color: var(--token-function, #7aa2f7);
   }
 
   :global(.token.string) {
-    color: #9ece6a;
+    color: var(--token-string, #9ece6a);
   }
 
   :global(.token.number) {
-    color: #ff9e64;
+    color: var(--token-number, #ff9e64);
   }
 
   :global(.token.comment) {
-    color: #565f89;
+    color: var(--token-comment, #565f89);
     font-style: italic;
   }
 
   :global(.token.operator) {
-    color: #9aa5ce;
+    color: var(--token-operator, #89ddff);
   }
 
   :global(.token.punctuation) {
-    color: #9aa5ce;
+    color: var(--token-punctuation, #a9b1d6);
   }
 
   :global(.token.boolean) {
-    color: #ff9e64;
+    color: var(--token-number, #ff9e64);
   }
 
   :global(.token.constant) {
-    color: #ff9e64;
+    color: var(--token-number, #ff9e64);
   }
 
   :global(.token.property) {
-    color: #7dcfff;
+    color: var(--token-property, #c0caf5);
   }
 
   :global(.token.regex) {
-    color: #f7768e;
+    color: var(--token-keyword, #bb9af7);
   }
 
   /* ---- Animations ---- */

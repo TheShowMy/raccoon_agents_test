@@ -274,7 +274,7 @@
   });
 </script>
 
-<div class="calculator" on:keydown={handleKeydown}>
+<div class="calculator">
   <!-- Display -->
   <div class="calculator__display">
     <div class="calculator__display-mode">{mode === 'basic' ? '' : mode}</div>
@@ -293,7 +293,6 @@
           {@const isOp = /^[+\-−×÷=]$/.test(btn)}
           {@const isTop = ['AC', 'C', '±', '%'].includes(btn)}
           {@const isZero = btn === '0'}
-          <!-- svelte-ignore a11y-click-events-have-key-events -->
           <button
             class="calculator__btn"
             class:calculator__btn--digit={isDigit}

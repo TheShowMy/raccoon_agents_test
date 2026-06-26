@@ -9,6 +9,12 @@
   showFooter={true}
   footerText="子页面列表 · 点击卡片进入对应页面"
 >
+  <section class="hero">
+    <div class="hero__glow" aria-hidden="true"></div>
+    <h1 class="hero__title">示例中心</h1>
+    <p class="hero__slogan">浏览精选交互 Demo，体验统一的视觉与动效设计</p>
+  </section>
+
   <div class="list">
     <a href="#/hello-world" class="list-card">
       <div class="list-card__header">
@@ -55,6 +61,48 @@
 </Layout>
 
 <style>
+  .hero {
+    position: relative;
+    text-align: center;
+    padding: 3rem 1rem 2.5rem;
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+  }
+
+  .hero__glow {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 140%;
+    height: 220%;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--accent) 28%, transparent) 0%,
+      transparent 60%
+    );
+    opacity: 0.7;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .hero__title {
+    position: relative;
+    z-index: 1;
+    font-size: clamp(1.85rem, 5vw, 2.6rem);
+    font-weight: 800;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+    margin-bottom: 0.5rem;
+  }
+
+  .hero__slogan {
+    position: relative;
+    z-index: 1;
+    font-size: clamp(0.95rem, 2.5vw, 1.1rem);
+    color: var(--text-secondary);
+  }
+
   .list {
     display: flex;
     flex-direction: column;
@@ -63,12 +111,14 @@
 
   .list-card {
     display: block;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
     border-radius: var(--radius);
     overflow: hidden;
     text-decoration: none;
     color: inherit;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     transition:
       transform var(--transition),
       box-shadow var(--transition),
@@ -77,8 +127,10 @@
   }
 
   .list-card:hover {
-    transform: translateY(-3px);
-    box-shadow: var(--shadow-lg);
+    transform: translateY(-6px);
+    box-shadow:
+      var(--shadow-lg),
+      0 0 28px color-mix(in srgb, var(--accent) 18%, transparent);
     border-color: var(--accent);
   }
 
@@ -87,8 +139,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.85rem 1.1rem;
-    background: #1f2137;
-    border-bottom: 1px solid var(--border);
+    background: transparent;
+    border-bottom: 1px solid var(--glass-border);
     user-select: none;
   }
 
@@ -150,6 +202,10 @@
   }
 
   @media (max-width: 600px) {
+    .hero {
+      padding: 2rem 1rem 1.75rem;
+    }
+
     .list-card__header {
       padding: 0.7rem 0.9rem;
     }

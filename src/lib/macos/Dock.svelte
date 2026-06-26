@@ -28,16 +28,22 @@
     {#each DOCK_APPS as appId (appId)}
       {@const app = APP_REGISTRY[appId]}
       {#if app}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <div
+        {@const isOpen = findAppWindow(appId) !== null}
+        <button
+          type="button"
           class="dock__item"
+          class:dock__item--open={isOpen}
+          aria-label={app.name}
           on:click={() => handleDockClick(appId)}
         >
           <span class="dock__item-icon">
             {@html app.icon}
           </span>
           <span class="dock__item-tooltip">{app.name}</span>
-        </div>
+          {#if isOpen}
+            <span class="dock__item-indicator" aria-hidden="true"></span>
+          {/if}
+        </button>
       {/if}
     {/each}
   </nav>
@@ -60,10 +66,10 @@
     align-items: flex-end;
     gap: 8px;
     padding: 6px 12px;
-    background: rgba(255, 255, 255, 0.12);
+    background: var(--dock-bg);
     backdrop-filter: blur(30px) saturate(200%);
     -webkit-backdrop-filter: blur(30px) saturate(200%);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid var(--glass-border);
     border-radius: 20px;
   }
 
@@ -79,6 +85,17 @@
     transition: transform 0.18s cubic-bezier(0.25, 0.46, 0.45, 0.94);
     transform-origin: bottom center;
     flex-shrink: 0;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+  }
+
+  .dock__item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .dock__item:hover {
@@ -108,7 +125,7 @@
     bottom: calc(100% + 12px);
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(30, 30, 30, 0.92);
+    background: var(--glass-bg);
     color: #fff;
     font-size: 12px;
     padding: 4px 10px;
@@ -121,5 +138,17 @@
 
   .dock__item:hover .dock__item-tooltip {
     opacity: 1;
+  }
+
+  .dock__item-indicator {
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    width: 4px;
+    height: 4px;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: var(--text-primary);
+    pointer-events: none;
   }
 </style>

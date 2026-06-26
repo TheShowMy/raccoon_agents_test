@@ -30,6 +30,23 @@
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.45);
   --transition: 0.2s ease;
 
+  /* Glassmorphism / window / dock */
+  --bg-input: #2a2b3d;
+  --glass-bg: rgba(36, 37, 58, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --window-text: #c0caf5;
+  --dock-bg: rgba(30, 31, 44, 0.8);
+
+  /* Syntax highlighting tokens */
+  --token-keyword: #bb9af7;
+  --token-string: #9ece6a;
+  --token-comment: #565f89;
+  --token-function: #7aa2f7;
+  --token-number: #ff9e64;
+  --token-operator: #89ddff;
+  --token-property: #c0caf5;
+  --token-punctuation: #a9b1d6;
+
   /* Typography */
   --font-mono: 'Cascadia Code', 'SF Mono', 'Fira Code', 'JetBrains Mono',
     'Consolas', 'Menlo', 'Monaco', monospace;

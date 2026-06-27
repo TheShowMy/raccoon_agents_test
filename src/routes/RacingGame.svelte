@@ -26,6 +26,10 @@
     createOncomingVehicle,
     createHealthPickup,
   } from '../lib/utils/racingModels.js';
+  import {
+    createEffectsManager,
+    handleEvent,
+  } from '../lib/utils/racingEffects.js';
 
   /**
    * 渲染层职责：
@@ -63,6 +67,14 @@
   let roadSegmentGroups = [];
   /** @type {Map<number, THREE.Group>} */
   const entityMeshes = new Map();
+
+  // 效果管理器（粒子、震动、音效）
+  /** @type {ReturnType<typeof createEffectsManager>|null} */
+  let effectsManager = null;
+
+  // 上一次处理的事件（用于检测新事件）
+  /** @type {object|null} */
+  let lastProcessedEvent = null;
 
   // 道路与动画状态
   let roadProgress = 0;
@@ -203,6 +215,8 @@
       initPlayerMesh();
       initRoadSegments();
       initGroundPlane();
+      // 初始化效果管理器
+      effectsManager = createEffectsManager(scene);
       animationId = requestAnimationFrame(animate);
 
       resizeObserver = new ResizeObserver(() => {
@@ -237,6 +251,7 @@
     camera = null;
     renderer = null;
     engine = null;
+    effectsManager = null;
   });
 
   /* ============================================================
@@ -501,6 +516,23 @@
     syncPlayerMesh();
     syncEntityMeshes();
 
+    // 检测并处理游戏事件（拾取、碰撞、游戏结束）
+    if (effectsManager && engine) {
+      const currentState = engine.getState();
+      const currentEvent = currentState.lastEvent;
+      // 只在有新事件且事件与上一次不同时处理
+      if (currentEvent && currentEvent !== lastProcessedEvent) {
+        lastProcessedEvent = currentEvent;
+        // 获取玩家当前位置作为效果触发点
+        const playerX = playerMesh ? playerMesh.position.x : 0;
+        const playerY = playerMesh ? playerMesh.position.y : 0;
+        const playerZ = playerMesh ? playerMesh.position.z : PLAYER_VISUAL_Z;
+        handleEvent(effectsManager, currentEvent, playerX, playerY, playerZ);
+      }
+      // 更新效果系统（粒子动画、震动衰减）
+      effectsManager.update(dt);
+    }
+
     // 相机微随玩家 y 抖动 + 横向阻尼跟随：让切换车道时玩家始终居中在视野中
     if (camera && playerMesh) {
       const targetX = playerMesh.position.x;
@@ -510,6 +542,14 @@
       } else {
         camera.position.y += (4.5 - camera.position.y) * 0.15;
       }
+
+      // 叠加屏幕震动效果
+      if (effectsManager) {
+        const shake = effectsManager.getShakeOffset();
+        camera.position.x += shake.x;
+        camera.position.y += shake.y;
+      }
+
       camera.lookAt(camera.position.x, 0.8, PLAYER_VISUAL_Z - 30);
     }
 
@@ -566,6 +606,12 @@
       scene.remove(playerMesh);
       disposeObject(playerMesh);
       playerMesh = null;
+    }
+
+    // 清理效果管理器（已在 onDestroy 中调用，这里仅作防御）
+    if (effectsManager) {
+      effectsManager.dispose();
+      effectsManager = null;
     }
 
     if (renderer) {

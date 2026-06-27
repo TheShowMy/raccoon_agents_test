@@ -396,8 +396,8 @@
    * ============================================================ */
 
   /**
-   * 同步玩家车辆：贴合道路高程与坡度，朝向跟随道路 heading 与 pitch。
-   * 车辆车头朝向道路前进方向（-z + heading 偏转），俯仰角与道路坡度一致。
+   * 同步玩家车辆：贴合道路高程，仅保留沿道路 heading 的偏航旋转。
+   * 车辆车头朝向道路前进方向（-z + heading 偏转），俯仰与侧倾归零使车轮贴地。
    */
   function syncPlayerMesh() {
     if (!playerMesh || !engine) return;
@@ -414,7 +414,10 @@
 
     // 车辆朝向：rotation.y 与道路 heading 一致，使车头始终朝向前进方向
     // 越野车模型默认朝 -z 方向，heading > 0 表示道路向右弯，车辆需要左转
+    // 显式归零俯仰与侧倾，仅保留偏航旋转，确保车轮贴地无倾斜
     playerMesh.rotation.y = -frame.heading;
+    playerMesh.rotation.x = 0;
+    playerMesh.rotation.z = 0;
   }
 
   /**
@@ -435,8 +438,8 @@
   }
 
   /**
-   * 同步实体网格：障碍物、对向车辆、道具贴合道路高程与坡度。
-   * 对向车辆朝向修正为面向玩家（朝 +z 方向），道具持续旋转。
+   * 同步实体网格：障碍物、对向车辆、道具贴合道路高程，仅保留沿道路 heading 的偏航旋转。
+   * 对向车辆朝向修正为面向玩家（朝 +z 方向），道具持续旋转，俯仰与侧倾归零确保贴地。
    */
   function syncEntityMeshes() {
     if (!engine) return;
@@ -459,11 +462,16 @@
       mesh.position.set(frame.x, frame.y, visualZ);
 
       // 对向车辆朝向修正：面向玩家方向（默认模型朝 -z，需旋转 180° + 道路 heading）
+      // 显式归零俯仰与侧倾，仅保留偏航旋转，确保车轮贴地无倾斜
       if (e.kind === ENTITY_KIND.VEHICLE) {
         mesh.rotation.y = Math.PI - frame.heading;
+        mesh.rotation.x = 0;
+        mesh.rotation.z = 0;
       } else if (e.kind === ENTITY_KIND.OBSTACLE) {
         // 障碍物跟随道路朝向
         mesh.rotation.y = -frame.heading;
+        mesh.rotation.x = 0;
+        mesh.rotation.z = 0;
       } else if (e.kind === ENTITY_KIND.PICKUP) {
         // 道具持续旋转 + 轻微上下浮动，贴合道路高度浮动
         mesh.rotation.y += 0.05;

@@ -413,10 +413,8 @@
     playerMesh.position.set(frame.x, groundY + jumpY, PLAYER_VISUAL_Z);
 
     // 车辆朝向：rotation.y 与道路 heading 一致，使车头始终朝向前进方向
-    // rotation.x 与道路 pitch 一致，使车辆随道路坡度倾斜
     // 越野车模型默认朝 -z 方向，heading > 0 表示道路向右弯，车辆需要左转
     playerMesh.rotation.y = -frame.heading;
-    playerMesh.rotation.x = frame.pitch;
   }
 
   /**
@@ -433,8 +431,6 @@
       grp.position.set(seg.centerOffsetX, seg.elevation, seg.zCenterWorld);
       // 绕 y 轴旋转与道路水平方向对齐
       grp.rotation.y = seg.heading;
-      // 绕 x 轴倾斜与道路坡度对齐（上坡抬头，下坡低头）
-      grp.rotation.x = -seg.pitch;
     }
   }
 
@@ -465,11 +461,9 @@
       // 对向车辆朝向修正：面向玩家方向（默认模型朝 -z，需旋转 180° + 道路 heading）
       if (e.kind === ENTITY_KIND.VEHICLE) {
         mesh.rotation.y = Math.PI - frame.heading;
-        mesh.rotation.x = frame.pitch;
       } else if (e.kind === ENTITY_KIND.OBSTACLE) {
         // 障碍物跟随道路朝向
         mesh.rotation.y = -frame.heading;
-        mesh.rotation.x = frame.pitch;
       } else if (e.kind === ENTITY_KIND.PICKUP) {
         // 道具持续旋转 + 轻微上下浮动，贴合道路高度浮动
         mesh.rotation.y += 0.05;
@@ -550,7 +544,7 @@
         camera.position.y += shake.y;
       }
 
-      camera.lookAt(camera.position.x, 0.8, PLAYER_VISUAL_Z - 30);
+      camera.lookAt(camera.position.x, playerMesh.position.y, PLAYER_VISUAL_Z - 30);
     }
 
     renderer.render(scene, camera);

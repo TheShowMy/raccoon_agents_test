@@ -100,47 +100,55 @@ describe('racingRoad.js — 蜿蜒曲线函数', () => {
   });
 });
 
-describe('racingRoad.js — 高程函数', () => {
-  it('roadElevationAt(z=0) 应返回有限数值', () => {
+describe('racingRoad.js — 高程函数（平坦赛道）', () => {
+  it('roadElevationAt(z=0) 应返回 0（平坦赛道）', () => {
     const elev = roadElevationAt(0);
-    expect(Number.isFinite(elev)).toBe(true);
+    expect(elev).toBeCloseTo(0); // 用 toBeCloseTo 而非 toBe，兼容 -0 vs +0
   });
 
-  it('roadElevationAt 范围应在 [-amplitude, amplitude] 内', () => {
-    const maxElev = ROAD_ELEVATION_AMPLITUDE + ROAD_ELEVATION_AMPLITUDE_2;
+  it('roadElevationAt 在任意位置均返回 0（平坦赛道）', () => {
     for (let z = -500; z <= 500; z += 50) {
-      const elev = roadElevationAt(z);
-      expect(elev).toBeGreaterThanOrEqual(-maxElev);
-      expect(elev).toBeLessThanOrEqual(maxElev);
+      expect(roadElevationAt(z)).toBeCloseTo(0);
     }
   });
 
-  it('roadElevationAt 对称性：elevation(z) ≈ -elevation(-z) 当基础相位为 π/2 时', () => {
-    // 默认相位 ROAD_ELEVATION_PHASE = Math.PI * 0.3，不完全对称
-    // 但在足够远的距离应有周期性
-    const e1 = roadElevationAt(200);
-    const e2 = roadElevationAt(200 + ROAD_TOTAL_LENGTH);
-    expect(Math.abs(e1 - e2)).toBeLessThan(0.001);
+  it('roadElevationAt 在任意种子下均返回 0（平坦赛道）', () => {
+    const seeds = [0, 42, -17.5, 99.9, -100];
+    for (const seed of seeds) {
+      setRoadSeed(seed);
+      for (let z = -200; z <= 200; z += 100) {
+        expect(roadElevationAt(z)).toBeCloseTo(0);
+      }
+    }
+    setRoadSeed(0);
   });
 });
 
-describe('racingRoad.js — 俯仰角函数', () => {
-  it('roadPitchAt(z=0) 应返回有限数值', () => {
+describe('racingRoad.js — 俯仰角函数（平坦赛道）', () => {
+  it('roadPitchAt(z=0) 应返回 0（平坦赛道）', () => {
     const pitch = roadPitchAt(0);
-    expect(Number.isFinite(pitch)).toBe(true);
+    expect(pitch).toBeCloseTo(0);
   });
 
-  it('roadPitchAt 的导数性质：|pitch| ≤ amplitude * frequency + ...', () => {
-    const maxPitch = ROAD_ELEVATION_AMPLITUDE * ROAD_ELEVATION_FREQUENCY +
-                     ROAD_ELEVATION_AMPLITUDE_2 * ROAD_ELEVATION_FREQUENCY_2;
+  it('roadPitchAt 在任意位置均返回 0（平坦赛道）', () => {
     for (let z = -500; z <= 500; z += 50) {
-      const pitch = roadPitchAt(z);
-      expect(Math.abs(pitch)).toBeLessThanOrEqual(maxPitch * 1.01);
+      expect(roadPitchAt(z)).toBeCloseTo(0);
     }
+  });
+
+  it('roadPitchAt 在任意种子下均返回 0（平坦赛道）', () => {
+    const seeds = [0, 42, -17.5, 99.9, -100];
+    for (const seed of seeds) {
+      setRoadSeed(seed);
+      for (let z = -200; z <= 200; z += 100) {
+        expect(roadPitchAt(z)).toBeCloseTo(0);
+      }
+    }
+    setRoadSeed(0);
   });
 });
 
-describe('racingRoad.js — 法线函数', () => {
+describe('racingRoad.js — 法线函数（平坦赛道）', () => {
   it('roadNormalAt(z) 应返回包含 x, y, z 的对象', () => {
     const normal = roadNormalAt(0);
     expect(normal).toHaveProperty('x');
@@ -148,11 +156,15 @@ describe('racingRoad.js — 法线函数', () => {
     expect(normal).toHaveProperty('z');
   });
 
-  it('roadNormalAt 应返回单位向量（长度接近 1）', () => {
+  it('roadNormalAt 应返回单位向量（平坦赛道：y 恒为 1）', () => {
     for (let z = -200; z <= 200; z += 40) {
       const n = roadNormalAt(z);
       const len = Math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
       expect(Math.abs(len - 1)).toBeLessThan(0.0001);
+      // 平坦赛道法线恒为 (0, 1, 0)
+      expect(n.x).toBeCloseTo(0); // 兼容 -0 vs +0
+      expect(n.y).toBe(1);
+      expect(n.z).toBeCloseTo(0);
     }
   });
 
@@ -181,12 +193,20 @@ describe('racingRoad.js — 统一查询函数', () => {
     const z = 123;
     const frame = roadFrameAt(z);
     expect(frame.x).toBeCloseTo(roadCenterOffsetAt(z), 10);
-    expect(frame.y).toBeCloseTo(roadElevationAt(z), 10);
+    expect(frame.y).toBeCloseTo(roadElevationAt(z), 10); // 平坦赛道：均为 0
     expect(frame.heading).toBeCloseTo(roadHeadingAt(z), 10);
-    expect(frame.pitch).toBeCloseTo(roadPitchAt(z), 10);
+    expect(frame.pitch).toBeCloseTo(roadPitchAt(z), 10); // 平坦赛道：均为 0
     expect(frame.normal.x).toBeCloseTo(roadNormalAt(z).x, 10);
     expect(frame.normal.y).toBeCloseTo(roadNormalAt(z).y, 10);
     expect(frame.normal.z).toBeCloseTo(roadNormalAt(z).z, 10);
+  });
+
+  it('roadFrameAt 的 y 与 pitch 在平坦赛道上恒为 0', () => {
+    for (let z = -200; z <= 200; z += 50) {
+      const frame = roadFrameAt(z);
+      expect(frame.y).toBeCloseTo(0); // roadElevationAt 恒为 0
+      expect(frame.pitch).toBeCloseTo(0); // roadPitchAt 恒为 0
+    }
   });
 
   it('laneFrameAt(laneIndex, z) 应返回包含 x, y, heading, pitch, normal 的对象', () => {
@@ -207,10 +227,11 @@ describe('racingRoad.js — 统一查询函数', () => {
     }
   });
 
-  it('laneFrameAt(laneIndex, z) 的 y 应等于道路高程', () => {
-    const z = 50;
-    const frame = laneFrameAt(2, z);
-    expect(frame.y).toBeCloseTo(roadElevationAt(z), 10);
+  it('laneFrameAt(laneIndex, z) 的 y 在平坦赛道上恒为 0', () => {
+    for (let lane = 0; lane < LANE_COUNT; lane++) {
+      const frame = laneFrameAt(lane, 50);
+      expect(frame.y).toBeCloseTo(0); // 平坦赛道高程为 0
+    }
   });
 
   it('laneFrameAt 越界车道索引应回退到中车道 (1)', () => {
@@ -223,7 +244,7 @@ describe('racingRoad.js — 统一查询函数', () => {
   });
 });
 
-describe('racingRoad.js — 道路分段', () => {
+describe('racingRoad.js — 道路分段（平坦赛道）', () => {
   it('buildRoadSegments 应返回 ROAD_SEGMENT_COUNT 个元素', () => {
     const segments = buildRoadSegments(0);
     expect(segments).toHaveLength(ROAD_SEGMENT_COUNT);
@@ -246,21 +267,17 @@ describe('racingRoad.js — 道路分段', () => {
     }
   });
 
-  it('每个分段的 elevation 应在合理范围内', () => {
+  it('每个分段的 elevation 在平坦赛道上恒为 0', () => {
     const segments = buildRoadSegments(0);
-    const maxElev = ROAD_ELEVATION_AMPLITUDE + ROAD_ELEVATION_AMPLITUDE_2;
     for (const seg of segments) {
-      expect(seg.elevation).toBeGreaterThanOrEqual(-maxElev);
-      expect(seg.elevation).toBeLessThanOrEqual(maxElev);
+      expect(seg.elevation).toBeCloseTo(0);
     }
   });
 
-  it('每个分段的 pitch 应在合理范围内', () => {
+  it('每个分段的 pitch 在平坦赛道上恒为 0', () => {
     const segments = buildRoadSegments(0);
-    const maxPitch = ROAD_ELEVATION_AMPLITUDE * ROAD_ELEVATION_FREQUENCY +
-                     ROAD_ELEVATION_AMPLITUDE_2 * ROAD_ELEVATION_FREQUENCY_2;
     for (const seg of segments) {
-      expect(Math.abs(seg.pitch)).toBeLessThanOrEqual(maxPitch * 1.01);
+      expect(seg.pitch).toBeCloseTo(0);
     }
   });
 
@@ -361,36 +378,27 @@ describe('racingRoad.js — 种子变化', () => {
     expect(offset1).not.toBeCloseTo(offset2, 3);
   });
 
-  it('相同种子应产生相同的道路高程', () => {
+  it('道路高程在任意种子下均为 0（平坦赛道）', () => {
     const z = 150;
-    setRoadSeed(42);
-    const elev1 = roadElevationAt(z);
+    const seeds = [0, 42, 999, -17, 3.14159];
+    for (const seed of seeds) {
+      setRoadSeed(seed);
+      expect(roadElevationAt(z)).toBeCloseTo(0);
+    }
     setRoadSeed(0);
-    setRoadSeed(42);
-    const elev2 = roadElevationAt(z);
-    expect(elev1).toBeCloseTo(elev2, 10);
   });
 
-  it('不同种子应产生不同的道路高程', () => {
-    const z = 150;
-    setRoadSeed(42);
-    const elev1 = roadElevationAt(z);
-    setRoadSeed(999);
-    const elev2 = roadElevationAt(z);
-    expect(elev1).not.toBeCloseTo(elev2, 5);
-  });
-
-  it('相同种子应产生相同的俯仰角', () => {
+  it('俯仰角在任意种子下均为 0（平坦赛道）', () => {
     const z = 80;
-    setRoadSeed(55);
-    const pitch1 = roadPitchAt(z);
+    const seeds = [0, 55, 999, -17, 3.14159];
+    for (const seed of seeds) {
+      setRoadSeed(seed);
+      expect(roadPitchAt(z)).toBeCloseTo(0);
+    }
     setRoadSeed(0);
-    setRoadSeed(55);
-    const pitch2 = roadPitchAt(z);
-    expect(pitch1).toBeCloseTo(pitch2, 10);
   });
 
-  it('相同种子应产生相同的分段数据', () => {
+  it('相同种子应产生相同的分段数据（平坦赛道）', () => {
     setRoadSeed(77);
     const segs1 = buildRoadSegments(0);
     setRoadSeed(0);
@@ -398,24 +406,30 @@ describe('racingRoad.js — 种子变化', () => {
     const segs2 = buildRoadSegments(0);
     expect(segs1).toHaveLength(segs2.length);
     for (let i = 0; i < segs1.length; i++) {
-      expect(segs1[i].elevation).toBeCloseTo(segs2[i].elevation, 10);
+      // 平坦赛道：所有种子的 elevation 和 pitch 均为 0
+      expect(segs1[i].elevation).toBeCloseTo(0);
+      expect(segs2[i].elevation).toBeCloseTo(0);
+      expect(segs1[i].pitch).toBeCloseTo(0);
+      expect(segs2[i].pitch).toBeCloseTo(0);
       expect(segs1[i].heading).toBeCloseTo(segs2[i].heading, 10);
-      expect(segs1[i].pitch).toBeCloseTo(segs2[i].pitch, 10);
     }
   });
 
-  it('roadFrameAt 应受种子影响', () => {
+  it('roadFrameAt 的 heading 受种子影响（水平蜿蜒，y/pitch 不变）', () => {
     const z = 200;
     setRoadSeed(88);
     const frame1 = roadFrameAt(z);
     setRoadSeed(0);
     setRoadSeed(88);
     const frame2 = roadFrameAt(z);
-    expect(frame1.y).toBeCloseTo(frame2.y, 10);
-    expect(frame1.pitch).toBeCloseTo(frame2.pitch, 10);
+    // y 和 pitch 在平坦赛道始终为 0（与种子无关）
+    expect(frame1.y).toBeCloseTo(0);
+    expect(frame1.pitch).toBeCloseTo(0);
+    expect(frame2.y).toBeCloseTo(0);
+    expect(frame2.pitch).toBeCloseTo(0);
   });
 
-  it('laneFrameAt 应受种子影响', () => {
+  it('laneFrameAt 的 y 在平坦赛道上恒为 0（与种子无关）', () => {
     const z = 120;
     const lane = 0;
     setRoadSeed(66);
@@ -423,7 +437,10 @@ describe('racingRoad.js — 种子变化', () => {
     setRoadSeed(0);
     setRoadSeed(66);
     const frame2 = laneFrameAt(lane, z);
-    expect(frame1.y).toBeCloseTo(frame2.y, 10);
+    // 平坦赛道：y 恒为 0
+    expect(frame1.y).toBeCloseTo(0);
+    expect(frame2.y).toBeCloseTo(0);
+    // x 受种子影响的水平蜿蜒
     expect(frame1.x).toBeCloseTo(frame2.x, 10);
   });
 });

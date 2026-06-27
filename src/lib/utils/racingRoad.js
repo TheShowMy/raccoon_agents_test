@@ -88,8 +88,9 @@ export const ROAD_CURVE_PHASE_2 = 0;
    竖向起伏（高程与坡度）参数
    =================================================================== */
 
-/** 竖向起伏振幅（道路高程变化的最大幅度） */
-export const ROAD_ELEVATION_AMPLITUDE = 3.5;
+/** 竖向起伏振幅（道路高程变化的最大幅度）
+ * 设为 0 以禁用赛道坡度，确保道路完全平坦。 */
+export const ROAD_ELEVATION_AMPLITUDE = 0;
 
 /** 竖向起伏角频率（每 z 单位的弧度，控制起伏密度）
  *  取 1 个完整周期 / ROAD_TOTAL_LENGTH，保证道路高程在循环处无缝衔接。
@@ -99,8 +100,9 @@ export const ROAD_ELEVATION_FREQUENCY = (2 * Math.PI) / ROAD_TOTAL_LENGTH;
 /** 竖向起伏相位偏移 */
 export const ROAD_ELEVATION_PHASE = Math.PI * 0.3;
 
-/** 第二层竖向起伏振幅（叠加产生更自然的起伏） */
-export const ROAD_ELEVATION_AMPLITUDE_2 = 1.2;
+/** 第二层竖向起伏振幅（叠加产生更自然的起伏）
+ * 设为 0 以禁用赛道坡度，确保道路完全平坦。 */
+export const ROAD_ELEVATION_AMPLITUDE_2 = 0;
 
 /** 第二层竖向起伏角频率
  *  取 2 个完整周期 / ROAD_TOTAL_LENGTH，作为细节层仍保持循环无缝。

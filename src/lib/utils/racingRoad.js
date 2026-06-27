@@ -65,8 +65,10 @@ export const ROAD_SEGMENT_LENGTH = ROAD_TOTAL_LENGTH / ROAD_SEGMENT_COUNT;
 /** 第一层蜿蜒振幅（道路中线相对 z 轴的最大水平偏移） */
 export const ROAD_CURVE_AMPLITUDE = 6;
 
-/** 第一层蜿蜒角频率（每 z 单位的弧度） */
-export const ROAD_CURVE_FREQUENCY = 0.045;
+/** 第一层蜿蜒角频率（每 z 单位的弧度）
+ *  取 2 个完整周期 / ROAD_TOTAL_LENGTH，保证道路中线在循环处无缝衔接。
+ */
+export const ROAD_CURVE_FREQUENCY = (4 * Math.PI) / ROAD_TOTAL_LENGTH;
 
 /** 第一层蜿蜒相位偏移 */
 export const ROAD_CURVE_PHASE = 0;
@@ -74,8 +76,10 @@ export const ROAD_CURVE_PHASE = 0;
 /** 第二层蜿蜒振幅（叠加产生更自然的摆动） */
 export const ROAD_CURVE_AMPLITUDE_2 = 2.5;
 
-/** 第二层蜿蜒角频率 */
-export const ROAD_CURVE_FREQUENCY_2 = 0.018;
+/** 第二层蜿蜒角频率
+ *  取 1 个完整周期 / ROAD_TOTAL_LENGTH，作为低频叠加层仍保持循环无缝。
+ */
+export const ROAD_CURVE_FREQUENCY_2 = (2 * Math.PI) / ROAD_TOTAL_LENGTH;
 
 /** 第二层蜿蜒相位偏移 */
 export const ROAD_CURVE_PHASE_2 = 0;
@@ -87,8 +91,10 @@ export const ROAD_CURVE_PHASE_2 = 0;
 /** 竖向起伏振幅（道路高程变化的最大幅度） */
 export const ROAD_ELEVATION_AMPLITUDE = 3.5;
 
-/** 竖向起伏角频率（每 z 单位的弧度，控制起伏密度） */
-export const ROAD_ELEVATION_FREQUENCY = 0.022;
+/** 竖向起伏角频率（每 z 单位的弧度，控制起伏密度）
+ *  取 1 个完整周期 / ROAD_TOTAL_LENGTH，保证道路高程在循环处无缝衔接。
+ */
+export const ROAD_ELEVATION_FREQUENCY = (2 * Math.PI) / ROAD_TOTAL_LENGTH;
 
 /** 竖向起伏相位偏移 */
 export const ROAD_ELEVATION_PHASE = Math.PI * 0.3;
@@ -96,8 +102,10 @@ export const ROAD_ELEVATION_PHASE = Math.PI * 0.3;
 /** 第二层竖向起伏振幅（叠加产生更自然的起伏） */
 export const ROAD_ELEVATION_AMPLITUDE_2 = 1.2;
 
-/** 第二层竖向起伏角频率 */
-export const ROAD_ELEVATION_FREQUENCY_2 = 0.009;
+/** 第二层竖向起伏角频率
+ *  取 2 个完整周期 / ROAD_TOTAL_LENGTH，作为细节层仍保持循环无缝。
+ */
+export const ROAD_ELEVATION_FREQUENCY_2 = (4 * Math.PI) / ROAD_TOTAL_LENGTH;
 
 /** 第二层竖向起伏相位偏移 */
 export const ROAD_ELEVATION_PHASE_2 = 0;
@@ -164,7 +172,8 @@ function seedElevationOffsetFromSeed(basePhase) {
  * @returns {number} 道路中心线在 z 处的 x 偏移
  */
 export function roadCenterOffsetAt(z) {
-  const zz = Number(z) || 0;
+  if (!Number.isFinite(z)) return 0;
+  const zz = Number(z);
   const phase1 = seedOffsetFromSeed(ROAD_CURVE_PHASE);
   const phase2 = seedOffsetFromSeed(ROAD_CURVE_PHASE_2);
   return (
@@ -181,7 +190,8 @@ export function roadCenterOffsetAt(z) {
  * @returns {number} 切线方向角（弧度，正值为绕 +y 轴左转）
  */
 export function roadHeadingAt(z) {
-  const zz = Number(z) || 0;
+  if (!Number.isFinite(z)) return 0;
+  const zz = Number(z);
   const phase1 = seedOffsetFromSeed(ROAD_CURVE_PHASE);
   const phase2 = seedOffsetFromSeed(ROAD_CURVE_PHASE_2);
   return (
@@ -198,7 +208,8 @@ export function roadHeadingAt(z) {
  * @returns {number} 道路中心线在 z 处的高程
  */
 export function roadElevationAt(z) {
-  const zz = Number(z) || 0;
+  if (!Number.isFinite(z)) return 0;
+  const zz = Number(z);
   const phase1 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE);
   const phase2 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE_2);
   return (
@@ -215,7 +226,8 @@ export function roadElevationAt(z) {
  * @returns {number} 俯仰角（弧度，正值为抬头/上坡，负值为低头/下坡）
  */
 export function roadPitchAt(z) {
-  const zz = Number(z) || 0;
+  if (!Number.isFinite(z)) return 0;
+  const zz = Number(z);
   const phase1 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE);
   const phase2 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE_2);
   return (
@@ -250,7 +262,16 @@ export function roadNormalAt(z) {
  * @returns {{ x: number, y: number, heading: number, pitch: number, normal: { x: number, y: number, z: number } }}
  */
 export function roadFrameAt(z) {
-  const zz = Number(z) || 0;
+  if (!Number.isFinite(z)) {
+    return {
+      x: 0,
+      y: 0,
+      heading: 0,
+      pitch: 0,
+      normal: { x: 0, y: 1, z: 0 },
+    };
+  }
+  const zz = Number(z);
   return {
     x: roadCenterOffsetAt(zz),
     y: roadElevationAt(zz),

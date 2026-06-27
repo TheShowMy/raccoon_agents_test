@@ -13,10 +13,12 @@
     buildRoadSegments,
     advanceRoadProgress,
     laneCenterXAt,
+    laneFrameAt,
     ROAD_SEGMENT_COUNT,
     ROAD_SEGMENT_LENGTH,
     ROAD_HALF_WIDTH,
     LANE_CENTER_X,
+    setRoadSeed,
   } from '../lib/utils/racingRoad.js';
   import {
     createPlayerCar,
@@ -106,6 +108,8 @@
     if (!engine) return;
     const cur = engine.getState();
     if (cur.status === RACING_STATUS.PLAYING) return;
+    // 每局使用新的道路种子，确保道路形态不同
+    setRoadSeed(Date.now() % 10000 + Math.random() * 1000);
     engine.start();
     roadProgress = 0;
   }
@@ -193,6 +197,8 @@
     try {
       initThree();
       engine = createRacingEngine();
+      // 初始化道路种子，让道路形态在菜单阶段可见
+      setRoadSeed(Date.now() % 10000 + Math.random() * 1000);
       // 注意：不再自动 start()，保留 MENU 状态让开始菜单可见
       initPlayerMesh();
       initRoadSegments();
@@ -374,33 +380,53 @@
    * 同步逻辑：每帧把引擎状态映射到 three.js 对象
    * ============================================================ */
 
+  /**
+   * 同步玩家车辆：贴合道路高程与坡度，朝向跟随道路 heading 与 pitch。
+   * 车辆车头朝向道路前进方向（-z + heading 偏转），俯仰角与道路坡度一致。
+   */
   function syncPlayerMesh() {
     if (!playerMesh || !engine) return;
     const state = engine.getState();
     const lane = state.player.lane;
-    const y = state.player.y;
-    const x = laneCenterXAt(lane, PLAYER_VISUAL_Z);
-    playerMesh.position.set(x, y, PLAYER_VISUAL_Z);
-    // 越野车方向：默认车头朝 -Z，沿当前车道行驶时不必旋转；
-    // 仅在跳跃时给一个轻微抬头俯冲。
-    if (state.player.jumping) {
-      playerMesh.rotation.x = Math.max(-0.25, -state.player.vy * 0.02);
-    } else {
-      playerMesh.rotation.x *= 0.85;
-    }
+    const jumpY = state.player.y;
+
+    // 获取道路在玩家位置的框架
+    const frame = laneFrameAt(lane, PLAYER_VISUAL_Z);
+
+    // 玩家车辆贴合路面高度 + 跳跃高度
+    const groundY = frame.y;
+    playerMesh.position.set(frame.x, groundY + jumpY, PLAYER_VISUAL_Z);
+
+    // 车辆朝向：rotation.y 与道路 heading 一致，使车头始终朝向前进方向
+    // rotation.x 与道路 pitch 一致，使车辆随道路坡度倾斜
+    // 越野车模型默认朝 -z 方向，heading > 0 表示道路向右弯，车辆需要左转
+    playerMesh.rotation.y = -frame.heading;
+    playerMesh.rotation.x = frame.pitch;
   }
 
+  /**
+   * 同步道路段：每段按高程和俯仰角摆放，使道路呈现起伏与蜿蜒。
+   * 路段绕 y 轴旋转与道路 heading 对齐，绕 x 轴倾斜与道路 pitch 对齐。
+   */
   function syncRoadSegments() {
     const segments = buildRoadSegments(roadProgress);
     for (let i = 0; i < ROAD_SEGMENT_COUNT; i++) {
       const seg = segments[i];
       const grp = roadSegmentGroups[i];
       if (!grp) continue;
-      grp.position.set(seg.centerOffsetX, 0, seg.zCenterWorld);
+      // 路段 x 位置、y 高度、z 位置
+      grp.position.set(seg.centerOffsetX, seg.elevation, seg.zCenterWorld);
+      // 绕 y 轴旋转与道路水平方向对齐
       grp.rotation.y = seg.heading;
+      // 绕 x 轴倾斜与道路坡度对齐（上坡抬头，下坡低头）
+      grp.rotation.x = -seg.pitch;
     }
   }
 
+  /**
+   * 同步实体网格：障碍物、对向车辆、道具贴合道路高程与坡度。
+   * 对向车辆朝向修正为面向玩家（朝 +z 方向），道具持续旋转。
+   */
   function syncEntityMeshes() {
     if (!engine) return;
     const state = engine.getState();
@@ -416,12 +442,23 @@
         entityMeshes.set(e.id, mesh);
       }
       const visualZ = e.z + Z_VISUAL_OFFSET;
-      const x = laneCenterXAt(e.lane, visualZ);
-      mesh.position.set(x, 0, visualZ);
-      // 道具持续旋转 + 轻微上下浮动，便于玩家发现
-      if (e.kind === ENTITY_KIND.PICKUP) {
+      const frame = laneFrameAt(e.lane, visualZ);
+
+      // 实体贴合道路高度
+      mesh.position.set(frame.x, frame.y, visualZ);
+
+      // 对向车辆朝向修正：面向玩家方向（默认模型朝 -z，需旋转 180° + 道路 heading）
+      if (e.kind === ENTITY_KIND.VEHICLE) {
+        mesh.rotation.y = Math.PI - frame.heading;
+        mesh.rotation.x = frame.pitch;
+      } else if (e.kind === ENTITY_KIND.OBSTACLE) {
+        // 障碍物跟随道路朝向
+        mesh.rotation.y = -frame.heading;
+        mesh.rotation.x = frame.pitch;
+      } else if (e.kind === ENTITY_KIND.PICKUP) {
+        // 道具持续旋转 + 轻微上下浮动，贴合道路高度浮动
         mesh.rotation.y += 0.05;
-        mesh.position.y = 0.25 + Math.sin(performance.now() * 0.004) * 0.08;
+        mesh.position.y = frame.y + 0.25 + Math.sin(performance.now() * 0.004) * 0.08;
       }
     }
 

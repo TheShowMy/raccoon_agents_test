@@ -15,6 +15,11 @@
  * 道路沿 +z 方向无限延伸；"道路后退"通过 progress 累计表示：
  *   progress 单调递增，对应整条道路相对世界坐标系向 -z 方向移动的距离。
  *   渲染层每帧只需读取最新的 progress，即可由本模块派生出所有几何参数。
+ *
+ * 高程与坡度：
+ *   道路中心线在 y 方向有起伏，通过 roadElevationAt(z) 计算高程。
+ *   俯仰角（pitch）由 roadPitchAt(z) 计算，表示道路在竖直面内的倾斜。
+ *   法线向量（normal）由 heading 与 pitch 派生，指向道路上方。
  */
 
 /* ===================================================================
@@ -76,6 +81,77 @@ export const ROAD_CURVE_FREQUENCY_2 = 0.018;
 export const ROAD_CURVE_PHASE_2 = 0;
 
 /* ===================================================================
+   竖向起伏（高程与坡度）参数
+   =================================================================== */
+
+/** 竖向起伏振幅（道路高程变化的最大幅度） */
+export const ROAD_ELEVATION_AMPLITUDE = 3.5;
+
+/** 竖向起伏角频率（每 z 单位的弧度，控制起伏密度） */
+export const ROAD_ELEVATION_FREQUENCY = 0.022;
+
+/** 竖向起伏相位偏移 */
+export const ROAD_ELEVATION_PHASE = Math.PI * 0.3;
+
+/** 第二层竖向起伏振幅（叠加产生更自然的起伏） */
+export const ROAD_ELEVATION_AMPLITUDE_2 = 1.2;
+
+/** 第二层竖向起伏角频率 */
+export const ROAD_ELEVATION_FREQUENCY_2 = 0.009;
+
+/** 第二层竖向起伏相位偏移 */
+export const ROAD_ELEVATION_PHASE_2 = 0;
+
+/* ===================================================================
+   道路种子与随机化
+   =================================================================== */
+
+/** 当前道路种子，默认为 0 */
+let _roadSeed = 0;
+
+/**
+ * 获取当前道路种子
+ * @returns {number} 当前种子值
+ */
+export function getRoadSeed() {
+  return _roadSeed;
+}
+
+/**
+ * 设置道路种子，影响道路水平曲线与竖向起伏的相位偏移。
+ * 相同种子产生相同道路，不同种子产生可辨识变化。
+ * @param {number} seed - 种子值（任意整数或浮点数）
+ */
+export function setRoadSeed(seed) {
+  _roadSeed = Number.isFinite(seed) ? seed : 0;
+}
+
+/**
+ * 基于种子派生道路水平曲线的相位偏移
+ * 使用线性同余生成器确保确定性
+ * @param {number} basePhase - 基础相位
+ * @returns {number} 基于种子的相位偏移
+ */
+function seedOffsetFromSeed(basePhase) {
+  // 简单确定性随机：使用种子的线性同余
+  const s = _roadSeed;
+  // 生成一个 [0, 1) 的伪随机数
+  const t = ((Math.abs(Math.round(s)) * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  return basePhase + t * Math.PI * 2;
+}
+
+/**
+ * 基于种子派生竖向起伏的相位偏移
+ * @param {number} basePhase - 基础相位
+ * @returns {number} 基于种子的相位偏移
+ */
+function seedElevationOffsetFromSeed(basePhase) {
+  const s = _roadSeed + 1000000; // 与水平曲线使用不同偏移
+  const t = ((Math.abs(Math.round(s)) * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  return basePhase + t * Math.PI * 2;
+}
+
+/* ===================================================================
    蜿蜒曲线函数
    =================================================================== */
 
@@ -89,9 +165,11 @@ export const ROAD_CURVE_PHASE_2 = 0;
  */
 export function roadCenterOffsetAt(z) {
   const zz = Number(z) || 0;
+  const phase1 = seedOffsetFromSeed(ROAD_CURVE_PHASE);
+  const phase2 = seedOffsetFromSeed(ROAD_CURVE_PHASE_2);
   return (
-    ROAD_CURVE_AMPLITUDE * Math.sin(zz * ROAD_CURVE_FREQUENCY + ROAD_CURVE_PHASE) +
-    ROAD_CURVE_AMPLITUDE_2 * Math.sin(zz * ROAD_CURVE_FREQUENCY_2 + ROAD_CURVE_PHASE_2)
+    ROAD_CURVE_AMPLITUDE * Math.sin(zz * ROAD_CURVE_FREQUENCY + phase1) +
+    ROAD_CURVE_AMPLITUDE_2 * Math.sin(zz * ROAD_CURVE_FREQUENCY_2 + phase2)
   );
 }
 
@@ -104,10 +182,104 @@ export function roadCenterOffsetAt(z) {
  */
 export function roadHeadingAt(z) {
   const zz = Number(z) || 0;
+  const phase1 = seedOffsetFromSeed(ROAD_CURVE_PHASE);
+  const phase2 = seedOffsetFromSeed(ROAD_CURVE_PHASE_2);
   return (
-    ROAD_CURVE_AMPLITUDE * ROAD_CURVE_FREQUENCY * Math.cos(zz * ROAD_CURVE_FREQUENCY + ROAD_CURVE_PHASE) +
-    ROAD_CURVE_AMPLITUDE_2 * ROAD_CURVE_FREQUENCY_2 * Math.cos(zz * ROAD_CURVE_FREQUENCY_2 + ROAD_CURVE_PHASE_2)
+    ROAD_CURVE_AMPLITUDE * ROAD_CURVE_FREQUENCY * Math.cos(zz * ROAD_CURVE_FREQUENCY + phase1) +
+    ROAD_CURVE_AMPLITUDE_2 * ROAD_CURVE_FREQUENCY_2 * Math.cos(zz * ROAD_CURVE_FREQUENCY_2 + phase2)
   );
+}
+
+/**
+ * 计算道路中心线在指定 z 处的高程（y 坐标）
+ * 使用两层正弦叠加，模拟道路起伏效果。
+ *
+ * @param {number} z - 世界 z 坐标
+ * @returns {number} 道路中心线在 z 处的高程
+ */
+export function roadElevationAt(z) {
+  const zz = Number(z) || 0;
+  const phase1 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE);
+  const phase2 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE_2);
+  return (
+    ROAD_ELEVATION_AMPLITUDE * Math.sin(zz * ROAD_ELEVATION_FREQUENCY + phase1) +
+    ROAD_ELEVATION_AMPLITUDE_2 * Math.sin(zz * ROAD_ELEVATION_FREQUENCY_2 + phase2)
+  );
+}
+
+/**
+ * 计算道路中心线在指定 z 处的俯仰角（弧度）
+ * 取自竖向起伏曲线的解析导数，用于让路段沿坡度方向倾斜。
+ *
+ * @param {number} z - 世界 z 坐标
+ * @returns {number} 俯仰角（弧度，正值为抬头/上坡，负值为低头/下坡）
+ */
+export function roadPitchAt(z) {
+  const zz = Number(z) || 0;
+  const phase1 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE);
+  const phase2 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE_2);
+  return (
+    ROAD_ELEVATION_AMPLITUDE * ROAD_ELEVATION_FREQUENCY * Math.cos(zz * ROAD_ELEVATION_FREQUENCY + phase1) +
+    ROAD_ELEVATION_AMPLITUDE_2 * ROAD_ELEVATION_FREQUENCY_2 * Math.cos(zz * ROAD_ELEVATION_FREQUENCY_2 + phase2)
+  );
+}
+
+/**
+ * 计算道路中心线在指定 z 处的法线向量
+ * 法线由 heading（偏航）和 pitch（俯仰）派生，指向道路上方。
+ *
+ * @param {number} z - 世界 z 坐标
+ * @returns {{ x: number, y: number, z: number }} 单位法线向量
+ */
+export function roadNormalAt(z) {
+  const pitch = roadPitchAt(z);
+  // 法线在竖直面内与道路前进方向垂直
+  // pitch > 0 时上坡，法线指向前上方；pitch < 0 时下坡，法线指向前下方
+  return {
+    x: -Math.sin(roadHeadingAt(z)) * Math.sin(pitch),
+    y: Math.cos(pitch),
+    z: -Math.cos(roadHeadingAt(z)) * Math.sin(pitch),
+  };
+}
+
+/**
+ * 获取道路在指定 z 处的完整坐标系框架
+ * 返回道路中心线的位置、方向和法线，可用于将车辆/物体对齐到路面。
+ *
+ * @param {number} z - 世界 z 坐标
+ * @returns {{ x: number, y: number, heading: number, pitch: number, normal: { x: number, y: number, z: number } }}
+ */
+export function roadFrameAt(z) {
+  const zz = Number(z) || 0;
+  return {
+    x: roadCenterOffsetAt(zz),
+    y: roadElevationAt(zz),
+    heading: roadHeadingAt(zz),
+    pitch: roadPitchAt(zz),
+    normal: roadNormalAt(zz),
+  };
+}
+
+/**
+ * 获取指定车道在指定 z 处的完整坐标系框架
+ * 车道 frame 的 x 位置已叠加道路中心线偏移，y 为道路高程。
+ *
+ * @param {number} laneIndex - 车道索引，0=左车道、1=中车道、2=右车道
+ * @param {number} z - 世界 z 坐标
+ * @returns {{ x: number, y: number, heading: number, pitch: number, normal: { x: number, y: number, z: number } }}
+ */
+export function laneFrameAt(laneIndex, z) {
+  const frame = roadFrameAt(z);
+  const idx = Number.isInteger(laneIndex) && laneIndex >= 0 && laneIndex < LANE_COUNT
+    ? laneIndex
+    : 1;
+  return {
+    x: LANE_CENTER_X[idx] + frame.x,
+    y: frame.y,
+    heading: frame.heading,
+    pitch: frame.pitch,
+    normal: frame.normal,
+  };
 }
 
 /* ===================================================================
@@ -198,7 +370,9 @@ export function advanceRoadProgress(progress, deltaSeconds, speed) {
  *   zCenter: number,
  *   zCenterWorld: number,
  *   centerOffsetX: number,
+ *   elevation: number,
  *   heading: number,
+ *   pitch: number,
  *   length: number,
  *   halfWidth: number
  * }>} 长度恒为 ROAD_SEGMENT_COUNT 的分段数组
@@ -211,7 +385,9 @@ export function buildRoadSegments(progress = 0) {
     const zCenter = i * ROAD_SEGMENT_LENGTH + halfLen;
     const zCenterWorld = wrapRoadZ(zCenter - p);
     const centerOffsetX = roadCenterOffsetAt(zCenterWorld);
+    const elevation = roadElevationAt(zCenterWorld);
     const heading = roadHeadingAt(zCenterWorld);
+    const pitch = roadPitchAt(zCenterWorld);
     segments[i] = {
       index: i,
       zStart: i * ROAD_SEGMENT_LENGTH,
@@ -219,7 +395,9 @@ export function buildRoadSegments(progress = 0) {
       zCenter,
       zCenterWorld,
       centerOffsetX,
+      elevation,
       heading,
+      pitch,
       length: ROAD_SEGMENT_LENGTH,
       halfWidth: ROAD_HALF_WIDTH,
     };

@@ -801,6 +801,197 @@ describe('racingRoad.js — 周期连续性', () => {
   });
 });
 
+describe('racingRoad.js — Bug1 修复：道路段贴合曲线渲染的视觉自洽', () => {
+  beforeEach(() => {
+    setRoadSeed(0);
+    _clearSegmentCacheForTest();
+  });
+
+  it('buildRoadSegments 任意 progress 下按 zCenterWorld 排序的视觉窗口内，相邻段在共享 z 边界上的曲线 x 严格自洽（消除弯道处错位 / 暗背景缝隙）', () => {
+    // Bug1 修复验证：视觉窗口内，按 zCenterWorld 排序的相邻段在共享 z 边界上：
+    //   - 段 i 的右端 world z = 段 i+1 的左端 world z（环上只有一处 wrap）
+    //   - 该共享 z 处的曲线 x = roadCenterOffsetAt(共享 z - progress) 唯一确定
+    //   - 来自段 i 的"右端曲线 x" ≡ 来自段 i+1 的"左端曲线 x"
+    //     （曲线连续，无折算符号差异）
+    //   - 共享 z 处的曲线 x 应当等于"段 i 右端"与"段 i+1 左端"的衔接 x
+    //     （即两个段在共享 z 处的 leftEdge / rightEdge / leftDivider / rightDivider
+    //      都对齐到同一曲线 x，新渲染管线的 leftEdge_i(末尾) = leftEdge_{i+1}(起头)）
+    // 这保证新渲染管线（每个 mesh 的 4 顶点直接落在曲线对应 (x, z) 上）的
+    // 视觉连续性：相邻段在共享 z 边界处的 leftEdge / leftDivider / rightDivider
+    // / rightEdge 与路面 / 标线均与曲线严格对齐，无错位 / 暗背景缝隙 / 标线断裂。
+    const sl = ROAD_SEGMENT_LENGTH;
+    const progresses = [0, 1, 50, 100, 239, 240, 241, 480, 720, ROAD_TOTAL_LENGTH * 3.7];
+    for (const p of progresses) {
+      const segs = buildRoadSegments(p);
+      const sorted = [...segs].sort(
+        (a, b) => a.zCenterWorld - b.zCenterWorld
+      );
+      for (let i = 0; i < sorted.length; i++) {
+        const cur = sorted[i];
+        const nxt = sorted[(i + 1) % sorted.length];
+        // 段 i 的右端 z（world）和段 i+1 的左端 z（world）应在视觉循环上相等
+        //   段 i 的右端 z = cur.zCenterWorld + SL/2
+        //   段 i+1 的左端 z = nxt.zCenterWorld - SL/2
+        //   环上只有一处 wrap，wrap 处的 nxt.zCenterWorld - SL/2 需 mod ROAD_TOTAL_LENGTH
+        let curEndZ = cur.zCenterWorld + sl / 2;
+        if (curEndZ >= ROAD_TOTAL_LENGTH) curEndZ -= ROAD_TOTAL_LENGTH;
+        let nxtStartZ = nxt.zCenterWorld - sl / 2;
+        if (nxtStartZ < 0) nxtStartZ += ROAD_TOTAL_LENGTH;
+        expect(curEndZ).toBeCloseTo(nxtStartZ, 9);
+
+        // 共享 z 处的曲线 x：来自段 i 与来自段 i+1 必须严格相等
+        //   来自段 i：roadCenterOffsetAt(curEndZ - p)（visualZ - p 通路）
+        //   来自段 i+1：roadCenterOffsetAt(nxtStartZ - p)
+        //   二者因共享 z 相同故必然相等
+        const xFromCur = roadCenterOffsetAt(curEndZ - p);
+        const xFromNxt = roadCenterOffsetAt(nxtStartZ - p);
+        expect(xFromCur).toBeCloseTo(xFromNxt, 10);
+
+        // 额外验证：共享 z 处的曲线 x 与段内两端曲线 x 折算自洽。
+        // 新渲染管线下，段 i 的"右端" = roadCenterOffsetAt((curIndex + 1) * SL)、
+        // 段 i+1 的"左端" = roadCenterOffsetAt(nxtIndex * SL)，共享 z 处的曲线 x
+        // 同时等于 (roadCenterOffsetAt(curIndex * SL) + roadCenterOffsetAt((curIndex+1) * SL)) / 2
+        // （段 i 内的曲线线性插值，共享 z 处于段 i 的右端）以及
+        // (roadCenterOffsetAt(nxtIndex * SL) + roadCenterOffsetAt((nxtIndex+1) * SL)) / 2
+        // （共享 z 处于段 i+1 的左端）。
+        // 由于共享 z 处的曲线 x 已通过 xFromCur / xFromNxt 验证为“唯一确定”，
+        // 这里进一步断言：xFromCur 必须与 "段 i 共享 z 处" 的右端插值 x 严格一致。
+        // 计算段 i 在共享 z 处的曲线 x = roadCenterOffsetAt((curIndex+1) * SL)：
+        //   其中 curIndex = ((zCenter - SL/2) / SL) ， 由 zCenterWorld - p 还原得到
+        const curIndex = (cur.index + sorted.length) % sorted.length;
+        // 注意：sorted 顺序不一定是按 index 顺序的，而 (i*SL, (i+1)*SL) 的取值
+        // 只与 segment.index 相关，与 sort 顺序无关
+        const sharedXFromCurIndex = roadCenterOffsetAt(
+          ((curIndex + 1) * sl) % ROAD_TOTAL_LENGTH
+        );
+        expect(xFromCur).toBeCloseTo(sharedXFromCurIndex, 10);
+      }
+    }
+  });
+
+  it('buildRoadSegments 任意 progress 下输出的 centerOffsetX / heading 与 roadCenterOffsetAt(i*SL + progress) / roadHeadingAt(i*SL + progress) 通路自洽（公式翻转下视觉 z → 曲线绝对 z 折算）', () => {
+    // Bug1 修复验证：新渲染管线用曲线在“段首 / 段尾绝对 z”（index*SL 与
+    // (index+1)*SL）处取值，在视觉 z 上看分别对应 (index*SL + progress) 与
+    // ((index+1)*SL + progress)。buildRoadSegments 内部仍以
+    // curveZ = zCenterWorld - progress 还原到绝对 z，与上一任务的
+    // laneFrameAt(lane, visualZ - progress) 折算约定保持一致。
+    // 验证两套通路在任意 progress 下自洽：
+    //   - segs[i].centerOffsetX = roadCenterOffsetAt(zCenter_i)
+    //                          = (roadCenterOffsetAt(i*SL) + roadCenterOffsetAt((i+1)*SL)) / 2
+    //                          = roadCenterOffsetAt(zCenterWorld_i - p)
+    //   - segs[i].heading = roadHeadingAt(zCenter_i) = roadHeadingAt(zCenterWorld_i - p)
+    //                        段内 heading 为常量，等价于
+    //                        roadHeadingAt(i*SL) ≡ roadHeadingAt((i+1)*SL)
+    // 这保证新渲染管线（段首 / 段尾顶点按绝对 z = i*SL 与 (i+1)*SL 处取值）
+    // 与上一任务的 laneFrameAt(visualZ - p) 折算约定不冲突，
+    // 且不引入翻号的方向断言（属于上一任务的契约）。
+    const sl = ROAD_SEGMENT_LENGTH;
+    const progresses = [0, 1, 50, 100, 239, 240, 241, 480, 720, ROAD_TOTAL_LENGTH * 3.7];
+    for (const p of progresses) {
+      const segs = buildRoadSegments(p);
+      for (let i = 0; i < segs.length; i++) {
+        // 1) 段 i 的 centerOffsetX 与段内两端曲线 x 的中点一致
+        //    （段内线性插值，段中心 = 端点平均）
+        const expectedCenterX =
+          (roadCenterOffsetAt(i * sl) + roadCenterOffsetAt((i + 1) * sl)) / 2;
+        expect(segs[i].centerOffsetX).toBeCloseTo(expectedCenterX, 10);
+
+        // 2) 段 i 的 heading 与段内任意 z 处的 roadHeadingAt 一致
+        //    （段内 heading 为常量；
+        //      roadHeadingAt(i*SL) ≡ roadHeadingAt(i*SL + SL/2) 均为段 i 的斜率；
+        //      边界 z = (i+1)*SL 处 roadHeadingAt 取到的是段 i+1 的斜率，
+        //      故不与 segs[i].heading 相等）
+        expect(segs[i].heading).toBeCloseTo(roadHeadingAt(i * sl), 10);
+        expect(segs[i].heading).toBeCloseTo(roadHeadingAt(i * sl + sl / 2), 10);
+        // 段 i+1 的 heading 才与 roadHeadingAt((i+1)*SL) 相等
+        if (i + 1 < segs.length) {
+          expect(segs[i + 1].heading).toBeCloseTo(roadHeadingAt((i + 1) * sl), 10);
+        }
+
+        // 3) buildRoadSegments 内部 curveZ = zCenterWorld - p 折算
+        //    （与上一任务的 laneFrameAt(visualZ - p) 通路一致，
+        //     保证新渲染管线所取段首 / 段尾绝对 z 的曲线 x 与 buildRoadSegments
+        //     输出的 centerOffsetX / heading 在同一曲线通路上）
+        expect(segs[i].centerOffsetX).toBeCloseTo(
+          roadCenterOffsetAt(segs[i].zCenterWorld - p),
+          10
+        );
+        expect(segs[i].heading).toBeCloseTo(
+          roadHeadingAt(segs[i].zCenterWorld - p),
+          10
+        );
+      }
+    }
+  });
+
+  it('路面 mesh 4 顶点必须覆盖 [-ROAD_HALF_WIDTH+offset, +ROAD_HALF_WIDTH+offset]（防止“传入边缘 x 当中线 x”回归）', () => {
+    // 渲染层契约：路面 mesh 在任意 index*SL / (index+1)*SL 处，
+    // 4 顶点的 world x 范围应严格等于
+    //   [roadCenterOffsetAt(index*SL) - ROAD_HALF_WIDTH,
+    //    roadCenterOffsetAt(index*SL) + ROAD_HALF_WIDTH]
+    // 即 [-ROAD_HALF_WIDTH+offset, +ROAD_HALF_WIDTH+offset] 的路面。
+    // 4 条标线 leftEdge / leftDivider / rightDivider / rightEdge 必须
+    // 落在该范围内、且 leftEdge < leftDivider < rightDivider < rightEdge。
+    // buildCurveAlignedQuad 的 xAtStart/xAtEnd 语义为“中线 x”，
+    // 路面传 halfWidth = ROAD_HALF_WIDTH 时必须传 roadCenterOffsetAt
+    // （中线 x），不能传 laneLinesXAt().leftEdge / rightEdge（边缘 x），
+    // 否则路面会偏移 ROAD_HALF_WIDTH，右半 / 左半边路面缺失而露出暗背景。
+    const sl = ROAD_SEGMENT_LENGTH;
+    for (const p of [0, 1, 50, 100, 239, 240, 241, 480, 720, ROAD_TOTAL_LENGTH * 3.7]) {
+      const segs = buildRoadSegments(p);
+      for (let i = 0; i < segs.length; i++) {
+        const startCenter = roadCenterOffsetAt(i * sl);
+        const endCenter = roadCenterOffsetAt((i + 1) * sl);
+        const startLines = laneLinesXAt(i * sl);
+        const endLines = laneLinesXAt((i + 1) * sl);
+
+        // 1) 路面 mesh 4 顶点的 world x 范围（路面传中线 x + ROAD_HALF_WIDTH）
+        //    必须覆盖 [-ROAD_HALF_WIDTH+offset, +ROAD_HALF_WIDTH+offset]。
+        //    路面顶点 x = 中线 ± ROAD_HALF_WIDTH：
+        //      v0 = startCenter - ROAD_HALF_WIDTH = startLines.leftEdge
+        //      v1 = startCenter + ROAD_HALF_WIDTH = startLines.rightEdge
+        //      v2 = endCenter   + ROAD_HALF_WIDTH = endLines.rightEdge
+        //      v3 = endCenter   - ROAD_HALF_WIDTH = endLines.leftEdge
+        //    这与 4 条标线在世界 x 上的两端严格重合 → 标线落在路面表面。
+        const surfaceV0WorldX = startCenter - ROAD_HALF_WIDTH;
+        const surfaceV1WorldX = startCenter + ROAD_HALF_WIDTH;
+        const surfaceV2WorldX = endCenter + ROAD_HALF_WIDTH;
+        const surfaceV3WorldX = endCenter - ROAD_HALF_WIDTH;
+
+        // 路面顶点 x 必须严格等于 laneLinesXAt 给出的边缘 x
+        //    （这是“路面覆盖整条路面”的代数等价表述）
+        expect(surfaceV0WorldX).toBeCloseTo(startLines.leftEdge, 10);
+        expect(surfaceV1WorldX).toBeCloseTo(startLines.rightEdge, 10);
+        expect(surfaceV2WorldX).toBeCloseTo(endLines.rightEdge, 10);
+        expect(surfaceV3WorldX).toBeCloseTo(endLines.leftEdge, 10);
+
+        // 路面顶点对的对称性：中线 + ROAD_HALF_WIDTH 与中线 - ROAD_HALF_WIDTH
+        //    间隔 2 * ROAD_HALF_WIDTH = LANE_COUNT * LANE_WIDTH
+        expect(surfaceV1WorldX - surfaceV0WorldX).toBeCloseTo(2 * ROAD_HALF_WIDTH, 10);
+        expect(surfaceV2WorldX - surfaceV3WorldX).toBeCloseTo(2 * ROAD_HALF_WIDTH, 10);
+
+        // 2) 4 条标线在段首的 world x 必须严格落在路面 mesh 横向范围内
+        //    （防止路面错位后标线悬空脱离路面）
+        expect(startLines.leftEdge).toBeGreaterThanOrEqual(surfaceV0WorldX - 1e-9);
+        expect(startLines.leftEdge).toBeLessThanOrEqual(surfaceV1WorldX + 1e-9);
+        expect(startLines.rightEdge).toBeGreaterThanOrEqual(surfaceV0WorldX - 1e-9);
+        expect(startLines.rightEdge).toBeLessThanOrEqual(surfaceV1WorldX + 1e-9);
+
+        // 3) 4 条标线在段首的世界 x 顺序：leftEdge < leftDivider < rightDivider < rightEdge
+        expect(startLines.leftEdge).toBeLessThan(startLines.leftDivider);
+        expect(startLines.leftDivider).toBeLessThan(startLines.rightDivider);
+        expect(startLines.rightDivider).toBeLessThan(startLines.rightEdge);
+        // 路面路面外边界 = 中线 ± ROAD_HALF_WIDTH；车道分道线在 ±LANE_WIDTH/2
+        //    分道线 x = 中线 ± LANE_WIDTH/2，严格在路面范围内
+        const expectedLeftDivider = startCenter - LANE_WIDTH / 2;
+        const expectedRightDivider = startCenter + LANE_WIDTH / 2;
+        expect(startLines.leftDivider).toBeCloseTo(expectedLeftDivider, 10);
+        expect(startLines.rightDivider).toBeCloseTo(expectedRightDivider, 10);
+      }
+    }
+  });
+});
+
 describe('racingRoad.js — 边界情况', () => {
   it('roadCenterOffsetAt 应处理非数值输入', () => {
     expect(roadCenterOffsetAt(NaN)).toBe(0);

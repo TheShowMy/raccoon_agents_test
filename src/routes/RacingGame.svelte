@@ -14,6 +14,8 @@
     advanceRoadProgress,
     laneCenterXAt,
     laneFrameAt,
+    roadCenterOffsetAt,
+    laneLinesXAt,
     ROAD_SEGMENT_COUNT,
     ROAD_SEGMENT_LENGTH,
     ROAD_HALF_WIDTH,
@@ -322,10 +324,42 @@
     const group = new THREE.Group();
     group.name = `RoadSegment_${index}`;
 
-    // 路面：宽 ROAD_HALF_WIDTH*2、长 ROAD_SEGMENT_LENGTH 的矩形（局部坐标）
-    const surfaceGeo = new THREE.PlaneGeometry(
-      ROAD_HALF_WIDTH * 2,
-      ROAD_SEGMENT_LENGTH
+    // Bug1 修复：用贴合曲线的 BufferGeometry 重建道路段。
+    //
+    // 段首 / 段尾的曲线 x 值（绝对 z = index*SL 与 (index+1)*SL）由
+    // roadCenterOffsetAt 给出（等价于 laneLinesXAt 在 visualZ - progress
+    // 通路下的查询）。这两个值不随 progress 改变，段内线性插值得出
+    // centerOffsetX（与 buildRoadSegments 输出保持一致）。
+    // 渲染层通过 grp.position 平移把 mesh 对齐到曲线：每个 mesh 的 4 个
+    // 顶点直接落在曲线对应的 (x, z) 上，无需 heading 旋转。
+    //
+    // 不旋转 heading 的原因：原实现用 PlaneGeometry 旋转 heading 对齐曲线，
+    // 但 sin(h) 在大 heading 下不等于 h（线性近似失效），会导致相邻段在
+    // 弯道角点处出现错位 / 暗背景缝隙 / 标线断裂。新实现 4 顶点直接落在
+    // 曲线 (x, z) 上，从根本上消除该近似。
+    const sl = ROAD_SEGMENT_LENGTH;
+    // 段首 / 段尾的曲线中线 x（绝对 z = index*SL 与 (index+1)*SL）。
+    // 注意：buildCurveAlignedQuad 的 xAtStart/xAtEnd 语义是“中线 x”，
+    // 路面 mesh 顶点会从 (中线 - halfWidth) 扩展到 (中线 + halfWidth)，
+    // 因此路面传 ROAD_HALF_WIDTH 作为 halfWidth 时必须传中线 x（roadCenterOffsetAt），
+    // 不能传 leftEdge / rightEdge（否则路面会向左/右偏移 ROAD_HALF_WIDTH，
+    // 露出暗背景缝隙）。4 条标线则传各自的世界 x（leftEdge / leftDivider /
+    // rightDivider / rightEdge），halfWidth 是标线半厚，扩展后落在路面表面。
+    const startCenter = roadCenterOffsetAt(index * sl);
+    const endCenter = roadCenterOffsetAt((index + 1) * sl);
+    const startLines = laneLinesXAt(index * sl);
+    const endLines = laneLinesXAt((index + 1) * sl);
+    const centerOffsetX = roadCenterOffsetAt(index * sl + sl / 2);
+
+    // 路面：4 顶点贴合曲线的 quad，halfWidth = ROAD_HALF_WIDTH
+    // → 段首处顶点 x 范围为 [startCenter - ROAD_HALF_WIDTH, startCenter + ROAD_HALF_WIDTH]
+    //    ≡ [-ROAD_HALF_WIDTH + offset, +ROAD_HALF_WIDTH + offset]，覆盖整条路面。
+    const surfaceGeo = buildCurveAlignedQuad(
+      startCenter,
+      endCenter,
+      ROAD_HALF_WIDTH,
+      centerOffsetX,
+      0
     );
     const surfaceMat = new THREE.MeshStandardMaterial({
       color: 0x2a2c3a,
@@ -333,44 +367,77 @@
       metalness: 0.05,
     });
     const surface = new THREE.Mesh(surfaceGeo, surfaceMat);
-    surface.rotation.x = -Math.PI / 2;
     surface.receiveShadow = true;
     group.add(surface);
 
-    // 两条车道分隔线（黄色虚位感 → 实线，简化渲染）
-    const dividerOffset = (LANE_CENTER_X[0] + LANE_CENTER_X[1]) / 2;
-    addLaneMarking(group, dividerOffset, 0.18, 0xf7c948);
-    addLaneMarking(group, -dividerOffset, 0.18, 0xf7c948);
-
-    // 道路边缘（白色实线）
-    addLaneMarking(group, ROAD_HALF_WIDTH - ROAD_EDGE_HALF_THICKNESS, 0.12, 0xe6e9f5);
-    addLaneMarking(group, -ROAD_HALF_WIDTH + ROAD_EDGE_HALF_THICKNESS, 0.12, 0xe6e9f5);
+    // 4 条标线：leftEdge / leftDivider / rightDivider / rightEdge
+    // 各为独立 4 顶点 quad，y 抬高 0.005 防 z-fighting
+    const lineY = 0.005;
+    const lines = [
+      { start: startLines.leftEdge, end: endLines.leftEdge, halfWidth: ROAD_EDGE_HALF_THICKNESS, color: 0xe6e9f5 },
+      { start: startLines.leftDivider, end: endLines.leftDivider, halfWidth: 0.18, color: 0xf7c948 },
+      { start: startLines.rightDivider, end: endLines.rightDivider, halfWidth: 0.18, color: 0xf7c948 },
+      { start: startLines.rightEdge, end: endLines.rightEdge, halfWidth: ROAD_EDGE_HALF_THICKNESS, color: 0xe6e9f5 },
+    ];
+    for (const line of lines) {
+      const lineGeo = buildCurveAlignedQuad(
+        line.start,
+        line.end,
+        line.halfWidth,
+        centerOffsetX,
+        lineY
+      );
+      const lineMat = new THREE.MeshStandardMaterial({
+        color: line.color,
+        roughness: 0.6,
+        metalness: 0.05,
+        emissive: line.color,
+        emissiveIntensity: 0.12,
+      });
+      group.add(new THREE.Mesh(lineGeo, lineMat));
+    }
 
     return group;
   }
 
   /**
-   * 在路面段内添加一条车道标线（薄平面，铺在路面上方 0.01 防 z-fighting）。
-   * @param {THREE.Group} parent 路段组
-   * @param {number} localX 局部 x 坐标
-   * @param {number} halfWidth 标线半宽
-   * @param {number} color 颜色
+   * 构建一段贴合曲线的 4 顶点 quad BufferGeometry，作为路面或标线使用。
+   *
+   * 语义：xAtStart / xAtEnd 是“段首 / 段尾处的曲线中线 x”（world），
+   * mesh 横向会从中线 ± halfWidth 处展开，4 个顶点的 world x 分别为
+   *   xAtStart - halfWidth、xAtStart + halfWidth、xAtEnd + halfWidth、xAtEnd - halfWidth。
+   *
+   * 调用约定：
+   *   - 路面：中线 x = roadCenterOffsetAt(index*SL) / roadCenterOffsetAt((index+1)*SL)，
+   *           halfWidth = ROAD_HALF_WIDTH，使 mesh 覆盖
+   *           [-ROAD_HALF_WIDTH+offset, +ROAD_HALF_WIDTH+offset] 的路面；
+   *     ⚠ 切勿传入 laneLinesXAt().leftEdge / rightEdge（那是边缘 x，不是中线 x），
+   *       否则路面会偏移 ROAD_HALF_WIDTH，露出右半 / 左半边暗背景缝隙。
+   *   - 标线：中线 x = laneLinesXAt().leftEdge / leftDivider / rightDivider / rightEdge，
+   *           halfWidth = ROAD_EDGE_HALF_THICKNESS（0.12）或 0.18，标线会落在路面表面。
+   *
+   * 4 顶点的局部 x 已减去 centerOffset，使 mesh 局部原点对齐到段中心；
+   * 4 顶点的局部 z 分别为 -SL/2、-SL/2、+SL/2、+SL/2，使 mesh 在 z 方向
+   * 横跨整段长度。仅通过 grp.position 平移即可让 mesh 在世界坐标中对齐
+   * 当前 progress 下的曲线，不再需要 heading 旋转。
    */
-  function addLaneMarking(parent, localX, halfWidth, color) {
-    const width = halfWidth * 2;
-    const length = ROAD_SEGMENT_LENGTH;
-    const geo = new THREE.PlaneGeometry(width, length);
-    const mat = new THREE.MeshStandardMaterial({
-      color,
-      roughness: 0.6,
-      metalness: 0.05,
-      emissive: color,
-      emissiveIntensity: 0.12,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.set(localX, 0.005, 0);
-    parent.add(mesh);
+  function buildCurveAlignedQuad(xAtStart, xAtEnd, halfWidth, centerOffset, y) {
+    const halfLen = ROAD_SEGMENT_LENGTH / 2;
+    const localStartX = xAtStart - centerOffset;
+    const localEndX = xAtEnd - centerOffset;
+    const verts = new Float32Array([
+      localStartX - halfWidth, y, -halfLen,
+      localStartX + halfWidth, y, -halfLen,
+      localEndX + halfWidth,   y,  halfLen,
+      localEndX - halfWidth,   y,  halfLen,
+    ]);
+    // 三角形顺序 (0, 2, 1) 与 (0, 3, 2) 使法线指向 +y（路面与标线在水平面，正面朝上）
+    const indices = new Uint16Array([0, 2, 1, 0, 3, 2]);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+    geo.setIndex(new THREE.BufferAttribute(indices, 1));
+    geo.computeVertexNormals();
+    return geo;
   }
 
   /**
@@ -428,8 +495,12 @@
   }
 
   /**
-   * 同步道路段：每段按高程和俯仰角摆放，使道路呈现起伏与蜿蜒。
-   * 路段绕 y 轴旋转与道路 heading 对齐，绕 x 轴倾斜与道路 pitch 对齐。
+   * 同步道路段：每段按高程与 z 位置摆放，使道路呈现蜿蜒。
+   * 路段绕 y 轴不再旋转：每个 mesh 的 4 顶点已按绝对 z = index*SL 与
+   * (index+1)*SL 处的曲线 roadCenterOffsetAt 取值，直接贴合曲线，
+   // 仅通过 grp.position 平移即可在世界坐标中对齐曲线（见 buildRoadSegmentGroup
+   // 中关于 sin(h) != h 引发错位 / 暗背景缝隙 / 标线断裂的注释）。
+   // 俯仰角（pitch）当前恒为 0，故未对 x 轴施加旋转。
    */
   function syncRoadSegments() {
     const segments = buildRoadSegments(roadProgress);
@@ -437,10 +508,12 @@
       const seg = segments[i];
       const grp = roadSegmentGroups[i];
       if (!grp) continue;
-      // 路段 x 位置、y 高度、z 位置
+      // 路段 x 位置、y 高度、z 位置：仅通过平移使 mesh 在世界坐标中对齐曲线
       grp.position.set(seg.centerOffsetX, seg.elevation, seg.zCenterWorld);
-      // 绕 y 轴旋转与道路水平方向对齐
-      grp.rotation.y = seg.heading;
+      // 取消 heading 旋转对齐：每个 mesh 的 4 顶点已直接落在曲线 (x, z) 上，
+      // 不再需要 heading 旋转；sin(h) != h 在大 heading 下会让相邻段在弯道
+      // 角点处出现错位 / 暗背景缝隙 / 标线断裂。
+      grp.rotation.y = 0;
     }
   }
 

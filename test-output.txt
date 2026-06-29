@@ -1,10 +1,15 @@
 
- RUN  v2.1.9 /Users/theshow/work/rust/project/raccoon_node/data/projects/project-1782356132910/worktrees/task-road-procgen
+ RUN  v2.1.9 /Users/theshow/work/rust/project/raccoon_node/data/projects/project-1782356132910/worktrees/branch-merge-1
 
- ✓ tests/racingRoad.test.js (50 tests) 11ms
+ ✓ tests/racingEffects.test.js (25 tests) 3ms
+ ✓ tests/racingEngine.test.js (7 tests) 4ms
+ ✓ tests/airplaneGame.test.js (37 tests) 4ms
+ ✓ tests/highlight.test.js (69 tests) 8ms
+ ✓ tests/racingRoad.test.js (67 tests) 17ms
+ ✓ tests/Window.test.js (6 tests) 21ms
 
- Test Files  1 passed (1)
-      Tests  50 passed (50)
-   Start at  11:16:15
-   Duration  307ms (transform 22ms, setup 0ms, collect 20ms, tests 11ms, environment 0ms, prepare 41ms)
+ Test Files  6 passed (6)
+      Tests  211 passed (211)
+   Start at  12:04:47
+   Duration  830ms (transform 303ms, setup 0ms, collect 427ms, tests 56ms, environment 278ms, prepare 266ms)
 

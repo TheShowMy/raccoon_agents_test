@@ -412,10 +412,13 @@
     const groundY = frame.y;
     playerMesh.position.set(frame.x, groundY + jumpY, PLAYER_VISUAL_Z);
 
-    // 车辆朝向：rotation.y 与道路 heading 一致，使车头始终朝向前进方向
-    // 越野车模型默认朝 -z 方向，heading > 0 表示道路向右弯，车辆需要左转
+    // 车辆朝向：rotation.y 与道路 heading 符号一致，使车头沿道路在世界坐标下的前进切线方向
+    // 越野车模型默认朝 -z 方向，玩家前进方向也是 -z。道路段以 rotation.y = +heading 铺设
+    // （使其 +Z 方向切线 = (heading, 0, 1)）。玩家沿 -Z 行驶，对应切线方向 = (-heading, 0, -1)；
+    // 让 rotation.y = +heading 可使模型 -Z 经旋转后映射到 (-heading, 0, -1)，与切线一致。
+    // 即 heading > 0 时车头朝左偏、heading < 0 时朝右偏，弯道时自然沿弯道切线行驶。
     // 显式归零俯仰与侧倾，仅保留偏航旋转，确保车轮贴地无倾斜
-    playerMesh.rotation.y = -frame.heading;
+    playerMesh.rotation.y = frame.heading;
     playerMesh.rotation.x = 0;
     playerMesh.rotation.z = 0;
   }

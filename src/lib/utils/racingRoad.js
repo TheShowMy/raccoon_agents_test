@@ -88,15 +88,24 @@ export const ROAD_SEGMENT_LENGTH = ROAD_TOTAL_LENGTH / ROAD_SEGMENT_COUNT;
 
 /**
  * 每个路段中心偏移 x 的最大绝对值（世界单位）。
- * 相邻两段 centerOffsetX 之差最大为 2 * ROAD_PROCGEN_MAX_OFFSET，
+ * 相邻两段 centerOffsetX 之差最大为 2 * ROAD_PROCGEN_MAX_OFFSET。
+ * 段内为平滑插值 s(t)（余弦方案：s(t) = 0.5 - 0.5·cos(πt)），
+ * 段内斜率 s'(t) = 0.5·π·sin(πt) 的最大值为 π/2（t = 0.5），
  * 因此单段内 heading 的最大绝对值为：
- *   ROAD_PROCGEN_MAX_HEADING = 2 * ROAD_PROCGEN_MAX_OFFSET / ROAD_SEGMENT_LENGTH
+ *   ROAD_PROCGEN_MAX_HEADING
+ *     = (2 * ROAD_PROCGEN_MAX_OFFSET / ROAD_SEGMENT_LENGTH) * max(s'(t))
+ *     = (2 * ROAD_PROCGEN_MAX_OFFSET / ROAD_SEGMENT_LENGTH) * (π / 2)
+ *
+ * 取值由验收标准中“单段最大斜率 ≤ 0.5 rad（约 28°）”硬性约束推导：
+ *   2 * MAX_OFFSET / 6 * π/2 ≤ 0.5
+ *   ⇒ MAX_OFFSET ≤ 0.5 * 6 / π = 3/π ≈ 0.9549
+ * 这里取 0.9 留出约 6% 安全裕量，对应 ROAD_PROCGEN_MAX_HEADING ≈ 0.471 rad。
  */
-export const ROAD_PROCGEN_MAX_OFFSET = 6;
+export const ROAD_PROCGEN_MAX_OFFSET = 0.9;
 
-/** 单段内 heading 的最大绝对值（由上述公式推导） */
+/** 单段内 heading 的最大绝对值（由上述公式推导，余弦方案 max(s'(t)) = π/2） */
 export const ROAD_PROCGEN_MAX_HEADING =
-  (2 * ROAD_PROCGEN_MAX_OFFSET) / ROAD_SEGMENT_LENGTH;
+  ((2 * ROAD_PROCGEN_MAX_OFFSET) / ROAD_SEGMENT_LENGTH) * (Math.PI / 2);
 
 /**
  * 旧版流式生成缓存的窗口大小（保留以兼容旧调用方与测试）。
@@ -223,9 +232,40 @@ function _ensureSegment(idx) {
    =================================================================== */
 
 /**
+ * 段内平滑插值函数 s(t)，t ∈ [0, 1]。
+ * 满足 s(0) = 0、s(1) = 1、s'(0) = s'(1) = 0。
+ * 采用余弦方案：s(t) = 0.5 - 0.5 * cos(π * t)
+ *  - t = 0 时 s = 0；
+ *  - t = 1 时 s = 1；
+ *  - t = 0.5 时 s = 0.5（中点对称，与线性插值一致）。
+ *
+ * @param {number} t - 段内局部参数，∈ [0, 1]
+ * @returns {number} 平滑插值结果
+ */
+function _smoothStep(t) {
+  return 0.5 - 0.5 * Math.cos(Math.PI * t);
+}
+
+/**
+ * 段内平滑插值函数的导数 s'(t)，t ∈ [0, 1]。
+ * 余弦方案：s'(t) = 0.5 * π * sin(π * t)
+ *  - t = 0 时 s' = 0；
+ *  - t = 1 时 s' = 0；
+ *  - t = 0.5 时 s' = π/2（约 1.5708，全段最大值）。
+ *
+ * @param {number} t - 段内局部参数，∈ [0, 1]
+ * @returns {number} 平滑插值函数的导数
+ */
+function _smoothStepDerivative(t) {
+  return 0.5 * Math.PI * Math.sin(Math.PI * t);
+}
+
+/**
  * 计算道路中心线在指定 z 处的水平偏移 x
  * 每个 baseIndex = (segmentIndex mod ROAD_SEGMENT_COUNT) 拥有一个随机中心偏移，
- * 任意 z 通过"所在段 → 下一段"的线性插值得到连续结果；
+ * 任意 z 通过"所在段 → 下一段"的平滑插值（余弦 s(t)）得到连续结果；
+ * 因 s(0) = 0、s(1) = 1 且 s'(0) = s'(1) = 0，
+ * 段内为平滑曲线，段间 C¹ 衔接，整条中心线无折角。
  * 因 baseIndex 以 ROAD_SEGMENT_COUNT 为周期，本函数以 ROAD_TOTAL_LENGTH 为周期：
  *   roadCenterOffsetAt(z) === roadCenterOffsetAt(z + ROAD_TOTAL_LENGTH)
  *
@@ -243,13 +283,18 @@ export function roadCenterOffsetAt(z) {
   const t = tRaw <= 0 ? 0 : tRaw >= 1 ? 1 - 1e-9 : tRaw;
   const segA = _ensureSegment(idx);
   const segB = _ensureSegment(idx + 1);
-  return segA.centerOffsetX * (1 - t) + segB.centerOffsetX * t;
+  // 段内为平滑插值 s(t)：segA.centerOffsetX·(1-s(t)) + segB.centerOffsetX·s(t)
+  // s(0) = 0, s(1) = 1, s'(0) = s'(1) = 0 ⇒ 段间 C¹ 衔接
+  const s = _smoothStep(t);
+  return segA.centerOffsetX * (1 - s) + segB.centerOffsetX * s;
 }
 
 /**
  * 计算道路中心线在指定 z 处的切线斜率（弧度）
- * 段内为线性插值，因此斜率（heading）在一段内为常量：
- *   heading = (segB.centerOffsetX - segA.centerOffsetX) / ROAD_SEGMENT_LENGTH
+ * 段内为平滑插值，斜率（heading）为 s'(t) 在段内的连续函数：
+ *   heading = (segB.centerOffsetX - segA.centerOffsetX) / ROAD_SEGMENT_LENGTH * s'(t)
+ * 因 s'(0) = s'(1) = 0，相邻段的斜率在段边界处严格为 0，
+ * 段间 C¹ 衔接（导数连续），无折角。
  * 与 roadCenterOffsetAt 同为以 ROAD_TOTAL_LENGTH 为周期的函数。
  *
  * @param {number} z - 世界 z 坐标
@@ -260,9 +305,12 @@ export function roadHeadingAt(z) {
   const zz = Number(z);
   const sl = ROAD_SEGMENT_LENGTH;
   const idx = Math.floor(zz / sl);
+  // 钳制 t 与 roadCenterOffsetAt 一致，保证两函数在同一 t 上取值
+  const tRaw = (zz - idx * sl) / sl;
+  const t = tRaw <= 0 ? 0 : tRaw >= 1 ? 1 - 1e-9 : tRaw;
   const segA = _ensureSegment(idx);
   const segB = _ensureSegment(idx + 1);
-  return (segB.centerOffsetX - segA.centerOffsetX) / sl;
+  return ((segB.centerOffsetX - segA.centerOffsetX) / sl) * _smoothStepDerivative(t);
 }
 
 /**

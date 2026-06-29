@@ -329,7 +329,7 @@ describe('racingRoad.js — 道路分段（平坦赛道）', () => {
   });
 
   it('在 progress=0 时 zCenterWorld 与 zCenter 相等（wrap 边界）', () => {
-    // progress=0 时 wrapRoadZ(zCenter - 0) = zCenter，是 wrap 后的恒等边界
+    // progress=0 时 wrapRoadZ(zCenter + 0) = zCenter，是 wrap 后的恒等边界
     const segments = buildRoadSegments(0);
     for (const seg of segments) {
       expect(seg.zCenterWorld).toBe(seg.zCenter);
@@ -355,16 +355,68 @@ describe('racingRoad.js — 道路分段（平坦赛道）', () => {
     }
   });
 
-  it('progress 增加一段长度后，zCenterWorld 整体向前 wrap 减少 1 段', () => {
-    // 验证 zCenterWorld = wrapRoadZ(zCenter - p) 的精确关系
+  it('progress 增加一段长度后，zCenterWorld 整体向前 wrap 增加 1 段', () => {
+    // 验证 zCenterWorld = wrapRoadZ(zCenter + p) 的精确关系：
+    // progress 增加一段长度时，每段视觉 z 在循环窗口内整体朝 +z 方向推进一段，
+    // 即 segment i 的新 zCenterWorld 等于旧 progress 下 segment i+1 的视觉 z。
     const sl = ROAD_SEGMENT_LENGTH;
     const p = sl; // 推进 1 段长度
     const segments = buildRoadSegments(p);
     for (let i = 0; i < segments.length; i++) {
       const zCenter = i * sl + sl / 2;
-      const expected = ((zCenter - p) % ROAD_TOTAL_LENGTH + ROAD_TOTAL_LENGTH) %
+      const expected = ((zCenter + p) % ROAD_TOTAL_LENGTH + ROAD_TOTAL_LENGTH) %
         ROAD_TOTAL_LENGTH;
       expect(segments[i].zCenterWorld).toBeCloseTo(expected, 10);
+    }
+  });
+
+  it('progress 单调递增时 zCenterWorld 在循环窗口内单调递增（道路朝 +z 滚动）', () => {
+    // zCenterWorld = wrap(zCenter + p)，progress 单调递增时：
+    //   - 对任意段 i，只要 p 还未触发 wrap（即 zCenter + p < ROAD_TOTAL_LENGTH），
+    //     zCenterWorld 严格等于 zCenter + p，随 p 单调递增；
+    //   - 对所有段共享同一 Δp，因此 progress 增加 dp 时每段 zCenterWorld 都增加 dp
+    //     （若触发 wrap 则差值 mod ROAD_TOTAL_LENGTH 仍为 dp）。
+    // 这对应"道路朝 +z 方向（相机方向）滚动、玩家视觉相对道路为前进"的方向约定。
+    const sl = ROAD_SEGMENT_LENGTH;
+
+    // 1) 在不触发 wrap 的小 Δp 下，每段 zCenterWorld 严格等于 zCenter + p。
+    //    这里的所有 progress 都满足 max(zCenter) + p < ROAD_TOTAL_LENGTH，
+    //    即对所有段都不触发 wrap。
+    const progresses = [0, sl * 0.1, sl * 0.25, sl * 0.4];
+    for (const p of progresses) {
+      const segs = buildRoadSegments(p);
+      for (let i = 0; i < segs.length; i++) {
+        const zCenter = i * sl + sl / 2;
+        // 不触发 wrap ⇒ wrap(zCenter + p) === zCenter + p
+        expect(zCenter + p).toBeLessThan(ROAD_TOTAL_LENGTH);
+        expect(segs[i].zCenterWorld).toBeCloseTo(zCenter + p, 10);
+      }
+    }
+
+    // 2) 关键方向断言：progress 从 0 → SL/4 时每段 zCenterWorld 严格单调递增，
+    //    且每段共享同一 Δp（无 wrap、无方向反转）。
+    const a = buildRoadSegments(0);
+    const b = buildRoadSegments(sl * 0.25);
+    for (let i = 0; i < a.length; i++) {
+      expect(b[i].zCenterWorld).toBeGreaterThan(a[i].zCenterWorld);
+      expect(b[i].zCenterWorld - a[i].zCenterWorld).toBeCloseTo(sl * 0.25, 10);
+    }
+
+    // 3) 连续推进 progress：每一步都朝 +z 方向推进一段，无反向。
+    //    触发 wrap 时 (next - prev) mod ROAD_TOTAL_LENGTH === sl，未触发 wrap 时
+    //    next - prev === sl；两种情形下"循环窗口内的有效增量"都是 +sl。
+    let prev = buildRoadSegments(0);
+    for (let k = 1; k <= 20; k++) {
+      const next = buildRoadSegments(k * sl);
+      for (let i = 0; i < next.length; i++) {
+        const diffRaw = next[i].zCenterWorld - prev[i].zCenterWorld;
+        const diffWrapped =
+          ((diffRaw % ROAD_TOTAL_LENGTH) + ROAD_TOTAL_LENGTH) %
+          ROAD_TOTAL_LENGTH;
+        // 循环窗口内有效增量恒为 +sl，证明 zCenterWorld 一直朝 +z 方向滚动
+        expect(diffWrapped).toBeCloseTo(sl, 10);
+      }
+      prev = next;
     }
   });
 });
@@ -733,16 +785,16 @@ describe('racingRoad.js — 周期连续性', () => {
 
   it('buildRoadSegments 任意 progress 下整段数组的 centerOffsetX 与 ROAD_SEGMENT_COUNT 内 baseIndex 哈希确定结果一致', () => {
     // 用 roadCenterOffsetAt 直接计算 equivalent base 值，验证 buildRoadSegments
-    // 输出的 centerOffsetX 与 zCenterWorld + progress 处的曲线取值严格一致。
+    // 输出的 centerOffsetX 与 zCenterWorld - progress 处的曲线取值严格一致。
     const absZs = [0, 1, 50, 100, 239, 240, 480, 720];
     for (const z of absZs) {
       const segs = buildRoadSegments(z);
       for (let i = 0; i < segs.length; i++) {
-        // curveZ = zCenterWorld + progress, 应当与直接读取的曲线值一致
-        // (对周期性曲线恒成立: roadCenterOffsetAt(zCenterWorld + p) ≡ roadCenterOffsetAt(zCenter))
-        const expected = roadCenterOffsetAt(segs[i].zCenterWorld + z);
+        // curveZ = zCenterWorld - progress, 应当与直接读取的曲线值一致
+        // (对周期性曲线恒成立: roadCenterOffsetAt(zCenterWorld - p) ≡ roadCenterOffsetAt(zCenter))
+        const expected = roadCenterOffsetAt(segs[i].zCenterWorld - z);
         expect(segs[i].centerOffsetX).toBeCloseTo(expected, 12);
-        const expectedHeading = roadHeadingAt(segs[i].zCenterWorld + z);
+        const expectedHeading = roadHeadingAt(segs[i].zCenterWorld - z);
         expect(segs[i].heading).toBeCloseTo(expectedHeading, 12);
       }
     }

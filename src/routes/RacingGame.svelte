@@ -405,20 +405,22 @@
     const lane = state.player.lane;
     const jumpY = state.player.y;
 
-    // 获取道路在玩家位置的框架：z 参数必须加上 roadProgress，
+    // 获取道路在玩家位置的框架：z 参数减去 roadProgress，
     // 把视觉 z 折算回当前 progress 下等价的曲线绝对 z，
     // 玩家车偏航与位置才会贴合当前滚动后的道路切线。
-    const frame = laneFrameAt(lane, PLAYER_VISUAL_Z + roadProgress);
+    const frame = laneFrameAt(lane, PLAYER_VISUAL_Z - roadProgress);
 
     // 玩家车辆贴合路面高度 + 跳跃高度
     const groundY = frame.y;
     playerMesh.position.set(frame.x, groundY + jumpY, PLAYER_VISUAL_Z);
 
     // 车辆朝向：rotation.y 与道路 heading 符号一致，使车头沿道路在世界坐标下的前进切线方向
-    // 越野车模型默认朝 -z 方向，玩家前进方向也是 -z。道路段以 rotation.y = +heading 铺设
-    // （使其 +Z 方向切线 = (heading, 0, 1)）。玩家沿 -Z 行驶，对应切线方向 = (-heading, 0, -1)；
-    // 让 rotation.y = +heading 可使模型 -Z 经旋转后映射到 (-heading, 0, -1)，与切线一致。
-    // 即 heading > 0 时车头朝左偏、heading < 0 时朝右偏，弯道时自然沿弯道切线行驶。
+    // 越野车模型默认朝 -z 方向；视觉上道路朝 +z 滚动（玩家视觉相对道路为前进），
+    // 对应"赛道向玩家眼前持续滑出、玩家车头朝向 -z 方向"的视觉。
+    // 道路段以 rotation.y = +heading 铺设（使其 +Z 方向切线 = (heading, 0, 1)），
+    // 玩家视觉前进方向在 -Z 上的切线方向 = (-heading, 0, -1)。
+    // 让 rotation.y = +heading 可使模型 -Z 经旋转后映射到 (-heading, 0, -1)，与切线一致：
+    // heading > 0 时车头朝左偏、heading < 0 时朝右偏，弯道时自然沿弯道切线行驶。
     // 显式归零俯仰与侧倾，仅保留偏航旋转，确保车轮贴地无倾斜
     playerMesh.rotation.y = frame.heading;
     playerMesh.rotation.x = 0;
@@ -461,9 +463,9 @@
         entityMeshes.set(e.id, mesh);
       }
       const visualZ = e.z + Z_VISUAL_OFFSET;
-      // z 参数加上 roadProgress，把视觉 z 折算回当前 progress 下等价的曲线绝对 z，
+      // z 参数减去 roadProgress，把视觉 z 折算回当前 progress 下等价的曲线绝对 z，
       // 障碍物、对向车辆、道具的朝向与位置才贴合道路切线。
-      const frame = laneFrameAt(e.lane, visualZ + roadProgress);
+      const frame = laneFrameAt(e.lane, visualZ - roadProgress);
 
       // 实体贴合道路高度
       mesh.position.set(frame.x, frame.y, visualZ);
@@ -543,8 +545,8 @@
           typeof currentEvent.z === 'number'
         ) {
           const visualZ = currentEvent.z + Z_VISUAL_OFFSET;
-          // z 参数加上 roadProgress，让粒子位置贴合当前滚动后的道路切线
-          const frame = laneFrameAt(currentEvent.lane, visualZ + roadProgress);
+          // z 参数减去 roadProgress，让粒子位置贴合当前滚动后的道路切线
+          const frame = laneFrameAt(currentEvent.lane, visualZ - roadProgress);
           fx = frame.x;
           fy = frame.y + 0.5; // 略抬高到实体中心高度，让粒子从实体身上炸开
           fz = visualZ;

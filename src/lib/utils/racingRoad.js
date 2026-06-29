@@ -15,7 +15,7 @@
  *
  * buildRoadSegments 的几何输出（centerOffsetX / heading）与 progress 无关：
  *   任意 progress 下，segment i 的 centerOffsetX / heading 仅由其基础路段序号
- *   决定（曲线以 ROAD_TOTAL_LENGTH 为周期；curveZ = zCenterWorld + progress 与
+ *   决定（曲线以 ROAD_TOTAL_LENGTH 为周期；curveZ = zCenterWorld - progress 与
  *   zCenter 在折算意义下等价）；推进 progress 只会改变每段的 zCenterWorld 字段，
  *   不会引入新的随机弯道，也不会让中心偏移随时间发生非预期跳变。
  *
@@ -28,8 +28,9 @@
  *   y — 垂直方向（本模块不直接使用，由渲染层处理）
  *   z — 纵深方向，远处为正（+z），玩家位于 z = 0，面向 -z 方向观看
  *
- * 道路沿 +z 方向无限延伸；"道路后退"通过 progress 累计表示：
- *   progress 单调递增，对应整条道路相对世界坐标系向 -z 方向移动的距离。
+ * 道路沿 +z 方向无限延伸；progress 累计表示"玩家前进"的距离：
+ *   progress 单调递增，对应整条道路相对世界坐标系向 +z 方向（相机方向）移动的距离，
+ *   视觉上"赛道在玩家眼前持续向相机方向滑出、玩家车相对道路为前进"。
  *   渲染层每帧只需读取最新的 progress，即可由本模块派生出所有几何参数。
  *
  * 高程与坡度：当前实现保持赛道完全平坦（elevation = pitch = 0）。
@@ -409,7 +410,8 @@ export function wrapRoadZ(z) {
 
 /**
  * 给定当前 progress、时间增量与移动速度，返回新的 progress
- * （progress 单调递增，对应道路整体向 -z 方向后退的距离）
+ * （progress 单调递增，对应道路整体向 +z 方向（相机方向）滚动、
+ * 玩家视觉相对道路为前进）
  *
  * @param {number} progress - 当前滚动进度（z 单位）
  * @param {number} deltaSeconds - 上一帧经过的秒数（负值会被钳为 0）
@@ -432,10 +434,11 @@ export function advanceRoadProgress(progress, deltaSeconds, speed) {
  * 在周期性生成下：
  *   - 每段对应一个固定的"索引 z"（zCenter = i * SL + halfLen），代表该路段
  *     在缓存中的稳定身份。
- *   - 视觉 z（zCenterWorld）= wrapRoadZ(zCenter - progress)，随 progress 推进
- *     在 [0, ROAD_TOTAL_LENGTH) 区间内循环 wrap，对应"赛道在玩家眼前持续后退、
- *     路段源源不断从前方进入视野"的视觉感受。
- *   - 曲线查询使用 curveZ = zCenterWorld + progress：
+ *   - 视觉 z（zCenterWorld）= wrapRoadZ(zCenter + progress)，随 progress 推进
+ *     在 [0, ROAD_TOTAL_LENGTH) 区间内循环 wrap。progress 单调递增 →
+ *     zCenterWorld 朝 +z 方向移动 → 玩家视觉相对道路为前进，对应"赛道在玩家
+ *     眼前持续向相机方向（+z）滚出、路段源源不断从前方进入视野"的视觉感受。
+ *   - 曲线查询使用 curveZ = zCenterWorld - progress：
  *       把每段视觉 z 还原到与之等价的绝对 z 上查询曲线（因曲线以
  *       ROAD_TOTAL_LENGTH 为周期，curveZ 与 zCenter 在视觉 z 折算意义下等价）。
  *       segment i 在任意 progress 下的 centerOffsetX/heading 仅由其视觉位置 v 决定，
@@ -464,14 +467,14 @@ export function buildRoadSegments(progress = 0) {
   const segments = new Array(ROAD_SEGMENT_COUNT);
   for (let i = 0; i < ROAD_SEGMENT_COUNT; i++) {
     const zCenter = i * ROAD_SEGMENT_LENGTH + halfLen;
-    // 视觉 z 与旧实现保持一致：随 progress 推进在 [0, ROAD_TOTAL_LENGTH) 内
-    // 循环 wrap，让玩家感到"赛道在持续后退"。
-    const zCenterWorld = wrapRoadZ(zCenter - p);
-    // 曲线查询使用 zCenterWorld + progress：
+    // 视觉 z：随 progress 推进在 [0, ROAD_TOTAL_LENGTH) 内循环 wrap，
+    // progress 单调递增 → zCenterWorld 朝 +z 方向移动 → 玩家视觉相对道路为前进。
+    const zCenterWorld = wrapRoadZ(zCenter + p);
+    // 曲线查询使用 zCenterWorld - progress：
     // 把每段的视觉 z 还原到与之等价的曲线绝对 z 上；曲线以 ROAD_TOTAL_LENGTH
     // 为周期，因此 segment i 在任意 progress 下的曲线值仅由其基础路段序号决定，
     // 保证视觉循环边界处首尾段衔接一致、无裂缝/无跳变。
-    const curveZ = zCenterWorld + p;
+    const curveZ = zCenterWorld - p;
     segments[i] = {
       index: i,
       zStart: i * ROAD_SEGMENT_LENGTH,

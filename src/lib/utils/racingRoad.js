@@ -1,11 +1,19 @@
 /**
  * 3D 越野车竞速 — 蜿蜒道路与三条车道模块
  *
- * 定义赛道几何参数、蜿蜒曲线函数与道路后退滚动逻辑，
- * 供渲染层按需读取路段数组、车道线位置和弯曲偏移等参数。
+ * 道路几何采用「流式 procedural 生成」：
+ *   - 内部维护一个按"路段序号 (segmentIndex)"索引的缓存 _segmentCache
+ *   - 每次 roadCenterOffsetAt(z) / roadHeadingAt(z) 根据绝对 z 算出所属路段，
+ *     缺失的路段会按 (seed, segmentIndex) 哈希出的 PRNG 立即生成并写入缓存
+ *   - 缓存中离"光标"（已生成的最大路段序号）较远的旧路段会被自动清理
+ *   - 调用 setRoadSeed 会清空缓存，让新种子驱动出全新形态
  *
- * 本模块只描述道路与车道的数据，不创建车辆 / 障碍物 / 加血道具模型，
- * 也不处理游戏状态（分数、生命值、难度曲线等）。
+ * 道路不再"开局一次性按周期函数铺设"——同一局游戏中，玩家前进行驶时，
+ * 原本未知的绝对 z 会触发新路段生成，玩家看到的就是源源不断的新弯道。
+ *
+ * 对外接口（roadCenterOffsetAt / roadHeadingAt / laneFrameAt /
+ * buildRoadSegments / roadFrameAt / laneCenterXAt 等）仍按世界 z 坐标输入，
+ * 调用方无需感知内部缓存。
  *
  * 坐标系约定：
  *   x — 水平方向（左负右正）
@@ -16,10 +24,7 @@
  *   progress 单调递增，对应整条道路相对世界坐标系向 -z 方向移动的距离。
  *   渲染层每帧只需读取最新的 progress，即可由本模块派生出所有几何参数。
  *
- * 高程与坡度：
- *   道路中心线在 y 方向有起伏，通过 roadElevationAt(z) 计算高程。
- *   俯仰角（pitch）由 roadPitchAt(z) 计算，表示道路在竖直面内的倾斜。
- *   法线向量（normal）由 heading 与 pitch 派生，指向道路上方。
+ * 高程与坡度：当前实现保持赛道完全平坦（elevation = pitch = 0）。
  */
 
 /* ===================================================================
@@ -49,7 +54,12 @@ export const ROAD_HALF_WIDTH = (LANE_WIDTH * LANE_COUNT) / 2;
    道路分段
    =================================================================== */
 
-/** 道路总长（沿 z 方向，世界单位），一个完整循环周期 */
+/**
+ * 视觉窗口总长（沿 z 方向，世界单位）。
+ * 渲染层按 ROAD_SEGMENT_COUNT 段覆盖此长度的窗口；该值在流式生成下不再
+ * 决定道路"循环周期"，仅作为可视窗口长度，保留以兼容旧调用方对
+ * "zStart / zEnd 连续覆盖整段" 的测试与视觉假设。
+ */
 export const ROAD_TOTAL_LENGTH = 240;
 
 /** 道路分段数 */
@@ -59,58 +69,27 @@ export const ROAD_SEGMENT_COUNT = 40;
 export const ROAD_SEGMENT_LENGTH = ROAD_TOTAL_LENGTH / ROAD_SEGMENT_COUNT;
 
 /* ===================================================================
-   蜿蜒曲线参数
+   流式生成参数
    =================================================================== */
 
-/** 第一层蜿蜒振幅（道路中线相对 z 轴的最大水平偏移） */
-export const ROAD_CURVE_AMPLITUDE = 6;
-
-/** 第一层蜿蜒角频率（每 z 单位的弧度）
- *  取 2 个完整周期 / ROAD_TOTAL_LENGTH，保证道路中线在循环处无缝衔接。
+/**
+ * 每个路段中心偏移 x 的最大绝对值（世界单位）。
+ * 相邻两段 centerOffsetX 之差最大为 2 * ROAD_PROCGEN_MAX_OFFSET，
+ * 因此单段内 heading 的最大绝对值为：
+ *   ROAD_PROCGEN_MAX_HEADING = 2 * ROAD_PROCGEN_MAX_OFFSET / ROAD_SEGMENT_LENGTH
  */
-export const ROAD_CURVE_FREQUENCY = (4 * Math.PI) / ROAD_TOTAL_LENGTH;
+export const ROAD_PROCGEN_MAX_OFFSET = 6;
 
-/** 第一层蜿蜒相位偏移 */
-export const ROAD_CURVE_PHASE = 0;
+/** 单段内 heading 的最大绝对值（由上述公式推导） */
+export const ROAD_PROCGEN_MAX_HEADING =
+  (2 * ROAD_PROCGEN_MAX_OFFSET) / ROAD_SEGMENT_LENGTH;
 
-/** 第二层蜿蜒振幅（叠加产生更自然的摆动） */
-export const ROAD_CURVE_AMPLITUDE_2 = 2.5;
-
-/** 第二层蜿蜒角频率
- *  取 1 个完整周期 / ROAD_TOTAL_LENGTH，作为低频叠加层仍保持循环无缝。
+/**
+ * 缓存中保留的路段数（围绕已生成的最大路段序号向"过去"方向保留的窗口大小）。
+ * 缓存条目数超过 2 * BUFFER 时触发清理：删除 < (highestIdx - BUFFER) 的条目。
+ * 选 60 段（≈ 360 世界单位）足够覆盖 40 段视觉窗口 + 玩家前置 look-ahead。
  */
-export const ROAD_CURVE_FREQUENCY_2 = (2 * Math.PI) / ROAD_TOTAL_LENGTH;
-
-/** 第二层蜿蜒相位偏移 */
-export const ROAD_CURVE_PHASE_2 = 0;
-
-/* ===================================================================
-   竖向起伏（高程与坡度）参数
-   =================================================================== */
-
-/** 竖向起伏振幅（道路高程变化的最大幅度）
- * 设为 0 以禁用赛道坡度，确保道路完全平坦。 */
-export const ROAD_ELEVATION_AMPLITUDE = 0;
-
-/** 竖向起伏角频率（每 z 单位的弧度，控制起伏密度）
- *  取 1 个完整周期 / ROAD_TOTAL_LENGTH，保证道路高程在循环处无缝衔接。
- */
-export const ROAD_ELEVATION_FREQUENCY = (2 * Math.PI) / ROAD_TOTAL_LENGTH;
-
-/** 竖向起伏相位偏移 */
-export const ROAD_ELEVATION_PHASE = Math.PI * 0.3;
-
-/** 第二层竖向起伏振幅（叠加产生更自然的起伏）
- * 设为 0 以禁用赛道坡度，确保道路完全平坦。 */
-export const ROAD_ELEVATION_AMPLITUDE_2 = 0;
-
-/** 第二层竖向起伏角频率
- *  取 2 个完整周期 / ROAD_TOTAL_LENGTH，作为细节层仍保持循环无缝。
- */
-export const ROAD_ELEVATION_FREQUENCY_2 = (4 * Math.PI) / ROAD_TOTAL_LENGTH;
-
-/** 第二层竖向起伏相位偏移 */
-export const ROAD_ELEVATION_PHASE_2 = 0;
+export const ROAD_PROCGEN_CACHE_BUFFER = 60;
 
 /* ===================================================================
    道路种子与随机化
@@ -128,37 +107,106 @@ export function getRoadSeed() {
 }
 
 /**
- * 设置道路种子，影响道路水平曲线与竖向起伏的相位偏移。
- * 相同种子产生相同道路，不同种子产生可辨识变化。
+ * 设置道路种子。种子改变会清空路段缓存，让新种子驱动出全新的道路形态。
+ * 相同种子下，多次调用将产生完全确定的结果。
+ *
  * @param {number} seed - 种子值（任意整数或浮点数）
  */
 export function setRoadSeed(seed) {
-  _roadSeed = Number.isFinite(seed) ? seed : 0;
+  const next = Number.isFinite(seed) ? seed : 0;
+  if (next !== _roadSeed) {
+    _roadSeed = next;
+    _resetSegmentCache();
+  }
+}
+
+/* ===================================================================
+   流式路段缓存（内部状态）
+   =================================================================== */
+
+/**
+ * 已生成路段缓存：segmentIndex -> { centerOffsetX }
+ * 每个路段存储一个随机但确定（基于 seed + segmentIndex 哈希）的中心偏移。
+ */
+const _segmentCache = new Map();
+
+/** 缓存中最大的 segmentIndex（用于"光标"推进） */
+let _cachedHighestIdx = -1;
+
+/** 缓存中最小的 segmentIndex（用于调试 / 避免越界删除时误清） */
+let _cachedLowestIdx = Infinity;
+
+/**
+ * 清空路段缓存并重置光标。在 setRoadSeed 改变种子时调用，
+ * 也可由测试在重置环境时显式调用。
+ */
+function _resetSegmentCache() {
+  _segmentCache.clear();
+  _cachedHighestIdx = -1;
+  _cachedLowestIdx = Infinity;
 }
 
 /**
- * 基于种子派生道路水平曲线的相位偏移
- * 使用线性同余生成器确保确定性
- * @param {number} basePhase - 基础相位
- * @returns {number} 基于种子的相位偏移
+ * 哈希函数：将 (seed, segmentIndex) 混合为 32 位整数，
+ * 用作 PRNG 的种子。种子或序号任一变化都会大幅改变输出。
  */
-function seedOffsetFromSeed(basePhase) {
-  // 简单确定性随机：使用种子的线性同余
-  const s = _roadSeed;
-  // 生成一个 [0, 1) 的伪随机数
-  const t = ((Math.abs(Math.round(s)) * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-  return basePhase + t * Math.PI * 2;
+function _hashSeedIndex(seed, idx) {
+  let h = ((seed | 0) ^ Math.imul(idx | 0, 0x9e3779b1)) | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) | 0;
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) | 0;
+  return (h ^ (h >>> 16)) >>> 0;
 }
 
 /**
- * 基于种子派生竖向起伏的相位偏移
- * @param {number} basePhase - 基础相位
- * @returns {number} 基于种子的相位偏移
+ * Mulberry32 PRNG：基于 32 位种子返回 [0, 1) 的伪随机数。
+ * 相比 Math.random 的优势是完全确定性，便于测试与可重现回放。
  */
-function seedElevationOffsetFromSeed(basePhase) {
-  const s = _roadSeed + 1000000; // 与水平曲线使用不同偏移
-  const t = ((Math.abs(Math.round(s)) * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-  return basePhase + t * Math.PI * 2;
+function _makeRng(seed32) {
+  let a = seed32 | 0;
+  return function next() {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * 为指定路段序号生成基础数据（仅 centerOffsetX）。
+ * 每次对同一 (seed, idx) 调用结果完全一致。
+ */
+function _generateSegmentData(idx) {
+  const rng = _makeRng(_hashSeedIndex(_roadSeed, idx));
+  // 取第一个 PRNG 值并映射到 [-MAX, +MAX]
+  const u = rng();
+  return {
+    centerOffsetX: (u - 0.5) * 2 * ROAD_PROCGEN_MAX_OFFSET,
+  };
+}
+
+/**
+ * 取指定路段的数据，缺失则按 (seed, idx) 即时生成并写入缓存。
+ * 缓存超容时按"光标 - BUFFER"为界清理掉更早的路段，限制内存占用。
+ */
+function _ensureSegment(idx) {
+  let data = _segmentCache.get(idx);
+  if (data) return data;
+  data = _generateSegmentData(idx);
+  _segmentCache.set(idx, data);
+  if (idx > _cachedHighestIdx) _cachedHighestIdx = idx;
+  if (idx < _cachedLowestIdx) _cachedLowestIdx = idx;
+  // 缓存超容时清理：保留 [highestIdx - BUFFER, highestIdx] 范围附近
+  if (_segmentCache.size > ROAD_PROCGEN_CACHE_BUFFER * 2) {
+    const minKeep = _cachedHighestIdx - ROAD_PROCGEN_CACHE_BUFFER;
+    if (minKeep > _cachedLowestIdx) {
+      for (const k of _segmentCache.keys()) {
+        if (k < minKeep) _segmentCache.delete(k);
+      }
+      _cachedLowestIdx = minKeep;
+    }
+  }
+  return data;
 }
 
 /* ===================================================================
@@ -167,8 +215,8 @@ function seedElevationOffsetFromSeed(basePhase) {
 
 /**
  * 计算道路中心线在指定 z 处的水平偏移 x
- * 使用两层正弦叠加，模拟蜿蜒效果；两条曲线在 z = 0 处相位均为 0，
- * 保证玩家初始位置正好落在道路正中央。
+ * 在流式生成下，每个 segmentIndex 拥有一个随机中心偏移，
+ * 任意 z 通过"所在段 → 下一段"的线性插值得到连续结果。
  *
  * @param {number} z - 世界 z 坐标
  * @returns {number} 道路中心线在 z 处的 x 偏移
@@ -176,17 +224,21 @@ function seedElevationOffsetFromSeed(basePhase) {
 export function roadCenterOffsetAt(z) {
   if (!Number.isFinite(z)) return 0;
   const zz = Number(z);
-  const phase1 = seedOffsetFromSeed(ROAD_CURVE_PHASE);
-  const phase2 = seedOffsetFromSeed(ROAD_CURVE_PHASE_2);
-  return (
-    ROAD_CURVE_AMPLITUDE * Math.sin(zz * ROAD_CURVE_FREQUENCY + phase1) +
-    ROAD_CURVE_AMPLITUDE_2 * Math.sin(zz * ROAD_CURVE_FREQUENCY_2 + phase2)
-  );
+  const sl = ROAD_SEGMENT_LENGTH;
+  const idx = Math.floor(zz / sl);
+  // 把 z 落在 [idx*sl, (idx+1)*sl) 的局部参数 t
+  const tRaw = (zz - idx * sl) / sl;
+  // 钳制避免浮点边界上出现 t 越界
+  const t = tRaw <= 0 ? 0 : tRaw >= 1 ? 1 - 1e-9 : tRaw;
+  const segA = _ensureSegment(idx);
+  const segB = _ensureSegment(idx + 1);
+  return segA.centerOffsetX * (1 - t) + segB.centerOffsetX * t;
 }
 
 /**
  * 计算道路中心线在指定 z 处的切线斜率（弧度）
- * 取自蜿蜒曲线的解析导数，用于让路段沿曲线方向微微旋转。
+ * 在流式生成下，段内为线性插值，因此斜率（heading）在一段内为常量：
+ *   heading = (segB.centerOffsetX - segA.centerOffsetX) / ROAD_SEGMENT_LENGTH
  *
  * @param {number} z - 世界 z 坐标
  * @returns {number} 切线方向角（弧度，正值为绕 +y 轴左转）
@@ -194,66 +246,47 @@ export function roadCenterOffsetAt(z) {
 export function roadHeadingAt(z) {
   if (!Number.isFinite(z)) return 0;
   const zz = Number(z);
-  const phase1 = seedOffsetFromSeed(ROAD_CURVE_PHASE);
-  const phase2 = seedOffsetFromSeed(ROAD_CURVE_PHASE_2);
-  return (
-    ROAD_CURVE_AMPLITUDE * ROAD_CURVE_FREQUENCY * Math.cos(zz * ROAD_CURVE_FREQUENCY + phase1) +
-    ROAD_CURVE_AMPLITUDE_2 * ROAD_CURVE_FREQUENCY_2 * Math.cos(zz * ROAD_CURVE_FREQUENCY_2 + phase2)
-  );
+  const sl = ROAD_SEGMENT_LENGTH;
+  const idx = Math.floor(zz / sl);
+  const segA = _ensureSegment(idx);
+  const segB = _ensureSegment(idx + 1);
+  return (segB.centerOffsetX - segA.centerOffsetX) / sl;
 }
 
 /**
  * 计算道路中心线在指定 z 处的高程（y 坐标）
- * 使用两层正弦叠加，模拟道路起伏效果。
+ * 当前实现保持赛道完全平坦。
  *
  * @param {number} z - 世界 z 坐标
- * @returns {number} 道路中心线在 z 处的高程
+ * @returns {number} 道路中心线在 z 处的高程（始终为 0）
  */
 export function roadElevationAt(z) {
   if (!Number.isFinite(z)) return 0;
-  const zz = Number(z);
-  const phase1 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE);
-  const phase2 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE_2);
-  return (
-    ROAD_ELEVATION_AMPLITUDE * Math.sin(zz * ROAD_ELEVATION_FREQUENCY + phase1) +
-    ROAD_ELEVATION_AMPLITUDE_2 * Math.sin(zz * ROAD_ELEVATION_FREQUENCY_2 + phase2)
-  );
+  return 0;
 }
 
 /**
  * 计算道路中心线在指定 z 处的俯仰角（弧度）
- * 取自竖向起伏曲线的解析导数，用于让路段沿坡度方向倾斜。
+ * 当前实现保持赛道完全平坦。
  *
  * @param {number} z - 世界 z 坐标
- * @returns {number} 俯仰角（弧度，正值为抬头/上坡，负值为低头/下坡）
+ * @returns {number} 俯仰角（始终为 0）
  */
 export function roadPitchAt(z) {
   if (!Number.isFinite(z)) return 0;
-  const zz = Number(z);
-  const phase1 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE);
-  const phase2 = seedElevationOffsetFromSeed(ROAD_ELEVATION_PHASE_2);
-  return (
-    ROAD_ELEVATION_AMPLITUDE * ROAD_ELEVATION_FREQUENCY * Math.cos(zz * ROAD_ELEVATION_FREQUENCY + phase1) +
-    ROAD_ELEVATION_AMPLITUDE_2 * ROAD_ELEVATION_FREQUENCY_2 * Math.cos(zz * ROAD_ELEVATION_FREQUENCY_2 + phase2)
-  );
+  return 0;
 }
 
 /**
  * 计算道路中心线在指定 z 处的法线向量
- * 法线由 heading（偏航）和 pitch（俯仰）派生，指向道路上方。
+ * 平坦赛道下恒为 (0, 1, 0)，指向上方。
  *
  * @param {number} z - 世界 z 坐标
  * @returns {{ x: number, y: number, z: number }} 单位法线向量
  */
 export function roadNormalAt(z) {
-  const pitch = roadPitchAt(z);
-  // 法线在竖直面内与道路前进方向垂直
-  // pitch > 0 时上坡，法线指向前上方；pitch < 0 时下坡，法线指向前下方
-  return {
-    x: -Math.sin(roadHeadingAt(z)) * Math.sin(pitch),
-    y: Math.cos(pitch),
-    z: -Math.cos(roadHeadingAt(z)) * Math.sin(pitch),
-  };
+  if (!Number.isFinite(z)) return { x: 0, y: 1, z: 0 };
+  return { x: 0, y: 1, z: 0 };
 }
 
 /**
@@ -347,7 +380,8 @@ export function laneLinesXAt(z = 0) {
 
 /**
  * 将 z 坐标折算到 [0, ROAD_TOTAL_LENGTH) 区间
- * 用于在循环道路上复用同一组路段数据：超出长度的 z 自动回绕到起点。
+ * 在流式生成下，道路不再有真实循环周期；该函数仍保留以兼容旧调用方
+ * 的"模运算"语义（事实上等价于对窗口长度的取模）。
  *
  * @param {number} z - 世界 z 坐标
  * @returns {number} 折算后等价 z
@@ -383,7 +417,13 @@ export function advanceRoadProgress(progress, deltaSeconds, speed) {
 
 /**
  * 构建道路分段数组，每段包含渲染所需的全部几何参数
- * 段内 z 坐标会自动按 ROAD_TOTAL_LENGTH 回绕，使分段可无限滚动。
+ *
+ * 在流式生成下：
+ *   - 每段的"视觉 z 位置"（zCenterWorld）固定为 [0, ROAD_TOTAL_LENGTH)
+ *     区间内的等分点，使渲染层依然能像之前一样把 40 段铺到玩家前方。
+ *   - 每段的曲线值（centerOffsetX / heading）取自绝对 z = zCenterWorld + progress，
+ *     因此 progress 推进时，曲线值会不断对应到新的（更远）的绝对 z，
+ *     自然触发新路段的即时生成，让玩家感到"前方出现新的随机弯道"。
  *
  * @param {number} [progress=0] - 当前道路滚动进度
  * @returns {Array<{
@@ -406,24 +446,44 @@ export function buildRoadSegments(progress = 0) {
   const segments = new Array(ROAD_SEGMENT_COUNT);
   for (let i = 0; i < ROAD_SEGMENT_COUNT; i++) {
     const zCenter = i * ROAD_SEGMENT_LENGTH + halfLen;
-    const zCenterWorld = wrapRoadZ(zCenter - p);
-    const centerOffsetX = roadCenterOffsetAt(zCenterWorld);
-    const elevation = roadElevationAt(zCenterWorld);
-    const heading = roadHeadingAt(zCenterWorld);
-    const pitch = roadPitchAt(zCenterWorld);
+    // 视觉 z 仍为窗口内的固定位置（与旧实现保持一致）
+    const zCenterWorld = zCenter;
+    // 曲线查询使用绝对 z：随 progress 推进，原本未在缓存中的前方路段会被即时生成
+    const absZ = zCenterWorld + p;
     segments[i] = {
       index: i,
       zStart: i * ROAD_SEGMENT_LENGTH,
       zEnd: (i + 1) * ROAD_SEGMENT_LENGTH,
       zCenter,
       zCenterWorld,
-      centerOffsetX,
-      elevation,
-      heading,
-      pitch,
+      centerOffsetX: roadCenterOffsetAt(absZ),
+      elevation: 0,
+      heading: roadHeadingAt(absZ),
+      pitch: 0,
       length: ROAD_SEGMENT_LENGTH,
       halfWidth: ROAD_HALF_WIDTH,
     };
   }
   return segments;
+}
+
+/* ===================================================================
+   内部辅助：暴露给测试用（不构成对外契约）
+   =================================================================== */
+
+/**
+ * 返回当前缓存中已生成的路段数量。供测试断言"流式生成在
+ * progress 推进时确实新增了路段"，仅用于单测，不要在生产代码中依赖。
+ *
+ * @returns {number} 缓存中 _segmentCache 的条目数
+ */
+export function _getSegmentCacheSizeForTest() {
+  return _segmentCache.size;
+}
+
+/**
+ * 显式清空流式路段缓存。供测试在断言之间隔离状态使用。
+ */
+export function _clearSegmentCacheForTest() {
+  _resetSegmentCache();
 }

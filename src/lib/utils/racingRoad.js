@@ -1,19 +1,27 @@
 /**
  * 3D 越野车竞速 — 蜿蜒道路与三条车道模块
  *
- * 道路几何采用「流式 procedural 生成」：
- *   - 内部维护一个按"路段序号 (segmentIndex)"索引的缓存 _segmentCache
- *   - 每次 roadCenterOffsetAt(z) / roadHeadingAt(z) 根据绝对 z 算出所属路段，
- *     缺失的路段会按 (seed, segmentIndex) 哈希出的 PRNG 立即生成并写入缓存
- *   - 缓存中离"光标"（已生成的最大路段序号）较远的旧路段会被自动清理
- *   - 调用 setRoadSeed 会清空缓存，让新种子驱动出全新形态
+ * 道路几何采用「以 ROAD_SEGMENT_COUNT 为周期的 procedural 生成」：
+ *   - 道路曲线以 ROAD_TOTAL_LENGTH = ROAD_SEGMENT_COUNT * ROAD_SEGMENT_LENGTH
+ *     为周期，即
+ *       roadCenterOffsetAt(z) === roadCenterOffsetAt(z + ROAD_TOTAL_LENGTH)
+ *       roadHeadingAt(z)      === roadHeadingAt(z      + ROAD_TOTAL_LENGTH)
+ *     这保证了 buildRoadSegments 在视觉循环边界处首尾段衔接一致，无裂缝、
+ *     无错位、无标线交叉。
+ *   - 内部维护一个按"基础路段序号 (segmentIndex mod ROAD_SEGMENT_COUNT)"
+ *     索引的缓存 _segmentCache；任意 idx 与 idx + ROAD_SEGMENT_COUNT 共享同一
+ *     缓存条目，缺失时按 (seed, baseIndex) 哈希出的 PRNG 立即生成并写入缓存。
+ *   - 调用 setRoadSeed 会清空缓存，让新种子驱动出全新形态。
  *
- * 道路不再"开局一次性按周期函数铺设"——同一局游戏中，玩家前进行驶时，
- * 原本未知的绝对 z 会触发新路段生成，玩家看到的就是源源不断的新弯道。
+ * buildRoadSegments 的几何输出（centerOffsetX / heading）与 progress 无关：
+ *   任意 progress 下，segment i 的 centerOffsetX / heading 仅由其基础路段序号
+ *   决定（曲线以 ROAD_TOTAL_LENGTH 为周期；curveZ = zCenterWorld + progress 与
+ *   zCenter 在折算意义下等价）；推进 progress 只会改变每段的 zCenterWorld 字段，
+ *   不会引入新的随机弯道，也不会让中心偏移随时间发生非预期跳变。
  *
  * 对外接口（roadCenterOffsetAt / roadHeadingAt / laneFrameAt /
  * buildRoadSegments / roadFrameAt / laneCenterXAt 等）仍按世界 z 坐标输入，
- * 调用方无需感知内部缓存。
+ * 调用方无需感知内部缓存与周期结构。
  *
  * 坐标系约定：
  *   x — 水平方向（左负右正）
@@ -56,16 +64,21 @@ export const ROAD_HALF_WIDTH = (LANE_WIDTH * LANE_COUNT) / 2;
 
 /**
  * 视觉窗口总长（沿 z 方向，世界单位）。
- * 渲染层按 ROAD_SEGMENT_COUNT 段覆盖此长度的窗口；该值在流式生成下不再
- * 决定道路"循环周期"，仅作为可视窗口长度，保留以兼容旧调用方对
- * "zStart / zEnd 连续覆盖整段" 的测试与视觉假设。
+ * 也是道路曲线的周期：
+ *   roadCenterOffsetAt(z) 与 roadHeadingAt(z) 关于 ROAD_TOTAL_LENGTH 周期连续，
+ *   因此视觉循环边界处首尾段衔接一致。
+ * 渲染层按 ROAD_SEGMENT_COUNT 段覆盖此长度的窗口。
  */
 export const ROAD_TOTAL_LENGTH = 240;
 
 /** 道路分段数 */
 export const ROAD_SEGMENT_COUNT = 40;
 
-/** 单段道路长度（ROAD_TOTAL_LENGTH / ROAD_SEGMENT_LENGTH 应为整数） */
+/**
+ * 单段道路长度（ROAD_TOTAL_LENGTH / ROAD_SEGMENT_LENGTH 应为整数）。
+ * 路段生成以 ROAD_SEGMENT_COUNT 为周期，因此任意 idx 与 idx + ROAD_SEGMENT_COUNT
+ * 共享同一段基础数据。
+ */
 export const ROAD_SEGMENT_LENGTH = ROAD_TOTAL_LENGTH / ROAD_SEGMENT_COUNT;
 
 /* ===================================================================
@@ -85,9 +98,12 @@ export const ROAD_PROCGEN_MAX_HEADING =
   (2 * ROAD_PROCGEN_MAX_OFFSET) / ROAD_SEGMENT_LENGTH;
 
 /**
- * 缓存中保留的路段数（围绕已生成的最大路段序号向"过去"方向保留的窗口大小）。
- * 缓存条目数超过 2 * BUFFER 时触发清理：删除 < (highestIdx - BUFFER) 的条目。
- * 选 60 段（≈ 360 世界单位）足够覆盖 40 段视觉窗口 + 玩家前置 look-ahead。
+ * 旧版流式生成缓存的窗口大小（保留以兼容旧调用方与测试）。
+ * 周期性生成下缓存条目数最多不超过 ROAD_SEGMENT_COUNT，本身不再需要清理；
+ * 因此本常量目前不再参与任何运行时逻辑，仅作为对外 API 稳定字段保留。
+ *
+ * @deprecated 周期性生成下，缓存天然有上界 ROAD_SEGMENT_COUNT；该常量保留导出
+ *             是为了不破坏旧调用方对其的引用，未来可考虑移除。
  */
 export const ROAD_PROCGEN_CACHE_BUFFER = 60;
 
@@ -125,25 +141,20 @@ export function setRoadSeed(seed) {
    =================================================================== */
 
 /**
- * 已生成路段缓存：segmentIndex -> { centerOffsetX }
- * 每个路段存储一个随机但确定（基于 seed + segmentIndex 哈希）的中心偏移。
+ * 已生成路段缓存：基础路段序号 (baseIndex) -> { centerOffsetX }
+ * 每个路段存储一个随机但确定（基于 seed + baseIndex 哈希）的中心偏移。
+ * 由于曲线以 ROAD_SEGMENT_COUNT 为周期，任意 idx 与 idx + ROAD_SEGMENT_COUNT
+ * 共享同一 baseIndex 缓存条目；缓存条目数最多不超过 ROAD_SEGMENT_COUNT，
+ * 无需另做清理。
  */
 const _segmentCache = new Map();
 
-/** 缓存中最大的 segmentIndex（用于"光标"推进） */
-let _cachedHighestIdx = -1;
-
-/** 缓存中最小的 segmentIndex（用于调试 / 避免越界删除时误清） */
-let _cachedLowestIdx = Infinity;
-
 /**
- * 清空路段缓存并重置光标。在 setRoadSeed 改变种子时调用，
+ * 清空路段缓存。在 setRoadSeed 改变种子时调用，
  * 也可由测试在重置环境时显式调用。
  */
 function _resetSegmentCache() {
   _segmentCache.clear();
-  _cachedHighestIdx = -1;
-  _cachedLowestIdx = Infinity;
 }
 
 /**
@@ -186,26 +197,23 @@ function _generateSegmentData(idx) {
 }
 
 /**
- * 取指定路段的数据，缺失则按 (seed, idx) 即时生成并写入缓存。
- * 缓存超容时按"光标 - BUFFER"为界清理掉更早的路段，限制内存占用。
+ * 取指定路段的数据，缺失则按 (seed, baseIndex) 即时生成并写入缓存。
+ *
+ * 路段生成以 ROAD_SEGMENT_COUNT 为周期：
+ *   - 把 idx 与 idx + ROAD_SEGMENT_COUNT 映射到同一"基础路段序号" baseIndex，
+ *     并将其作为缓存键与哈希输入；
+ *   - 这样任意 idx 命中的中心偏移与 idx + ROAD_SEGMENT_COUNT 命中的相同，
+ *     roadCenterOffsetAt / roadHeadingAt 关于 ROAD_TOTAL_LENGTH 周期连续。
+ *
+ * 缓存在基础路段层面去重，条目数上限恒为 ROAD_SEGMENT_COUNT，无需另外清理。
  */
 function _ensureSegment(idx) {
-  let data = _segmentCache.get(idx);
+  const baseIdx =
+    ((idx % ROAD_SEGMENT_COUNT) + ROAD_SEGMENT_COUNT) % ROAD_SEGMENT_COUNT;
+  let data = _segmentCache.get(baseIdx);
   if (data) return data;
-  data = _generateSegmentData(idx);
-  _segmentCache.set(idx, data);
-  if (idx > _cachedHighestIdx) _cachedHighestIdx = idx;
-  if (idx < _cachedLowestIdx) _cachedLowestIdx = idx;
-  // 缓存超容时清理：保留 [highestIdx - BUFFER, highestIdx] 范围附近
-  if (_segmentCache.size > ROAD_PROCGEN_CACHE_BUFFER * 2) {
-    const minKeep = _cachedHighestIdx - ROAD_PROCGEN_CACHE_BUFFER;
-    if (minKeep > _cachedLowestIdx) {
-      for (const k of _segmentCache.keys()) {
-        if (k < minKeep) _segmentCache.delete(k);
-      }
-      _cachedLowestIdx = minKeep;
-    }
-  }
+  data = _generateSegmentData(baseIdx);
+  _segmentCache.set(baseIdx, data);
   return data;
 }
 
@@ -215,8 +223,10 @@ function _ensureSegment(idx) {
 
 /**
  * 计算道路中心线在指定 z 处的水平偏移 x
- * 在流式生成下，每个 segmentIndex 拥有一个随机中心偏移，
- * 任意 z 通过"所在段 → 下一段"的线性插值得到连续结果。
+ * 每个 baseIndex = (segmentIndex mod ROAD_SEGMENT_COUNT) 拥有一个随机中心偏移，
+ * 任意 z 通过"所在段 → 下一段"的线性插值得到连续结果；
+ * 因 baseIndex 以 ROAD_SEGMENT_COUNT 为周期，本函数以 ROAD_TOTAL_LENGTH 为周期：
+ *   roadCenterOffsetAt(z) === roadCenterOffsetAt(z + ROAD_TOTAL_LENGTH)
  *
  * @param {number} z - 世界 z 坐标
  * @returns {number} 道路中心线在 z 处的 x 偏移
@@ -237,8 +247,9 @@ export function roadCenterOffsetAt(z) {
 
 /**
  * 计算道路中心线在指定 z 处的切线斜率（弧度）
- * 在流式生成下，段内为线性插值，因此斜率（heading）在一段内为常量：
+ * 段内为线性插值，因此斜率（heading）在一段内为常量：
  *   heading = (segB.centerOffsetX - segA.centerOffsetX) / ROAD_SEGMENT_LENGTH
+ * 与 roadCenterOffsetAt 同为以 ROAD_TOTAL_LENGTH 为周期的函数。
  *
  * @param {number} z - 世界 z 坐标
  * @returns {number} 切线方向角（弧度，正值为绕 +y 轴左转）
@@ -380,8 +391,8 @@ export function laneLinesXAt(z = 0) {
 
 /**
  * 将 z 坐标折算到 [0, ROAD_TOTAL_LENGTH) 区间
- * 在流式生成下，道路不再有真实循环周期；该函数仍保留以兼容旧调用方
- * 的"模运算"语义（事实上等价于对窗口长度的取模）。
+ * 道路曲线以 ROAD_TOTAL_LENGTH 为周期，因此对任意 z，
+ * roadCenterOffsetAt(z) === roadCenterOffsetAt(wrapRoadZ(z))。
  *
  * @param {number} z - 世界 z 坐标
  * @returns {number} 折算后等价 z
@@ -418,17 +429,19 @@ export function advanceRoadProgress(progress, deltaSeconds, speed) {
 /**
  * 构建道路分段数组，每段包含渲染所需的全部几何参数
  *
- * 在流式生成下：
+ * 在周期性生成下：
  *   - 每段对应一个固定的"索引 z"（zCenter = i * SL + halfLen），代表该路段
- *     在缓存中的稳定身份。路段身份与曲线查询都用这个 z。
+ *     在缓存中的稳定身份。
  *   - 视觉 z（zCenterWorld）= wrapRoadZ(zCenter - progress)，随 progress 推进
  *     在 [0, ROAD_TOTAL_LENGTH) 区间内循环 wrap，对应"赛道在玩家眼前持续后退、
- *     路段源源不断从前方进入视野"的视觉感受，与旧实现保持一致。
- *   - 曲线查询（centerOffsetX / heading）使用未 wrap 的绝对 z = zCenter + progress，
- *     因此 progress 推进时，曲线对应到越来越远的绝对 z，原本未在缓存中的前方
- *     路段会被 _ensureSegment 即时生成，让玩家感到"前方出现新的随机弯道"。
- *   - 同 index 的路段在不同 progress 下的视觉 z 会绕回到相近位置，但其曲线
- *     由绝对 z 决定，每一圈都不相同，从而兼顾"循环滚动"与"非周期内容"。
+ *     路段源源不断从前方进入视野"的视觉感受。
+ *   - 曲线查询使用 curveZ = zCenterWorld + progress：
+ *       把每段视觉 z 还原到与之等价的绝对 z 上查询曲线（因曲线以
+ *       ROAD_TOTAL_LENGTH 为周期，curveZ 与 zCenter 在视觉 z 折算意义下等价）。
+ *       segment i 在任意 progress 下的 centerOffsetX/heading 仅由其视觉位置 v 决定，
+ *       因此相邻段（视觉 z 上相邻）的曲线首尾必然衔接一致；
+ *       同 index 的路段在不同 progress 下视觉 z 会回到相近位置，曲线形态也
+ *       一一对应，从而消除视觉循环边界处的断开、错位与标线交叉。
  *
  * @param {number} [progress=0] - 当前道路滚动进度
  * @returns {Array<{
@@ -454,18 +467,20 @@ export function buildRoadSegments(progress = 0) {
     // 视觉 z 与旧实现保持一致：随 progress 推进在 [0, ROAD_TOTAL_LENGTH) 内
     // 循环 wrap，让玩家感到"赛道在持续后退"。
     const zCenterWorld = wrapRoadZ(zCenter - p);
-    // 曲线查询使用未 wrap 的绝对 z：随 progress 推进，绝对 z 持续增长，
-    // 触发 _ensureSegment 即时生成新的随机路段。
-    const absZ = zCenter + p;
+    // 曲线查询使用 zCenterWorld + progress：
+    // 把每段的视觉 z 还原到与之等价的曲线绝对 z 上；曲线以 ROAD_TOTAL_LENGTH
+    // 为周期，因此 segment i 在任意 progress 下的曲线值仅由其基础路段序号决定，
+    // 保证视觉循环边界处首尾段衔接一致、无裂缝/无跳变。
+    const curveZ = zCenterWorld + p;
     segments[i] = {
       index: i,
       zStart: i * ROAD_SEGMENT_LENGTH,
       zEnd: (i + 1) * ROAD_SEGMENT_LENGTH,
       zCenter,
       zCenterWorld,
-      centerOffsetX: roadCenterOffsetAt(absZ),
+      centerOffsetX: roadCenterOffsetAt(curveZ),
       elevation: 0,
-      heading: roadHeadingAt(absZ),
+      heading: roadHeadingAt(curveZ),
       pitch: 0,
       length: ROAD_SEGMENT_LENGTH,
       halfWidth: ROAD_HALF_WIDTH,

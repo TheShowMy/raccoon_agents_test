@@ -514,26 +514,10 @@ describe('racingRoad.js — 种子变化', () => {
   });
 });
 
-describe('racingRoad.js — 流式生成行为', () => {
+describe('racingRoad.js — 周期性生成行为', () => {
   beforeEach(() => {
     setRoadSeed(0);
     _clearSegmentCacheForTest();
-  });
-
-  it('progress 推进时，前方会出现新的随机路段', () => {
-    const p1 = 0;
-    const p2 = ROAD_TOTAL_LENGTH * 2; // 玩家前进两个视觉窗口的距离
-    const segs1 = buildRoadSegments(p1);
-    const segs2 = buildRoadSegments(p2);
-    // 至少有一段在两个 progress 下出现明显不同的中心偏移
-    let anyDifferent = false;
-    for (let i = 0; i < segs1.length; i++) {
-      if (Math.abs(segs1[i].centerOffsetX - segs2[i].centerOffsetX) > 0.01) {
-        anyDifferent = true;
-        break;
-      }
-    }
-    expect(anyDifferent).toBe(true);
   });
 
   it('相同 seed + 相同 progress 应产生确定结果（多次调用一致）', () => {
@@ -545,18 +529,30 @@ describe('racingRoad.js — 流式生成行为', () => {
     }
   });
 
-  it('相同 seed、不同 progress 应产生不同结果（流式生成）', () => {
+  it('相同 seed、不同 progress 下 buildRoadSegments 几何输出一致（周期生成）', () => {
+    // 道路曲线以 ROAD_TOTAL_LENGTH 为周期：
+    // segment i 在任意 progress 下的 centerOffsetX / heading 仅由其基础路段序号
+    // 决定；推进 progress 只会改变每段的 zCenterWorld，不会引入新的随机弯道。
+    const p1 = 0;
+    const p2 = ROAD_TOTAL_LENGTH * 2; // 玩家前进两个视觉窗口的距离
+    const segs1 = buildRoadSegments(p1);
+    const segs2 = buildRoadSegments(p2);
+    for (let i = 0; i < segs1.length; i++) {
+      expect(segs2[i].centerOffsetX).toBeCloseTo(segs1[i].centerOffsetX, 12);
+      expect(segs2[i].heading).toBeCloseTo(segs1[i].heading, 12);
+    }
+  });
+
+  it('相同 seed、不同 progress 下 buildRoadSegments 几何输出一致（任意进度组合）', () => {
     const a = buildRoadSegments(0);
     const b = buildRoadSegments(50);
     const c = buildRoadSegments(100);
-    let aVsBDiff = false;
-    let aVsCDiff = false;
     for (let i = 0; i < a.length; i++) {
-      if (Math.abs(a[i].centerOffsetX - b[i].centerOffsetX) > 0.001) aVsBDiff = true;
-      if (Math.abs(a[i].centerOffsetX - c[i].centerOffsetX) > 0.001) aVsCDiff = true;
+      expect(b[i].centerOffsetX).toBeCloseTo(a[i].centerOffsetX, 12);
+      expect(c[i].centerOffsetX).toBeCloseTo(a[i].centerOffsetX, 12);
+      expect(b[i].heading).toBeCloseTo(a[i].heading, 12);
+      expect(c[i].heading).toBeCloseTo(a[i].heading, 12);
     }
-    expect(aVsBDiff).toBe(true);
-    expect(aVsCDiff).toBe(true);
   });
 
   it('不同 seed 在同一 progress 下应产生不同结果', () => {
@@ -602,7 +598,9 @@ describe('racingRoad.js — 流式生成行为', () => {
     expect(diff).toBe(true);
   });
 
-  it('缓存条目数随 progress 推进单调不减（流式扩展）', () => {
+  it('缓存条目数随 progress 推进始终不超过 ROAD_SEGMENT_COUNT（周期生成）', () => {
+    // 周期性生成下，缓存按基础路段序号 (mod ROAD_SEGMENT_COUNT) 去重，
+    // 缓存条目数上限恒为 ROAD_SEGMENT_COUNT，且 progress 推进不会让条目数扩张。
     _clearSegmentCacheForTest();
     expect(_getSegmentCacheSizeForTest()).toBe(0);
     buildRoadSegments(0);
@@ -611,30 +609,141 @@ describe('racingRoad.js — 流式生成行为', () => {
     const size50 = _getSegmentCacheSizeForTest();
     buildRoadSegments(500);
     const size500 = _getSegmentCacheSizeForTest();
+    buildRoadSegments(100000);
+    const sizeLarge = _getSegmentCacheSizeForTest();
     expect(size0).toBeGreaterThan(0);
-    expect(size50).toBeGreaterThanOrEqual(size0);
-    expect(size500).toBeGreaterThanOrEqual(size50);
+    expect(size50).toBeLessThanOrEqual(ROAD_SEGMENT_COUNT);
+    expect(size500).toBeLessThanOrEqual(ROAD_SEGMENT_COUNT);
+    expect(sizeLarge).toBeLessThanOrEqual(ROAD_SEGMENT_COUNT);
+    // 周期性下后续 progress 不再扩张缓存
+    expect(size50).toBeLessThanOrEqual(size0);
+    expect(size500).toBeLessThanOrEqual(size0);
+    expect(sizeLarge).toBeLessThanOrEqual(size0);
   });
 
-  it('缓存条目数有上限（自动清理过期路段）', () => {
+  it('缓存条目数有上限（等于 ROAD_SEGMENT_COUNT，不依赖清逻辑）', () => {
     _clearSegmentCacheForTest();
-    // 推进到很远的位置，触发多次清理
-    buildRoadSegments(100000);
-    const size = _getSegmentCacheSizeForTest();
-    // 缓存窗口上限 ≈ 2 * BUFFER
-    expect(size).toBeLessThanOrEqual(ROAD_PROCGEN_CACHE_BUFFER * 2 + 8);
-    // 缓存窗口下限至少能覆盖视觉窗口
-    expect(size).toBeGreaterThanOrEqual(ROAD_SEGMENT_COUNT);
+    for (let p = 0; p < 1000; p += 37) {
+      buildRoadSegments(p);
+      expect(_getSegmentCacheSizeForTest()).toBeLessThanOrEqual(
+        ROAD_SEGMENT_COUNT
+      );
+    }
   });
 
   it('连续推进 progress 后新调用的 roadCenterOffsetAt 仍能给出有限值', () => {
-    // 不应因缓存清理而抛错或返回 NaN
+    // 不应因缓存清理或 wrap 边界而抛错或返回 NaN
     for (let p = 0; p < 2000; p += 37) {
       buildRoadSegments(p);
       for (let dz = -10; dz <= 10; dz += 5) {
         const z = 100 + dz;
         expect(Number.isFinite(roadCenterOffsetAt(z))).toBe(true);
         expect(Number.isFinite(roadHeadingAt(z))).toBe(true);
+      }
+    }
+  });
+});
+
+describe('racingRoad.js — 周期连续性', () => {
+  beforeEach(() => {
+    setRoadSeed(0);
+    _clearSegmentCacheForTest();
+  });
+
+  it('roadCenterOffsetAt 关于 ROAD_TOTAL_LENGTH 周期连续（多个 z 样本）', () => {
+    const sampleZs = [0, 3, 6, 50, 100, 150, 239, 240, 0.5, -50, -120.7, -240];
+    for (const z of sampleZs) {
+      expect(roadCenterOffsetAt(z + ROAD_TOTAL_LENGTH)).toBeCloseTo(
+        roadCenterOffsetAt(z),
+        12
+      );
+      expect(roadCenterOffsetAt(z + 2 * ROAD_TOTAL_LENGTH)).toBeCloseTo(
+        roadCenterOffsetAt(z),
+        12
+      );
+      expect(roadCenterOffsetAt(z - ROAD_TOTAL_LENGTH)).toBeCloseTo(
+        roadCenterOffsetAt(z),
+        12
+      );
+    }
+  });
+
+  it('roadHeadingAt 关于 ROAD_TOTAL_LENGTH 周期连续（多个 z 样本）', () => {
+    const sampleZs = [0, 3, 6, 50, 100, 150, 239, 240, 0.5, -50, -120.7, -240];
+    for (const z of sampleZs) {
+      expect(roadHeadingAt(z + ROAD_TOTAL_LENGTH)).toBeCloseTo(
+        roadHeadingAt(z),
+        12
+      );
+      expect(roadHeadingAt(z + 2 * ROAD_TOTAL_LENGTH)).toBeCloseTo(
+        roadHeadingAt(z),
+        12
+      );
+      expect(roadHeadingAt(z - ROAD_TOTAL_LENGTH)).toBeCloseTo(
+        roadHeadingAt(z),
+        12
+      );
+    }
+  });
+
+  it('buildRoadSegments(0) 与 buildRoadSegments(ROAD_TOTAL_LENGTH) 几何输出一致（视觉循环 wrap 边界衔接）', () => {
+    // progress 为 ROAD_TOTAL_LENGTH 的整数倍时，zCenterWorld 也回到原值，
+    // 因此整段数组（含 centerOffsetX / heading / zCenterWorld）应严格相等。
+    const a = buildRoadSegments(0);
+    const b = buildRoadSegments(ROAD_TOTAL_LENGTH);
+    for (let i = 0; i < a.length; i++) {
+      expect(b[i].centerOffsetX).toBeCloseTo(a[i].centerOffsetX, 12);
+      expect(b[i].heading).toBeCloseTo(a[i].heading, 12);
+      expect(b[i].zCenterWorld).toBeCloseTo(a[i].zCenterWorld, 12);
+    }
+  });
+
+  it('buildRoadSegments 任意 progress 下视觉窗口内相邻段 zCenterWorld 步距恒为 ROAD_SEGMENT_LENGTH（无裂缝/无重叠）', () => {
+    for (const p of [0, 1, 50, 100, 239, 240, 241, 480, 720]) {
+      const segs = buildRoadSegments(p);
+      const sorted = [...segs].sort(
+        (a, b) => a.zCenterWorld - b.zCenterWorld
+      );
+      for (let i = 0; i < sorted.length; i++) {
+        const cur = sorted[i];
+        const nxt = sorted[(i + 1) % sorted.length];
+        let gap = nxt.zCenterWorld - cur.zCenterWorld;
+        // 环上只有一处 wrap；非 wrap 处 gap 应 > 0，否则补一个周期
+        if (gap <= -1e-9) gap += ROAD_TOTAL_LENGTH;
+        expect(gap).toBeCloseTo(ROAD_SEGMENT_LENGTH, 9);
+      }
+    }
+  });
+
+  it('buildRoadSegments 任意 progress 下每段 centerOffsetX / heading 有限且不超限', () => {
+    for (const p of [0, 1, 50, 100, 239, 240, 241, 480, 720]) {
+      const segs = buildRoadSegments(p);
+      for (const s of segs) {
+        expect(Number.isFinite(s.centerOffsetX)).toBe(true);
+        expect(Number.isFinite(s.heading)).toBe(true);
+        expect(Math.abs(s.centerOffsetX)).toBeLessThanOrEqual(
+          ROAD_PROCGEN_MAX_OFFSET + 1e-9
+        );
+        expect(Math.abs(s.heading)).toBeLessThanOrEqual(
+          ROAD_PROCGEN_MAX_HEADING + 1e-9
+        );
+      }
+    }
+  });
+
+  it('buildRoadSegments 任意 progress 下整段数组的 centerOffsetX 与 ROAD_SEGMENT_COUNT 内 baseIndex 哈希确定结果一致', () => {
+    // 用 roadCenterOffsetAt 直接计算 equivalent base 值，验证 buildRoadSegments
+    // 输出的 centerOffsetX 与 zCenterWorld + progress 处的曲线取值严格一致。
+    const absZs = [0, 1, 50, 100, 239, 240, 480, 720];
+    for (const z of absZs) {
+      const segs = buildRoadSegments(z);
+      for (let i = 0; i < segs.length; i++) {
+        // curveZ = zCenterWorld + progress, 应当与直接读取的曲线值一致
+        // (对周期性曲线恒成立: roadCenterOffsetAt(zCenterWorld + p) ≡ roadCenterOffsetAt(zCenter))
+        const expected = roadCenterOffsetAt(segs[i].zCenterWorld + z);
+        expect(segs[i].centerOffsetX).toBeCloseTo(expected, 12);
+        const expectedHeading = roadHeadingAt(segs[i].zCenterWorld + z);
+        expect(segs[i].heading).toBeCloseTo(expectedHeading, 12);
       }
     }
   });

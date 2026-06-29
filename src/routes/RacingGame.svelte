@@ -405,8 +405,10 @@
     const lane = state.player.lane;
     const jumpY = state.player.y;
 
-    // 获取道路在玩家位置的框架
-    const frame = laneFrameAt(lane, PLAYER_VISUAL_Z);
+    // 获取道路在玩家位置的框架：z 参数必须加上 roadProgress，
+    // 把视觉 z 折算回当前 progress 下等价的曲线绝对 z，
+    // 玩家车偏航与位置才会贴合当前滚动后的道路切线。
+    const frame = laneFrameAt(lane, PLAYER_VISUAL_Z + roadProgress);
 
     // 玩家车辆贴合路面高度 + 跳跃高度
     const groundY = frame.y;
@@ -459,7 +461,9 @@
         entityMeshes.set(e.id, mesh);
       }
       const visualZ = e.z + Z_VISUAL_OFFSET;
-      const frame = laneFrameAt(e.lane, visualZ);
+      // z 参数加上 roadProgress，把视觉 z 折算回当前 progress 下等价的曲线绝对 z，
+      // 障碍物、对向车辆、道具的朝向与位置才贴合道路切线。
+      const frame = laneFrameAt(e.lane, visualZ + roadProgress);
 
       // 实体贴合道路高度
       mesh.position.set(frame.x, frame.y, visualZ);
@@ -539,7 +543,8 @@
           typeof currentEvent.z === 'number'
         ) {
           const visualZ = currentEvent.z + Z_VISUAL_OFFSET;
-          const frame = laneFrameAt(currentEvent.lane, visualZ);
+          // z 参数加上 roadProgress，让粒子位置贴合当前滚动后的道路切线
+          const frame = laneFrameAt(currentEvent.lane, visualZ + roadProgress);
           fx = frame.x;
           fy = frame.y + 0.5; // 略抬高到实体中心高度，让粒子从实体身上炸开
           fz = visualZ;

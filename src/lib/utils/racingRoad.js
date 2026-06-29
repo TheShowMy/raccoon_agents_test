@@ -419,11 +419,16 @@ export function advanceRoadProgress(progress, deltaSeconds, speed) {
  * 构建道路分段数组，每段包含渲染所需的全部几何参数
  *
  * 在流式生成下：
- *   - 每段的"视觉 z 位置"（zCenterWorld）固定为 [0, ROAD_TOTAL_LENGTH)
- *     区间内的等分点，使渲染层依然能像之前一样把 40 段铺到玩家前方。
- *   - 每段的曲线值（centerOffsetX / heading）取自绝对 z = zCenterWorld + progress，
- *     因此 progress 推进时，曲线值会不断对应到新的（更远）的绝对 z，
- *     自然触发新路段的即时生成，让玩家感到"前方出现新的随机弯道"。
+ *   - 每段对应一个固定的"索引 z"（zCenter = i * SL + halfLen），代表该路段
+ *     在缓存中的稳定身份。路段身份与曲线查询都用这个 z。
+ *   - 视觉 z（zCenterWorld）= wrapRoadZ(zCenter - progress)，随 progress 推进
+ *     在 [0, ROAD_TOTAL_LENGTH) 区间内循环 wrap，对应"赛道在玩家眼前持续后退、
+ *     路段源源不断从前方进入视野"的视觉感受，与旧实现保持一致。
+ *   - 曲线查询（centerOffsetX / heading）使用未 wrap 的绝对 z = zCenter + progress，
+ *     因此 progress 推进时，曲线对应到越来越远的绝对 z，原本未在缓存中的前方
+ *     路段会被 _ensureSegment 即时生成，让玩家感到"前方出现新的随机弯道"。
+ *   - 同 index 的路段在不同 progress 下的视觉 z 会绕回到相近位置，但其曲线
+ *     由绝对 z 决定，每一圈都不相同，从而兼顾"循环滚动"与"非周期内容"。
  *
  * @param {number} [progress=0] - 当前道路滚动进度
  * @returns {Array<{
@@ -446,10 +451,12 @@ export function buildRoadSegments(progress = 0) {
   const segments = new Array(ROAD_SEGMENT_COUNT);
   for (let i = 0; i < ROAD_SEGMENT_COUNT; i++) {
     const zCenter = i * ROAD_SEGMENT_LENGTH + halfLen;
-    // 视觉 z 仍为窗口内的固定位置（与旧实现保持一致）
-    const zCenterWorld = zCenter;
-    // 曲线查询使用绝对 z：随 progress 推进，原本未在缓存中的前方路段会被即时生成
-    const absZ = zCenterWorld + p;
+    // 视觉 z 与旧实现保持一致：随 progress 推进在 [0, ROAD_TOTAL_LENGTH) 内
+    // 循环 wrap，让玩家感到"赛道在持续后退"。
+    const zCenterWorld = wrapRoadZ(zCenter - p);
+    // 曲线查询使用未 wrap 的绝对 z：随 progress 推进，绝对 z 持续增长，
+    // 触发 _ensureSegment 即时生成新的随机路段。
+    const absZ = zCenter + p;
     segments[i] = {
       index: i,
       zStart: i * ROAD_SEGMENT_LENGTH,

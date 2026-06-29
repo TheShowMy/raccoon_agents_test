@@ -328,11 +328,43 @@ describe('racingRoad.js — 道路分段（平坦赛道）', () => {
     }
   });
 
-  it('每段的 zCenterWorld 与 zCenter 相等（视觉 z 固定）', () => {
-    // 流式生成下视觉 z 不再 wrap，zCenterWorld 与 zCenter 保持一致
+  it('在 progress=0 时 zCenterWorld 与 zCenter 相等（wrap 边界）', () => {
+    // progress=0 时 wrapRoadZ(zCenter - 0) = zCenter，是 wrap 后的恒等边界
     const segments = buildRoadSegments(0);
     for (const seg of segments) {
       expect(seg.zCenterWorld).toBe(seg.zCenter);
+    }
+  });
+
+  it('zCenterWorld 在 progress>0 时随 wrap 在 [0, ROAD_TOTAL_LENGTH) 内滚动', () => {
+    const segments0 = buildRoadSegments(0);
+    const segments10 = buildRoadSegments(10);
+    // 至少有一段视觉 z 发生变化
+    let anyScrolled = false;
+    for (let i = 0; i < segments0.length; i++) {
+      if (segments0[i].zCenterWorld !== segments10[i].zCenterWorld) {
+        anyScrolled = true;
+        break;
+      }
+    }
+    expect(anyScrolled).toBe(true);
+    // 滚动后 zCenterWorld 仍在 [0, ROAD_TOTAL_LENGTH) 范围内
+    for (const seg of segments10) {
+      expect(seg.zCenterWorld).toBeGreaterThanOrEqual(0);
+      expect(seg.zCenterWorld).toBeLessThan(ROAD_TOTAL_LENGTH + 1e-9);
+    }
+  });
+
+  it('progress 增加一段长度后，zCenterWorld 整体向前 wrap 减少 1 段', () => {
+    // 验证 zCenterWorld = wrapRoadZ(zCenter - p) 的精确关系
+    const sl = ROAD_SEGMENT_LENGTH;
+    const p = sl; // 推进 1 段长度
+    const segments = buildRoadSegments(p);
+    for (let i = 0; i < segments.length; i++) {
+      const zCenter = i * sl + sl / 2;
+      const expected = ((zCenter - p) % ROAD_TOTAL_LENGTH + ROAD_TOTAL_LENGTH) %
+        ROAD_TOTAL_LENGTH;
+      expect(segments[i].zCenterWorld).toBeCloseTo(expected, 10);
     }
   });
 });

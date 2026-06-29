@@ -12,7 +12,6 @@
   import {
     buildRoadSegments,
     advanceRoadProgress,
-    laneCenterXAt,
     laneFrameAt,
     roadCenterOffsetAt,
     laneLinesXAt,

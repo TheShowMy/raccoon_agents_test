@@ -1,0 +1,10 @@
+
+ RUN  v2.1.9 /Users/theshow/work/rust/project/raccoon_node/data/projects/project-1782356132910/worktrees/task-road-procgen
+
+ ✓ tests/racingRoad.test.js (50 tests) 11ms
+
+ Test Files  1 passed (1)
+      Tests  50 passed (50)
+   Start at  11:16:15
+   Duration  307ms (transform 22ms, setup 0ms, collect 20ms, tests 11ms, environment 0ms, prepare 41ms)
+

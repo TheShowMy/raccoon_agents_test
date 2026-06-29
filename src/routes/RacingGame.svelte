@@ -528,11 +528,27 @@
       // 只在有新事件且事件与上一次不同时处理
       if (currentEvent && currentEvent !== lastProcessedEvent) {
         lastProcessedEvent = currentEvent;
-        // 获取玩家当前位置作为效果触发点
-        const playerX = playerMesh ? playerMesh.position.x : 0;
-        const playerY = playerMesh ? playerMesh.position.y : 0;
-        const playerZ = playerMesh ? playerMesh.position.z : PLAYER_VISUAL_Z;
-        handleEvent(effectsManager, currentEvent, playerX, playerY, playerZ);
+        // 碰撞/拾取/游戏结束事件都会携带被触发的实体 lane/z（由上一阶段引擎填入）。
+        // 优先用实体位置算世界坐标，粒子效果就能精确出现在被撞实体处（不是玩家车处）。
+        // 偶发事件（如 lane / jump / pass）没有 lane/z 字段，兜底用玩家位置。
+        let fx;
+        let fy;
+        let fz;
+        if (
+          typeof currentEvent.lane === 'number' &&
+          typeof currentEvent.z === 'number'
+        ) {
+          const visualZ = currentEvent.z + Z_VISUAL_OFFSET;
+          const frame = laneFrameAt(currentEvent.lane, visualZ);
+          fx = frame.x;
+          fy = frame.y + 0.5; // 略抬高到实体中心高度，让粒子从实体身上炸开
+          fz = visualZ;
+        } else {
+          fx = playerMesh ? playerMesh.position.x : 0;
+          fy = playerMesh ? playerMesh.position.y : 0;
+          fz = playerMesh ? playerMesh.position.z : PLAYER_VISUAL_Z;
+        }
+        handleEvent(effectsManager, currentEvent, fx, fy, fz);
       }
       // 更新效果系统（粒子动画、震动衰减）
       effectsManager.update(dt);

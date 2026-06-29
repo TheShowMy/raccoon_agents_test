@@ -6,6 +6,15 @@
  *
  * 粒子使用 THREE.Points 实现，性能高效。
  * 音效使用 Web Audio API，支持程序化生成，无需预加载音频文件。
+ *
+ * 实体差异化反馈：
+ *   障碍物（橙色路障）、对向车辆（红色轿车）、加血道具（绿色医疗包）
+ *   在碰撞/拾取时使用**独立**的粒子系统，表现为：
+ *     - 颜色：橙 / 亮红 / 翠绿
+ *     - 大小：0.35 / 0.20 / 0.25
+ *     - 数量：32 / 40 / 28
+ *     - 扩散形状：水平弧形碎片 / 全方位激烈爆裂 / 上扬光雨
+ *   加上各自不同的屏幕震动强度与生命周期，玩家一眼可分辨触发了哪类事件。
  */
 
 import * as THREE from 'three';
@@ -354,19 +363,28 @@ function playGameoverSound() {
 
 /**
  * 创建效果管理器
+ *
+ * 内置四个独立的粒子系统，分别对应障碍物碰撞、对向车辆碰撞、
+ * 加血道具拾取、游戏结束；颜色 / 大小 / 数量 / 扩散形状均有明显
+ * 区分，渲染层只需根据事件类型调用对应 trigger 即可。
+ *
  * @param {THREE.Scene} scene - three.js 场景
  * @returns {object} 效果管理器
  */
 export function createEffectsManager(scene) {
-  // 碰撞粒子（红色）
-  const hitParticles = createParticleSystem(30, 0xff4444, 0.3);
-  scene.add(hitParticles.points);
+  // 障碍物碰撞粒子（橙色路障碎片）—— 水平弧形 + 落地感
+  const obstacleHitParticles = createParticleSystem(32, 0xff7a1a, 0.35);
+  scene.add(obstacleHitParticles.points);
 
-  // 拾取粒子（绿色/金色）
-  const pickupParticles = createParticleSystem(25, 0x44ff88, 0.25);
+  // 对向车辆碰撞粒子（亮红火花）—— 全方位激烈爆裂
+  const vehicleHitParticles = createParticleSystem(40, 0xff3030, 0.2);
+  scene.add(vehicleHitParticles.points);
+
+  // 加血道具拾取粒子（翠绿光点）—— 上扬光雨
+  const pickupParticles = createParticleSystem(28, 0x44ff88, 0.25);
   scene.add(pickupParticles.points);
 
-  // 游戏结束粒子（紫色）
+  // 游戏结束粒子（紫色大爆发）
   const gameoverParticles = createParticleSystem(50, 0x8844ff, 0.4);
   scene.add(gameoverParticles.points);
 
@@ -374,39 +392,70 @@ export function createEffectsManager(scene) {
   const screenShake = createScreenShake(0, 4);
 
   return {
-    hitParticles,
+    obstacleHitParticles,
+    vehicleHitParticles,
     pickupParticles,
     gameoverParticles,
     screenShake,
 
     /**
-     * 在指定位置触发碰撞效果
+     * 在指定位置触发障碍物碰撞效果
+     * 颜色：橙色（与障碍物锥体同色），形状：水平弧形碎片。
      * @param {number} x - 世界坐标 x
      * @param {number} y - 世界坐标 y
      * @param {number} z - 世界坐标 z
-     * @param {number} severity - 严重程度 0-1
+     * @param {number} severity - 严重程度 0-1，影响音量和音高
      */
-    triggerHit(x, y, z, severity = 1) {
-      const p = this.hitParticles;
+    triggerObstacleHit(x, y, z, severity = 1) {
+      const p = this.obstacleHitParticles;
       p.points.position.set(x, y, z);
       p.points.visible = true;
       p.lifetime = 0;
-      p.maxLifetime = 0.6 + severity * 0.3;
+      p.maxLifetime = 0.7 + severity * 0.3;
 
-      // 重新随机化速度
+      // 水平弧形碎片：水平扩散强，向上抛物较弱 → 落体感强
       const velocities = p.velocities;
       for (let i = 0; i < velocities.length / 3; i++) {
-        velocities[i * 3] = (Math.random() - 0.5) * 10 * severity;
-        velocities[i * 3 + 1] = Math.random() * 8 + 3;
-        velocities[i * 3 + 2] = (Math.random() - 0.5) * 10 * severity;
+        velocities[i * 3] = (Math.random() - 0.5) * 12 * severity;
+        velocities[i * 3 + 1] = Math.random() * 5 + 1.5;
+        velocities[i * 3 + 2] = (Math.random() - 0.5) * 12 * severity;
       }
 
-      triggerScreenShake(screenShake, 0.4 + severity * 0.4);
+      triggerScreenShake(screenShake, 0.35 + severity * 0.3);
+      playCollisionSound(severity);
+    },
+
+    /**
+     * 在指定位置触发对向车辆碰撞效果
+     * 颜色：亮红（与尾灯同色），形状：全方位激烈爆裂；伤害更高，震动更强。
+     * @param {number} x - 世界坐标 x
+     * @param {number} y - 世界坐标 y
+     * @param {number} z - 世界坐标 z
+     * @param {number} severity - 严重程度 0-1，影响音量和音高
+     */
+    triggerVehicleHit(x, y, z, severity = 1) {
+      const p = this.vehicleHitParticles;
+      p.points.position.set(x, y, z);
+      p.points.visible = true;
+      p.lifetime = 0;
+      p.maxLifetime = 0.6 + severity * 0.4;
+
+      // 全方位激烈爆裂：上下左右均强扩散 + 较高初速
+      const velocities = p.velocities;
+      for (let i = 0; i < velocities.length / 3; i++) {
+        velocities[i * 3] = (Math.random() - 0.5) * 18 * severity;
+        velocities[i * 3 + 1] = Math.random() * 9 + 3;
+        velocities[i * 3 + 2] = (Math.random() - 0.5) * 18 * severity;
+      }
+
+      // vehicle 伤害比 obstacle 高 → 震动幅度更大
+      triggerScreenShake(screenShake, 0.55 + severity * 0.45);
       playCollisionSound(severity);
     },
 
     /**
      * 在指定位置触发拾取效果
+     * 颜色：翠绿（与加血道具十字同色），形状：上扬光雨。
      * @param {number} x - 世界坐标 x
      * @param {number} y - 世界坐标 y
      * @param {number} z - 世界坐标 z
@@ -418,12 +467,12 @@ export function createEffectsManager(scene) {
       p.lifetime = 0;
       p.maxLifetime = 0.7;
 
-      // 重新随机化速度（向上扩散）
+      // 上扬光雨：水平扩散小，向上冲力大
       const velocities = p.velocities;
       for (let i = 0; i < velocities.length / 3; i++) {
-        velocities[i * 3] = (Math.random() - 0.5) * 6;
-        velocities[i * 3 + 1] = Math.random() * 5 + 2;
-        velocities[i * 3 + 2] = (Math.random() - 0.5) * 6;
+        velocities[i * 3] = (Math.random() - 0.5) * 5;
+        velocities[i * 3 + 1] = Math.random() * 7 + 3;
+        velocities[i * 3 + 2] = (Math.random() - 0.5) * 5;
       }
 
       playPickupSound();
@@ -467,7 +516,8 @@ export function createEffectsManager(scene) {
      * @param {number} dt - 时间增量（秒）
      */
     update(dt) {
-      updateParticleSystem(this.hitParticles, dt);
+      updateParticleSystem(this.obstacleHitParticles, dt);
+      updateParticleSystem(this.vehicleHitParticles, dt);
       updateParticleSystem(this.pickupParticles, dt);
       updateParticleSystem(this.gameoverParticles, dt);
       updateScreenShake(screenShake, dt);
@@ -477,12 +527,15 @@ export function createEffectsManager(scene) {
      * 清理所有效果
      */
     dispose() {
-      scene.remove(this.hitParticles.points);
+      scene.remove(this.obstacleHitParticles.points);
+      scene.remove(this.vehicleHitParticles.points);
       scene.remove(this.pickupParticles.points);
       scene.remove(this.gameoverParticles.points);
 
-      this.hitParticles.points.geometry.dispose();
-      this.hitParticles.points.material.dispose();
+      this.obstacleHitParticles.points.geometry.dispose();
+      this.obstacleHitParticles.points.material.dispose();
+      this.vehicleHitParticles.points.geometry.dispose();
+      this.vehicleHitParticles.points.material.dispose();
       this.pickupParticles.points.geometry.dispose();
       this.pickupParticles.points.material.dispose();
       this.gameoverParticles.points.geometry.dispose();
@@ -493,30 +546,42 @@ export function createEffectsManager(scene) {
 
 /**
  * 处理游戏事件，触发相应效果
+ *
+ * 调用方负责把事件实体的世界坐标计算好后传入 (x, y, z) —— 推荐
+ * 从事件本身携带的 lane/z 派发（参见 RacingGame.svelte 的 animate 中
+ * 调 `laneFrameAt(event.lane, event.z + Z_VISUAL_OFFSET)`）。
+ *
+ * hit 事件按 event.kind ('obstacle' | 'vehicle') 区分触发不同颜色的
+ * 粒子系统；pickup / gameover 各自走专属通道。
+ *
  * @param {object} effectsManager - 效果管理器
  * @param {object} event - 游戏事件对象
- * @param {number} playerX - 玩家世界坐标 x
- * @param {number} playerY - 玩家世界坐标 y
- * @param {number} playerZ - 玩家世界坐标 z
- * @param {object} eventKind - 实体类型（用于获取实体位置）
+ * @param {number} x - 事件触发点的世界 x
+ * @param {number} y - 事件触发点的世界 y
+ * @param {number} z - 事件触发点的世界 z
  */
-export function handleEvent(effectsManager, event, playerX, playerY, playerZ, eventKind) {
+export function handleEvent(effectsManager, event, x, y, z) {
   if (!effectsManager || !event) return;
 
   switch (event.type) {
-    case 'hit':
-      // 碰撞效果：实体位置或玩家位置
-      effectsManager.triggerHit(playerX, playerY + 0.5, playerZ, event.damage / 2);
+    case 'hit': {
+      // hit 事件按 event.kind 区分不同粒子系统
+      const severity = event.damage / 2;
+      if (event.kind === 'vehicle') {
+        effectsManager.triggerVehicleHit(x, y, z, severity);
+      } else {
+        // 障碍物（默认走橙色系统）
+        effectsManager.triggerObstacleHit(x, y, z, severity);
+      }
       break;
+    }
 
     case 'pickup':
-      // 拾取效果
-      effectsManager.triggerPickup(playerX, playerY + 0.5, playerZ);
+      effectsManager.triggerPickup(x, y, z);
       break;
 
     case 'gameover':
-      // 游戏结束效果
-      effectsManager.triggerGameover(playerX, playerY + 1, playerZ);
+      effectsManager.triggerGameover(x, y + 0.5, z);
       break;
 
     default:

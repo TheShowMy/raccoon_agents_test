@@ -1,7 +1,7 @@
 /**
  * racingRoad.js 单元测试
  *
- * 验证道路三维曲线、高程、坡度、法线以及种子变化功能。
+ * 验证道路几何函数、流式 procedural 生成、种子变化以及车道与分段功能。
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -14,16 +14,10 @@ import {
   ROAD_SEGMENT_COUNT,
   ROAD_SEGMENT_LENGTH,
   ROAD_TOTAL_LENGTH,
-  // 蜿蜒曲线参数
-  ROAD_CURVE_AMPLITUDE,
-  ROAD_CURVE_FREQUENCY,
-  ROAD_CURVE_AMPLITUDE_2,
-  ROAD_CURVE_FREQUENCY_2,
-  // 高程参数
-  ROAD_ELEVATION_AMPLITUDE,
-  ROAD_ELEVATION_FREQUENCY,
-  ROAD_ELEVATION_AMPLITUDE_2,
-  ROAD_ELEVATION_FREQUENCY_2,
+  // 流式生成参数
+  ROAD_PROCGEN_MAX_OFFSET,
+  ROAD_PROCGEN_MAX_HEADING,
+  ROAD_PROCGEN_CACHE_BUFFER,
   // 蜿蜒曲线函数
   roadCenterOffsetAt,
   roadHeadingAt,
@@ -45,6 +39,9 @@ import {
   // 种子函数
   getRoadSeed,
   setRoadSeed,
+  // 内部辅助（仅供测试断言缓存行为）
+  _getSegmentCacheSizeForTest,
+  _clearSegmentCacheForTest,
 } from '../src/lib/utils/racingRoad.js';
 
 describe('racingRoad.js — 基本参数', () => {
@@ -73,17 +70,43 @@ describe('racingRoad.js — 基本参数', () => {
   });
 });
 
+describe('racingRoad.js — 流式生成参数', () => {
+  it('ROAD_PROCGEN_MAX_OFFSET 应为正数', () => {
+    expect(ROAD_PROCGEN_MAX_OFFSET).toBeGreaterThan(0);
+  });
+
+  it('ROAD_PROCGEN_MAX_HEADING 应与 MAX_OFFSET / SEGMENT_LENGTH 一致', () => {
+    // 公式：相邻两段最大可能差 = 2 * MAX_OFFSET，除以段长得到最大斜率
+    const expected = (2 * ROAD_PROCGEN_MAX_OFFSET) / ROAD_SEGMENT_LENGTH;
+    expect(ROAD_PROCGEN_MAX_HEADING).toBeCloseTo(expected, 12);
+  });
+
+  it('ROAD_PROCGEN_CACHE_BUFFER 应为正整数', () => {
+    expect(Number.isInteger(ROAD_PROCGEN_CACHE_BUFFER)).toBe(true);
+    expect(ROAD_PROCGEN_CACHE_BUFFER).toBeGreaterThan(0);
+    // 缓存窗口应至少能覆盖整个视觉窗口
+    expect(ROAD_PROCGEN_CACHE_BUFFER).toBeGreaterThanOrEqual(ROAD_SEGMENT_COUNT);
+  });
+});
+
 describe('racingRoad.js — 蜿蜒曲线函数', () => {
   it('roadCenterOffsetAt(z=0) 应返回有限数值', () => {
     const offset = roadCenterOffsetAt(0);
     expect(Number.isFinite(offset)).toBe(true);
   });
 
-  it('roadCenterOffsetAt 对称性：offset(z) ≈ -offset(-z) 当相位对称时', () => {
-    // 基础相位为 0 时，道路关于 z=0 对称
-    const a = roadCenterOffsetAt(100);
-    const b = roadCenterOffsetAt(-100);
-    expect(Math.abs(a + b)).toBeLessThan(0.001);
+  it('roadCenterOffsetAt 在任意位置均返回有限数值', () => {
+    for (let z = -500; z <= 500; z += 50) {
+      expect(Number.isFinite(roadCenterOffsetAt(z))).toBe(true);
+    }
+  });
+
+  it('roadCenterOffsetAt 的值域在 [-MAX, +MAX] 内', () => {
+    // 流式生成下，中心偏移由相邻段线性插值得到；最大可能值不超过 MAX
+    for (let z = -1000; z <= 1000; z += 25) {
+      const v = roadCenterOffsetAt(z);
+      expect(Math.abs(v)).toBeLessThanOrEqual(ROAD_PROCGEN_MAX_OFFSET + 1e-9);
+    }
   });
 
   it('roadHeadingAt(z) 应返回有限数值', () => {
@@ -91,11 +114,11 @@ describe('racingRoad.js — 蜿蜒曲线函数', () => {
     expect(Number.isFinite(heading)).toBe(true);
   });
 
-  it('roadHeadingAt 的导数性质：|heading| ≤ ROAD_CURVE_AMPLITUDE * ROAD_CURVE_FREQUENCY + ...', () => {
-    const maxHeading = ROAD_CURVE_AMPLITUDE * ROAD_CURVE_FREQUENCY +
-                       ROAD_CURVE_AMPLITUDE_2 * ROAD_CURVE_FREQUENCY_2;
-    for (let z = -500; z <= 500; z += 50) {
-      expect(Math.abs(roadHeadingAt(z))).toBeLessThanOrEqual(maxHeading * 1.01);
+  it('roadHeadingAt 的导数性质：|heading| ≤ ROAD_PROCGEN_MAX_HEADING', () => {
+    for (let z = -1000; z <= 1000; z += 5) {
+      expect(Math.abs(roadHeadingAt(z))).toBeLessThanOrEqual(
+        ROAD_PROCGEN_MAX_HEADING + 1e-9
+      );
     }
   });
 });
@@ -296,11 +319,60 @@ describe('racingRoad.js — 道路分段（平坦赛道）', () => {
       expect(seg.zCenter).toBeCloseTo((seg.zStart + seg.zEnd) / 2, 10);
     }
   });
+
+  it('每段的 length 与 halfWidth 应等于基本参数', () => {
+    const segments = buildRoadSegments(0);
+    for (const seg of segments) {
+      expect(seg.length).toBe(ROAD_SEGMENT_LENGTH);
+      expect(seg.halfWidth).toBe(ROAD_HALF_WIDTH);
+    }
+  });
+
+  it('在 progress=0 时 zCenterWorld 与 zCenter 相等（wrap 边界）', () => {
+    // progress=0 时 wrapRoadZ(zCenter - 0) = zCenter，是 wrap 后的恒等边界
+    const segments = buildRoadSegments(0);
+    for (const seg of segments) {
+      expect(seg.zCenterWorld).toBe(seg.zCenter);
+    }
+  });
+
+  it('zCenterWorld 在 progress>0 时随 wrap 在 [0, ROAD_TOTAL_LENGTH) 内滚动', () => {
+    const segments0 = buildRoadSegments(0);
+    const segments10 = buildRoadSegments(10);
+    // 至少有一段视觉 z 发生变化
+    let anyScrolled = false;
+    for (let i = 0; i < segments0.length; i++) {
+      if (segments0[i].zCenterWorld !== segments10[i].zCenterWorld) {
+        anyScrolled = true;
+        break;
+      }
+    }
+    expect(anyScrolled).toBe(true);
+    // 滚动后 zCenterWorld 仍在 [0, ROAD_TOTAL_LENGTH) 范围内
+    for (const seg of segments10) {
+      expect(seg.zCenterWorld).toBeGreaterThanOrEqual(0);
+      expect(seg.zCenterWorld).toBeLessThan(ROAD_TOTAL_LENGTH + 1e-9);
+    }
+  });
+
+  it('progress 增加一段长度后，zCenterWorld 整体向前 wrap 减少 1 段', () => {
+    // 验证 zCenterWorld = wrapRoadZ(zCenter - p) 的精确关系
+    const sl = ROAD_SEGMENT_LENGTH;
+    const p = sl; // 推进 1 段长度
+    const segments = buildRoadSegments(p);
+    for (let i = 0; i < segments.length; i++) {
+      const zCenter = i * sl + sl / 2;
+      const expected = ((zCenter - p) % ROAD_TOTAL_LENGTH + ROAD_TOTAL_LENGTH) %
+        ROAD_TOTAL_LENGTH;
+      expect(segments[i].zCenterWorld).toBeCloseTo(expected, 10);
+    }
+  });
 });
 
 describe('racingRoad.js — 种子变化', () => {
   beforeEach(() => {
     setRoadSeed(0);
+    _clearSegmentCacheForTest();
   });
 
   it('getRoadSeed 应返回当前种子值', () => {
@@ -329,13 +401,10 @@ describe('racingRoad.js — 种子变化', () => {
     const z = 50;
     setRoadSeed(1.234);
     const offset1 = roadCenterOffsetAt(z);
-    const elev1 = roadElevationAt(z);
     setRoadSeed(0);
     setRoadSeed(1.234);
     const offset2 = roadCenterOffsetAt(z);
-    const elev2 = roadElevationAt(z);
     expect(offset1).toBeCloseTo(offset2, 10);
-    expect(elev1).toBeCloseTo(elev2, 10);
   });
 
   it('相同种子应产生相同的道路偏移', () => {
@@ -368,7 +437,7 @@ describe('racingRoad.js — 种子变化', () => {
     expect(offset1).toBeCloseTo(offset2, 10);
   });
 
-  it('roadCenterOffsetAt 应受种子影响（修复验证）', () => {
+  it('roadCenterOffsetAt 应受种子影响', () => {
     const z = 100;
     setRoadSeed(100);
     const offset1 = roadCenterOffsetAt(z);
@@ -415,7 +484,7 @@ describe('racingRoad.js — 种子变化', () => {
     }
   });
 
-  it('roadFrameAt 的 heading 受种子影响（水平蜿蜒，y/pitch 不变）', () => {
+  it('roadFrameAt 的 heading 受种子影响（流式生成，y/pitch 不变）', () => {
     const z = 200;
     setRoadSeed(88);
     const frame1 = roadFrameAt(z);
@@ -442,6 +511,132 @@ describe('racingRoad.js — 种子变化', () => {
     expect(frame2.y).toBeCloseTo(0);
     // x 受种子影响的水平蜿蜒
     expect(frame1.x).toBeCloseTo(frame2.x, 10);
+  });
+});
+
+describe('racingRoad.js — 流式生成行为', () => {
+  beforeEach(() => {
+    setRoadSeed(0);
+    _clearSegmentCacheForTest();
+  });
+
+  it('progress 推进时，前方会出现新的随机路段', () => {
+    const p1 = 0;
+    const p2 = ROAD_TOTAL_LENGTH * 2; // 玩家前进两个视觉窗口的距离
+    const segs1 = buildRoadSegments(p1);
+    const segs2 = buildRoadSegments(p2);
+    // 至少有一段在两个 progress 下出现明显不同的中心偏移
+    let anyDifferent = false;
+    for (let i = 0; i < segs1.length; i++) {
+      if (Math.abs(segs1[i].centerOffsetX - segs2[i].centerOffsetX) > 0.01) {
+        anyDifferent = true;
+        break;
+      }
+    }
+    expect(anyDifferent).toBe(true);
+  });
+
+  it('相同 seed + 相同 progress 应产生确定结果（多次调用一致）', () => {
+    const segs1 = buildRoadSegments(123.456);
+    const segs2 = buildRoadSegments(123.456);
+    for (let i = 0; i < segs1.length; i++) {
+      expect(segs1[i].centerOffsetX).toBeCloseTo(segs2[i].centerOffsetX, 10);
+      expect(segs1[i].heading).toBeCloseTo(segs2[i].heading, 10);
+    }
+  });
+
+  it('相同 seed、不同 progress 应产生不同结果（流式生成）', () => {
+    const a = buildRoadSegments(0);
+    const b = buildRoadSegments(50);
+    const c = buildRoadSegments(100);
+    let aVsBDiff = false;
+    let aVsCDiff = false;
+    for (let i = 0; i < a.length; i++) {
+      if (Math.abs(a[i].centerOffsetX - b[i].centerOffsetX) > 0.001) aVsBDiff = true;
+      if (Math.abs(a[i].centerOffsetX - c[i].centerOffsetX) > 0.001) aVsCDiff = true;
+    }
+    expect(aVsBDiff).toBe(true);
+    expect(aVsCDiff).toBe(true);
+  });
+
+  it('不同 seed 在同一 progress 下应产生不同结果', () => {
+    setRoadSeed(11);
+    const a = buildRoadSegments(0);
+    setRoadSeed(22);
+    const b = buildRoadSegments(0);
+    let anyDifferent = false;
+    for (let i = 0; i < a.length; i++) {
+      if (Math.abs(a[i].centerOffsetX - b[i].centerOffsetX) > 0.001) {
+        anyDifferent = true;
+        break;
+      }
+    }
+    expect(anyDifferent).toBe(true);
+  });
+
+  it('setRoadSeed 改变后应清空缓存（后续查询等价于冷启动）', () => {
+    // 先预热一些路段
+    buildRoadSegments(0);
+    buildRoadSegments(50);
+    const sizeBefore = _getSegmentCacheSizeForTest();
+    expect(sizeBefore).toBeGreaterThan(0);
+    // 切换种子
+    setRoadSeed(9999);
+    // 缓存应被清空
+    expect(_getSegmentCacheSizeForTest()).toBe(0);
+  });
+
+  it('不同 seed 切换后旧 seed 的结果不能泄漏', () => {
+    setRoadSeed(123);
+    const a = buildRoadSegments(50);
+    setRoadSeed(456);
+    const b = buildRoadSegments(50);
+    // 至少有一段差异显著
+    let diff = false;
+    for (let i = 0; i < a.length; i++) {
+      if (Math.abs(a[i].centerOffsetX - b[i].centerOffsetX) > 0.01) {
+        diff = true;
+        break;
+      }
+    }
+    expect(diff).toBe(true);
+  });
+
+  it('缓存条目数随 progress 推进单调不减（流式扩展）', () => {
+    _clearSegmentCacheForTest();
+    expect(_getSegmentCacheSizeForTest()).toBe(0);
+    buildRoadSegments(0);
+    const size0 = _getSegmentCacheSizeForTest();
+    buildRoadSegments(50);
+    const size50 = _getSegmentCacheSizeForTest();
+    buildRoadSegments(500);
+    const size500 = _getSegmentCacheSizeForTest();
+    expect(size0).toBeGreaterThan(0);
+    expect(size50).toBeGreaterThanOrEqual(size0);
+    expect(size500).toBeGreaterThanOrEqual(size50);
+  });
+
+  it('缓存条目数有上限（自动清理过期路段）', () => {
+    _clearSegmentCacheForTest();
+    // 推进到很远的位置，触发多次清理
+    buildRoadSegments(100000);
+    const size = _getSegmentCacheSizeForTest();
+    // 缓存窗口上限 ≈ 2 * BUFFER
+    expect(size).toBeLessThanOrEqual(ROAD_PROCGEN_CACHE_BUFFER * 2 + 8);
+    // 缓存窗口下限至少能覆盖视觉窗口
+    expect(size).toBeGreaterThanOrEqual(ROAD_SEGMENT_COUNT);
+  });
+
+  it('连续推进 progress 后新调用的 roadCenterOffsetAt 仍能给出有限值', () => {
+    // 不应因缓存清理而抛错或返回 NaN
+    for (let p = 0; p < 2000; p += 37) {
+      buildRoadSegments(p);
+      for (let dz = -10; dz <= 10; dz += 5) {
+        const z = 100 + dz;
+        expect(Number.isFinite(roadCenterOffsetAt(z))).toBe(true);
+        expect(Number.isFinite(roadHeadingAt(z))).toBe(true);
+      }
+    }
   });
 });
 

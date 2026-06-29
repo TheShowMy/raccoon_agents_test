@@ -242,8 +242,10 @@ export function createRacingEngine(overrides, rng) {
       kind,
       lane,
       z: config.spawnZ,
-      // 障碍物被跳跃成功跨越后置 cleared=true（仍会在越过时得分），
-      // resolved=true 表示不再参与任何碰撞/得分判定，等待 despawn。
+      // 障碍物被跳跃成功跨越后置 cleared=true（仍会在越过时得分）；
+      // resolved=true 表示该实体已越过 passRadius 并完成计分（或是非得分实体已
+      // 自然过线），等待 despawn 移除。撞到玩家的实体不再使用此字段——
+      // 它们会在同一帧被直接从 state.entities 中移除（详见 handleCollisionsAndScoring）。
       cleared: false,
       resolved: false,
     });
@@ -267,22 +269,38 @@ export function createRacingEngine(overrides, rng) {
     );
   }
 
-  function applyHit(damage, kind) {
+  function applyHit(damage, kind, entity) {
     state.health = Math.max(0, state.health - damage);
     state.stats.hits += 1;
-    state.lastEvent = { type: 'hit', kind, damage };
+    state.lastEvent = {
+      type: 'hit',
+      kind,
+      damage,
+      lane: entity.lane,
+      z: entity.z,
+    };
     if (state.health <= 0) {
       state.status = RACING_STATUS.GAMEOVER;
-      state.lastEvent = { type: 'gameover', reason: kind };
+      state.lastEvent = {
+        type: 'gameover',
+        reason: kind,
+        lane: entity.lane,
+        z: entity.z,
+      };
     }
   }
 
-  function applyPickup(heal) {
+  function applyPickup(heal, entity) {
     const before = state.health;
     state.health = clamp(state.health + heal, 0, state.maxHealth);
     if (state.health > before) {
       state.stats.collectedPickups += 1;
-      state.lastEvent = { type: 'pickup', heal: state.health - before };
+      state.lastEvent = {
+        type: 'pickup',
+        heal: state.health - before,
+        lane: entity.lane,
+        z: entity.z,
+      };
     }
   }
 
@@ -304,7 +322,12 @@ export function createRacingEngine(overrides, rng) {
     const { player } = state;
 
     // 阶段 1：碰撞检测（仅实体当前 z 在玩家碰撞半径内）
-    for (let i = 0; i < state.entities.length; i++) {
+    // 发生碰撞的实体在本帧立即从 state.entities 中移除，
+    // 让渲染层 next syncEntityMeshes 直接销毁对应 mesh，
+    // 同时把 lane / z 写入 lastEvent 供渲染层在正确位置播放特效。
+    // 跳跃成功跨越的障碍物（cleared）不在此移除，仍走阶段 2 计分。
+    // 用反向迭代以便 splice 安全。
+    for (let i = state.entities.length - 1; i >= 0; i--) {
       const e = state.entities[i];
       if (e.resolved || e.cleared) continue;
       if (e.lane !== player.lane) continue;
@@ -312,25 +335,27 @@ export function createRacingEngine(overrides, rng) {
       if (zDiff < -config.collisionRadius || zDiff > config.collisionRadius) continue;
 
       if (e.kind === ENTITY_KIND.PICKUP) {
-        e.resolved = true;
-        applyPickup(config.pickupHeal);
+        // 立即移除——拾取后道具不应继续前移穿过赛车。
+        state.entities.splice(i, 1);
+        applyPickup(config.pickupHeal, e);
         continue;
       }
       if (e.kind === ENTITY_KIND.OBSTACLE) {
         // 跳跃高度足够即视为安全跨越：标记 cleared，后续帧不再触发碰撞，
-        // 待实体越过 passRadius 时仍正常得分。
+        // 待实体越过 passRadius 时仍正常得分（阶段 2）。
         if (player.jumping && player.y >= config.jumpClearHeight) {
           e.cleared = true;
           continue;
         }
-        e.resolved = true;
-        applyHit(config.obstacleDamage, ENTITY_KIND.OBSTACLE);
+        // 未能跳跃躲避——立即移除并扣血。
+        state.entities.splice(i, 1);
+        applyHit(config.obstacleDamage, ENTITY_KIND.OBSTACLE, e);
         if (state.status === RACING_STATUS.GAMEOVER) return;
         continue;
       }
-      // VEHICLE：跳跃不能躲避，必定扣血。
-      e.resolved = true;
-      applyHit(config.vehicleDamage, ENTITY_KIND.VEHICLE);
+      // VEHICLE：跳跃不能躲避，必定扣血，立即移除。
+      state.entities.splice(i, 1);
+      applyHit(config.vehicleDamage, ENTITY_KIND.VEHICLE, e);
       if (state.status === RACING_STATUS.GAMEOVER) return;
     }
 

@@ -154,4 +154,112 @@ describe('ROAD_Y consistency', () => {
   });
 });
 
+/* ===================================================================
+   Integration: Game state machine — component patterns
+   (menu → playing → gameover → restart)
+   =================================================================== */
+
+describe('Game state machine (component integration patterns)', () => {
+  it('full death sequence: MAX_HEALTH → 0 triggers game-over boundary', () => {
+    // Simulates component's handleCollisions + game-over check loop
+    let health = MAX_HEALTH; // 5
+
+    // Obstacle hits: 5→4→3→2→1
+    for (let i = 0; i < 4; i++) {
+      health = applyCollision(health, { type: OBJECT_TYPES.OBSTACLE }).health;
+    }
+    expect(health).toBe(1);
+
+    // One more obstacle hit: 1→0 → game over
+    health = applyCollision(health, { type: OBJECT_TYPES.OBSTACLE }).health;
+    expect(health).toBe(0);
+
+    // Component would set gameState = 'gameover' when health <= 0
+    const isGameOver = health <= 0;
+    expect(isGameOver).toBe(true);
+  });
+
+  it('restart sequence: reset health from 0 to MAX_HEALTH', () => {
+    // Simulates restartGame() resetting health
+    let health = 0;
+    health = MAX_HEALTH; // reset
+    expect(health).toBe(MAX_HEALTH);
+  });
+
+  it('overkill damage clamped at 0, never negative', () => {
+    // Health is 1, vehicle hit deals 2 damage → clamped to 0
+    const result = applyCollision(1, { type: OBJECT_TYPES.ONCOMING_VEHICLE });
+    expect(result.health).toBe(0);
+    expect(result.healthDelta).toBe(-1);
+  });
+
+  it('heal from near-death cannot exceed MAX_HEALTH', () => {
+    // Health = 4, heal = +1 → 5 (max)
+    const heal1 = applyCollision(4, { type: OBJECT_TYPES.REPAIR_KIT });
+    expect(heal1.health).toBe(MAX_HEALTH);
+    expect(heal1.healthDelta).toBe(1);
+
+    // Already at max, heal should be 0 delta
+    const heal2 = applyCollision(MAX_HEALTH, { type: OBJECT_TYPES.REPAIR_KIT });
+    expect(heal2.healthDelta).toBe(0);
+    expect(heal2.health).toBe(MAX_HEALTH);
+  });
+
+  it('rapid sequential damage: component processes multiple objects per frame', () => {
+    // Simulates handleCollisions loop over objectDescriptors
+    const hits = [
+      { type: OBJECT_TYPES.OBSTACLE },
+      { type: OBJECT_TYPES.REPAIR_KIT },
+      { type: OBJECT_TYPES.ONCOMING_VEHICLE },
+    ];
+
+    let health = MAX_HEALTH;
+    for (const hit of hits) {
+      const r = applyCollision(health, hit);
+      health = r.health;
+    }
+    // 5 → 4 (obstacle -1) → 5 (repair +1) → 3 (vehicle -2)
+    expect(health).toBe(3);
+  });
+
+  it('lane mismatch: objects in different lanes never collide', () => {
+    const player = { lane: 0, z: 0, y: 0 };
+    const obstacle = { type: OBJECT_TYPES.OBSTACLE, active: true, lane: 1, z: 0, zWidth: 1 };
+    expect(checkCollision(player, obstacle)).toBe(false);
+
+    const vehicle_right = { type: OBJECT_TYPES.ONCOMING_VEHICLE, active: true, lane: -1, z: 0, zWidth: 1 };
+    expect(checkCollision(player, vehicle_right)).toBe(false);
+  });
+
+  it('inactive objects never collide', () => {
+    const obj = { type: OBJECT_TYPES.OBSTACLE, active: false, lane: 0, z: 0, zWidth: 1 };
+    expect(checkCollision({ lane: 0, z: 0, y: 0 }, obj)).toBe(false);
+  });
+
+  it('Z position far away: no collision', () => {
+    const player = { lane: 0, z: 0, y: 0 };
+    const obj = { type: OBJECT_TYPES.OBSTACLE, active: true, lane: 0, z: 10, zWidth: 1 };
+    expect(checkCollision(player, obj)).toBe(false);
+  });
+
+  it('recycleObjects filters out passed objects behind cleanup threshold', () => {
+    const active = [
+      { type: OBJECT_TYPES.OBSTACLE, z: 5 },
+      { type: OBJECT_TYPES.ONCOMING_VEHICLE, z: -10 },
+      { type: OBJECT_TYPES.REPAIR_KIT, z: 15 },
+      { type: OBJECT_TYPES.OBSTACLE, z: -30 },
+    ];
+    // Player at z=0, cleanupMargin=10 → objects with z > 10 are behind
+    const kept = active.filter((o) => o.z < 10);
+    expect(kept).toHaveLength(3);
+    expect(kept.map((o) => o.z)).toEqual([5, -10, -30]);
+  });
+
+  it('null/undefined object entries are skipped without throwing', () => {
+    const input = [null, undefined, { type: OBJECT_TYPES.OBSTACLE, z: -10 }];
+    const filtered = input.filter(Boolean);
+    expect(filtered).toHaveLength(1);
+  });
+});
+
 

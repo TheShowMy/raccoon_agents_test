@@ -56,8 +56,11 @@
      =================================================================== */
   let health = MAX_HEALTH;
   let distance = 0;
-  let gameState = 'playing';
+  let gameState = 'menu';
   let gameOverHandled = false;
+  let showFlash = false;
+  let flashColor = 'rgba(255,255,255,0)';
+  let flashKey = 0;
   let loading = true;
   let webglError = false;
 
@@ -114,6 +117,14 @@
      =================================================================== */
   let prevTime = 0;
   let runningTime = 0;
+
+  /* ===================================================================
+     Particle effects system
+     =================================================================== */
+  const PARTICLE_COUNT_PER_BURST = 16;
+  const PARTICLE_LIFETIME = 0.7;
+  const PARTICLE_SPEED = 3.5;
+  let particleBursts = [];
 
   /* ===================================================================
      Constants
@@ -910,6 +921,9 @@
     // -- Update camera --
     updateCamera();
 
+    // -- Update particles --
+    updateParticles(dt);
+
     // -- Update scenery parallax --
     if (sceneryGroup) {
       sceneryGroup.position.z = scrollOffset * 0.15;
@@ -998,6 +1012,9 @@
     }
     roadTileData = [];
 
+    // Clean up particles
+    cleanupParticles();
+
     // Re-initialise road and vehicle position
     roadSegments = generateSegments(0, SEGMENTS_AHEAD);
     roadSegments.forEach((seg) => {
@@ -1018,6 +1035,33 @@
         engineHum = startEngineHum(audioCtx);
       } catch {}
     }
+  }
+
+  /* ===================================================================
+     Start / Menu
+     =================================================================== */
+  function startGame() {
+    initAudio();
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+    gameState = 'playing';
+  }
+
+  function triggerCollisionEffect(position) {
+    createParticleBurst(position, 0xff5533, PARTICLE_COUNT_PER_BURST);
+    showFlash = false;
+    flashColor = 'rgba(255, 60, 40, 0.35)';
+    flashKey++;
+    showFlash = true;
+  }
+
+  function triggerPickupEffect(position) {
+    createParticleBurst(position, 0x44ff44, PARTICLE_COUNT_PER_BURST);
+    showFlash = false;
+    flashColor = 'rgba(50, 255, 70, 0.25)';
+    flashKey++;
+    showFlash = true;
   }
 
   /* ===================================================================
@@ -1050,6 +1094,9 @@
     laneSwitchProgress = 0;
 
     if (audioCtx) playLaneSwitchSound(audioCtx);
+    if (scene && vehicle) {
+      createParticleBurst(vehicle.position.clone(), 0x88ccff, 8);
+    }
   }
 
   /* ===================================================================
@@ -1073,6 +1120,11 @@
     isJumping = true;
     jumpVelocity = JUMP_FORCE;
     if (audioCtx) playJumpSound(audioCtx);
+    if (scene && vehicle) {
+      const pos = vehicle.position.clone();
+      pos.y = ROAD_Y;
+      createParticleBurst(pos, 0xccccff, 8);
+    }
   }
 
   /* ===================================================================
@@ -1100,8 +1152,10 @@
 
         if (result.healthDelta < 0) {
           if (audioCtx) playCollisionSound(audioCtx);
+          if (vehicle) triggerCollisionEffect(vehicle.position.clone());
         } else if (result.healthDelta > 0) {
           if (audioCtx) playPickupSound(audioCtx);
+          if (vehicle) triggerPickupEffect(vehicle.position.clone());
         }
 
         health = result.health;
@@ -1181,6 +1235,91 @@
   }
 
   /* ===================================================================
+     Particles — Burst Effects
+     =================================================================== */
+  function createParticleBurst(position, colorHex, count = PARTICLE_COUNT_PER_BURST) {
+    const positions = new Float32Array(count * 3);
+    const velocities = [];
+
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = position.x + (Math.random() - 0.5) * 0.3;
+      positions[i * 3 + 1] = position.y + (Math.random() - 0.5) * 0.3;
+      positions[i * 3 + 2] = position.z + (Math.random() - 0.5) * 0.3;
+      velocities.push({
+        x: (Math.random() - 0.5) * PARTICLE_SPEED,
+        y: Math.random() * PARTICLE_SPEED * 0.6 + 0.3,
+        z: (Math.random() - 0.5) * PARTICLE_SPEED,
+      });
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+    const material = new THREE.PointsMaterial({
+      color: colorHex,
+      size: 0.25,
+      transparent: true,
+      opacity: 1.0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+
+    const points = new THREE.Points(geometry, material);
+    if (scene) scene.add(points);
+
+    particleBursts.push({
+      velocities,
+      geometry,
+      material,
+      points,
+      count,
+      lifetime: 0,
+      maxLifetime: PARTICLE_LIFETIME,
+    });
+
+    return points;
+  }
+
+  function updateParticles(dt) {
+    for (let i = particleBursts.length - 1; i >= 0; i--) {
+      const burst = particleBursts[i];
+      burst.lifetime += dt;
+      const progress = burst.lifetime / burst.maxLifetime;
+
+      if (progress >= 1) {
+        if (scene) scene.remove(burst.points);
+        burst.geometry.dispose();
+        burst.material.dispose();
+        particleBursts.splice(i, 1);
+        continue;
+      }
+
+      const pos = burst.geometry.attributes.position.array;
+      for (let j = 0; j < burst.count; j++) {
+        pos[j * 3] += burst.velocities[j].x * dt;
+        pos[j * 3 + 1] += burst.velocities[j].y * dt;
+        pos[j * 3 + 2] += burst.velocities[j].z * dt;
+        burst.velocities[j].y += -8 * dt;
+      }
+      burst.geometry.attributes.position.needsUpdate = true;
+
+      burst.material.opacity = Math.max(0, 1 - progress);
+      const scale = 1 + progress * 0.5;
+      burst.points.scale.set(scale, scale, scale);
+    }
+  }
+
+  function cleanupParticles() {
+    for (const burst of particleBursts) {
+      if (scene) scene.remove(burst.points);
+      burst.geometry.dispose();
+      burst.material.dispose();
+    }
+    particleBursts = [];
+  }
+
+  /* ===================================================================
      Audio Init
      =================================================================== */
   function initAudio() {
@@ -1198,6 +1337,17 @@
      =================================================================== */
   function onKeyDown(e) {
     if (gameState === 'gameover') return;
+
+    if (gameState === 'menu') {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+        e.preventDefault();
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        startGame();
+      }
+      return;
+    }
 
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) {
       e.preventDefault();
@@ -1333,6 +1483,9 @@
       }
     }
 
+    // Clean up particles
+    cleanupParticles();
+
     // Null out refs
     scene = null;
     camera = null;
@@ -1348,7 +1501,7 @@
   });
 </script>
 
-<!-- Template: minimal HUD + game-over overlay for testing -->
+<!-- Template -->
 <div class="racing-scene-container" bind:this={containerEl}>
   {#if loading}
     <div class="loading-overlay">
@@ -1358,21 +1511,56 @@
     <div class="loading-overlay">
       <div class="loading-text error">⚠️ WebGL 不可用，无法启动 3D 赛车游戏</div>
     </div>
-  {:else if gameState === 'playing'}
+  {:else if gameState === 'menu'}
+    <div class="menu-overlay">
+      <div class="menu-content">
+        <h1 class="menu-title">🏎️ 3D 赛车</h1>
+        <p class="menu-subtitle">无限盘山公路 · 驾驶越野车飞驰</p>
+        <div class="menu-instructions">
+          <div class="instruction-row">
+            <kbd>A</kbd><kbd>D</kbd>
+            <span>或</span>
+            <kbd>←</kbd><kbd>→</kbd>
+            <span>切换车道</span>
+          </div>
+          <div class="instruction-row">
+            <kbd>空格</kbd>
+            <span>跳跃（越过障碍物）</span>
+          </div>
+          <div class="instruction-row hint">
+            <span>碰撞障碍物 -❤️ · 撞车 -❤️❤️ · 拾取修理包 +❤️</span>
+          </div>
+        </div>
+        <button class="start-btn" on:click={startGame}>🚗 开始游戏</button>
+        <p class="menu-prompt">或按 Enter 键开始</p>
+      </div>
+    </div>
+  {:else}
     <div class="hud-minimal">
       <span class="hud-item">❤️ {displayHealth}/{MAX_HEALTH}</span>
       <span class="hud-item">📏 {displayDistance}m</span>
       <span class="hud-item">⭐ {displayScore}</span>
       <span class="hud-controls">A/D 切换车道 · 空格跳跃</span>
     </div>
-  {:else if gameState === 'gameover'}
-    <div class="gameover-message">
-      <div class="gameover-title">💥 游戏结束</div>
-      <div class="gameover-stats">
-        行驶 {displayDistance}m · 得分 {displayScore}
+    {#key flashKey}
+      {#if showFlash}
+        <!-- svelte-ignore a11y-no-static-element-interactions -->
+        <div
+          class="flash-overlay"
+          style="background: {flashColor};"
+          on:animationend={() => (showFlash = false)}
+        ></div>
+      {/if}
+    {/key}
+    {#if gameState === 'gameover'}
+      <div class="gameover-message">
+        <div class="gameover-title">💥 游戏结束</div>
+        <div class="gameover-stats">
+          行驶 {displayDistance}m · 得分 {displayScore}
+        </div>
+        <button class="restart-btn" on:click={restartGame}>🔄 重新开始</button>
       </div>
-      <button class="restart-btn" on:click={restartGame}>🔄 重新开始</button>
-    </div>
+    {/if}
   {/if}
 </div>
 
@@ -1416,6 +1604,130 @@
     opacity: 0.6;
     padding-left: 6px;
     border-left: 1px solid rgba(255, 255, 255, 0.15);
+  }
+
+  .menu-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 10;
+  }
+
+  .menu-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 36px 44px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.2);
+    max-width: 420px;
+    text-align: center;
+  }
+
+  .menu-title {
+    font-size: 32px;
+    font-weight: 800;
+    color: #fff;
+    margin: 0;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .menu-subtitle {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.7);
+    margin: 0 0 8px;
+  }
+
+  .menu-instructions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 18px;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.2);
+    width: 100%;
+  }
+
+  .instruction-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .instruction-row.hint {
+    font-size: 11px;
+    opacity: 0.65;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    height: 24px;
+    padding: 0 6px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+  }
+
+  .start-btn {
+    margin-top: 8px;
+    padding: 10px 32px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(135deg, #3498db, #2ecc71);
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: transform 0.12s ease, box-shadow 0.15s ease;
+    font-family: inherit;
+    letter-spacing: 0.5px;
+  }
+
+  .start-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(52, 152, 219, 0.45);
+  }
+
+  .start-btn:active {
+    transform: translateY(0);
+  }
+
+  .menu-prompt {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.4);
+    margin: 0;
+  }
+
+  .flash-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 8;
+    animation: flashFade 0.4s ease-out forwards;
+  }
+
+  @keyframes flashFade {
+    0% { opacity: 0.6; }
+    100% { opacity: 0; }
   }
 
   .gameover-message {

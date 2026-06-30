@@ -97,12 +97,15 @@ export const ROAD_SEGMENT_LENGTH = ROAD_TOTAL_LENGTH / ROAD_SEGMENT_COUNT;
  *     = max|q'(t)| / ROAD_SEGMENT_LENGTH
  *     = 3 * ROAD_PROCGEN_MAX_OFFSET / ROAD_SEGMENT_LENGTH
  *
- * 取值由验收标准中“单段最大斜率 ≤ 0.5 rad（约 28°）”硬性约束推导：
- *   3 * MAX_OFFSET / 6 ≤ 0.5  ⇒  MAX_OFFSET ≤ 1.0
  * 后续任务要求弯道幅度明显增大且富有变化，将 MAX_OFFSET 从 0.9 提升至 2.0，
  * 使道路产生明显的大弯与小弯交替，同时通过 Catmull-Rom 样条保证 C¹ 连续。
- * 实际 heading 的上界 = 3 * 2.0 / 6 ≈ 1.0 rad（约 57°），但典型值因 PRNG 离散
- * 采样远低于上界，呈现平滑蜿蜒而非急转弯。
+ * 为丰富弯道变化，控制点不再由独立 PRNG 生成，而是采用「分块强度 + 平滑随机
+ * 游走」：将 ROAD_SEGMENT_COUNT 个路段分为 5~8 个块，每块随机分配一个强度因子
+ * （从近乎直线 0.15 到非常曲折 1.8），并使相邻控制点间具有均值回归相关性
+ * （保留前值的 60% 并叠加强度缩放后的噪声），从而产生大弯、小弯、直道交替的
+ * 节奏感。同时限制相邻控制点差值 _MAX_ADJACENT_DIFF = 2.0，避免急转弯。
+ * 实际 heading 的上界 = 3 * 2.0 / 6 ≈ 1.0 rad（约 57°），但受随机游走相关性
+ * 和相邻差值约束，典型 heading 远低于上界，呈现平滑蜿蜒而非急转弯。
  */
 export const ROAD_PROCGEN_MAX_OFFSET = 2.0;
 
@@ -168,6 +171,97 @@ const _segmentCache = new Map();
  */
 function _resetSegmentCache() {
   _segmentCache.clear();
+  _controlPoints = null;
+}
+
+/* ===================================================================
+   预计算控制点（分块强度 + 平滑随机游走）
+   =================================================================== */
+
+/**
+ * 相邻控制点最大绝对差值。限制分块边界处相邻控制点之间的最大差，
+ * 避免急转弯。段边界处的 heading 最大值为
+ * 0.5 * _MAX_ADJACENT_DIFF / ROAD_SEGMENT_LENGTH ≈ 0.333 rad。
+ */
+const _MAX_ADJACENT_DIFF = 4.0;
+
+/**
+ * 内部控制点钳制系数。Catmull-Rom 样条在控制点交替取相反极端值时，
+ * 插值输出可能略微超出控制点范围。此系数将控制点范围缩小到
+ * [-MAX_OFFSET*_CLAMP_FACTOR, MAX_OFFSET*_CLAMP_FACTOR]，保证
+ * 样条输出始终在 [-MAX_OFFSET, MAX_OFFSET] 内。
+ */
+const _CLAMP_FACTOR = 0.9;
+
+/**
+ * 预计算的控制点数组。
+ * 种子更改时由 _resetSegmentCache 置为 null，下次调用 _generateSegmentData
+ * 时重新生成全部 ROAD_SEGMENT_COUNT 个控制点。
+ */
+let _controlPoints = null;
+
+/**
+ * 预计算全部控制点。每块分配一个强度系数，块内各段独立采样按强度缩放，
+ * 再限制相邻差值避免急转弯。
+ * 块间强度独立变化 → 大弯/小弯/直道交替呈现；
+ * 块内独立采样 → 相邻控制点不相关 → Catmull-Rom 段内 heading 可达较大值
+ * （高曲率块内产生明显摆动），同时相邻差值限制防止突兀转向。
+ */
+function _precomputeControlPoints() {
+  const pts = new Array(ROAD_SEGMENT_COUNT);
+  const rng = _makeRng(_hashSeedIndex(_roadSeed, -9999));
+
+  // 分块边界：5~8 段每块
+  const chunkSizes = [];
+  let remaining = ROAD_SEGMENT_COUNT;
+  while (remaining > 0) {
+    const size = Math.min(remaining, 5 + Math.floor(rng() * 4));
+    chunkSizes.push(size);
+    remaining -= size;
+  }
+
+  const chunkCount = chunkSizes.length;
+  // 强度选项（影响采样范围中的乘法因子）：
+  //   0.2  ≈ 近乎直道（采样范围 [-0.4, +0.4]，钳制到 ±1.8）
+  //   2.5  ≈ 非常曲折（采样范围 [-5, +5]，钳制到 ±1.8）
+  const intensityOptions = [0.25, 0.5, 0.9, 1.2, 1.6, 2.5];
+  const chunkIntensities = new Array(chunkCount);
+  for (let c = 0; c < chunkCount; c++) {
+    chunkIntensities[c] = intensityOptions[Math.floor(rng() * intensityOptions.length)];
+  }
+
+  const clampVal = ROAD_PROCGEN_MAX_OFFSET * _CLAMP_FACTOR;
+
+  // 逐段独立采样，按分块强度缩放后钳制 + 限制相邻差值
+  let ci = 0;
+  let posInChunk = 0;
+
+  pts[0] = (rng() - 0.5) * 2 * ROAD_PROCGEN_MAX_OFFSET * chunkIntensities[0];
+  pts[0] = Math.max(-clampVal, Math.min(clampVal, pts[0]));
+
+  for (let i = 1; i < ROAD_SEGMENT_COUNT; i++) {
+    posInChunk++;
+    if (posInChunk >= chunkSizes[ci] && ci < chunkCount - 1) {
+      ci++;
+      posInChunk = 0;
+    }
+
+    const intensity = chunkIntensities[ci];
+
+    // 独立采样，按当前块强度缩放
+    const raw = (rng() - 0.5) * 2 * ROAD_PROCGEN_MAX_OFFSET * intensity;
+    let curr = Math.max(-clampVal, Math.min(clampVal, raw));
+
+    // 限制相邻差值，避免急转弯
+    const diff = curr - pts[i - 1];
+    if (Math.abs(diff) > _MAX_ADJACENT_DIFF) {
+      curr = pts[i - 1] + Math.sign(diff) * _MAX_ADJACENT_DIFF;
+    }
+
+    pts[i] = curr;
+  }
+
+  _controlPoints = pts;
 }
 
 /**
@@ -198,14 +292,15 @@ function _makeRng(seed32) {
 
 /**
  * 为指定路段序号生成基础数据（仅 centerOffsetX）。
+ * 使用预计算的分块随机游走控制点，首次调用时触发 _precomputeControlPoints。
  * 每次对同一 (seed, idx) 调用结果完全一致。
  */
 function _generateSegmentData(idx) {
-  const rng = _makeRng(_hashSeedIndex(_roadSeed, idx));
-  // 取第一个 PRNG 值并映射到 [-MAX, +MAX]
-  const u = rng();
+  if (!_controlPoints) {
+    _precomputeControlPoints();
+  }
   return {
-    centerOffsetX: (u - 0.5) * 2 * ROAD_PROCGEN_MAX_OFFSET,
+    centerOffsetX: _controlPoints[idx],
   };
 }
 

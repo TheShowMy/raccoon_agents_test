@@ -88,24 +88,24 @@ export const ROAD_SEGMENT_LENGTH = ROAD_TOTAL_LENGTH / ROAD_SEGMENT_COUNT;
 
 /**
  * 每个路段中心偏移 x 的最大绝对值（世界单位）。
- * 相邻两段 centerOffsetX 之差最大为 2 * ROAD_PROCGEN_MAX_OFFSET。
- * 段内为平滑插值 s(t)（余弦方案：s(t) = 0.5 - 0.5·cos(πt)），
- * 段内斜率 s'(t) = 0.5·π·sin(πt) 的最大值为 π/2（t = 0.5），
- * 因此单段内 heading 的最大绝对值为：
+ * 相邻两段控制点 centerOffsetX 的最大绝对差为 2 * ROAD_PROCGEN_MAX_OFFSET。
+ * 段内为周期性 Catmull-Rom 样条插值，段边界处切向为 (P_{i+1} - P_{i-1}) / 2。
+ * 对于控制点 ∈ [-MAX, MAX]，样条导数的最大绝对值出现于控制点交替取极值
+ * （如 -MAX, +MAX, -MAX, +MAX）的情形，此时 q'(t) = 12·MAX·t·(1-t)，
+ * 最大值在 t = 0.5 处为 3·MAX。因此单段内 heading 的最大绝对值为：
  *   ROAD_PROCGEN_MAX_HEADING
- *     = (2 * ROAD_PROCGEN_MAX_OFFSET / ROAD_SEGMENT_LENGTH) * max(s'(t))
- *     = (2 * ROAD_PROCGEN_MAX_OFFSET / ROAD_SEGMENT_LENGTH) * (π / 2)
+ *     = max|q'(t)| / ROAD_SEGMENT_LENGTH
+ *     = 3 * ROAD_PROCGEN_MAX_OFFSET / ROAD_SEGMENT_LENGTH
  *
  * 取值由验收标准中“单段最大斜率 ≤ 0.5 rad（约 28°）”硬性约束推导：
- *   2 * MAX_OFFSET / 6 * π/2 ≤ 0.5
- *   ⇒ MAX_OFFSET ≤ 0.5 * 6 / π = 3/π ≈ 0.9549
- * 这里取 0.9 留出约 6% 安全裕量，对应 ROAD_PROCGEN_MAX_HEADING ≈ 0.471 rad。
+ *   3 * MAX_OFFSET / 6 ≤ 0.5  ⇒  MAX_OFFSET ≤ 1.0
+ * 这里取 0.9 留出约 10% 安全裕量，对应 ROAD_PROCGEN_MAX_HEADING ≈ 0.45 rad。
  */
 export const ROAD_PROCGEN_MAX_OFFSET = 0.9;
 
-/** 单段内 heading 的最大绝对值（由上述公式推导，余弦方案 max(s'(t)) = π/2） */
+/** 单段内 heading 的最大绝对值（Catmull-Rom 样条导数上界 = 3 * MAX_OFFSET / SL） */
 export const ROAD_PROCGEN_MAX_HEADING =
-  ((2 * ROAD_PROCGEN_MAX_OFFSET) / ROAD_SEGMENT_LENGTH) * (Math.PI / 2);
+  (3 * ROAD_PROCGEN_MAX_OFFSET) / ROAD_SEGMENT_LENGTH;
 
 /**
  * 旧版流式生成缓存的窗口大小（保留以兼容旧调用方与测试）。
@@ -232,40 +232,69 @@ function _ensureSegment(idx) {
    =================================================================== */
 
 /**
- * 段内平滑插值函数 s(t)，t ∈ [0, 1]。
- * 满足 s(0) = 0、s(1) = 1、s'(0) = s'(1) = 0。
- * 采用余弦方案：s(t) = 0.5 - 0.5 * cos(π * t)
- *  - t = 0 时 s = 0；
- *  - t = 1 时 s = 1；
- *  - t = 0.5 时 s = 0.5（中点对称，与线性插值一致）。
+ * 周期性均匀 Catmull-Rom 样条值函数 q(t)，t ∈ [0, 1]。
+ * 对控制点 (P0, P1, P2, P3) 计算 P1→P2 段上的样条值：
+ *   q(t) = 0.5 · [
+ *     2·P1 +
+ *     (-P0 + P2)·t +
+ *     (2·P0 - 5·P1 + 4·P2 - P3)·t² +
+ *     (-P0 + 3·P1 - 3·P2 + P3)·t³
+ *   ]
+ * 满足 q(0)=P1、q(1)=P2，且 q'(0)=0.5·(P2-P0)、q'(1)=0.5·(P3-P1)，
+ * 因此相邻段在共享控制点处 C¹ 自然连续。
+ * 周期边界通过将索引模 ROAD_SEGMENT_COUNT 实现，使控制点集周期性映射。
  *
- * @param {number} t - 段内局部参数，∈ [0, 1]
- * @returns {number} 平滑插值结果
+ * @param {number} t - 段内局部参数 ∈ [0, 1]
+ * @param {number} p0 - 前一段控制点
+ * @param {number} p1 - 当前段起点控制点
+ * @param {number} p2 - 当前段终点控制点
+ * @param {number} p3 - 后一段控制点
+ * @returns {number} 样条插值值
  */
-function _smoothStep(t) {
-  return 0.5 - 0.5 * Math.cos(Math.PI * t);
+function _catmullRomValue(t, p0, p1, p2, p3) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return 0.5 * (
+    2 * p1 +
+    (-p0 + p2) * t +
+    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+    (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+  );
 }
 
 /**
- * 段内平滑插值函数的导数 s'(t)，t ∈ [0, 1]。
- * 余弦方案：s'(t) = 0.5 * π * sin(π * t)
- *  - t = 0 时 s' = 0；
- *  - t = 1 时 s' = 0；
- *  - t = 0.5 时 s' = π/2（约 1.5708，全段最大值）。
+ * 均匀 Catmull-Rom 样条导数函数 q'(t)，t ∈ [0, 1]。
+ *   q'(t) = 0.5 · [
+ *     (-P0 + P2) +
+ *     2·(2·P0 - 5·P1 + 4·P2 - P3)·t +
+ *     3·(-P0 + 3·P1 - 3·P2 + P3)·t²
+ *   ]
  *
- * @param {number} t - 段内局部参数，∈ [0, 1]
- * @returns {number} 平滑插值函数的导数
+ * @param {number} t - 段内局部参数 ∈ [0, 1]
+ * @param {number} p0 - 前一段控制点
+ * @param {number} p1 - 当前段起点控制点
+ * @param {number} p2 - 当前段终点控制点
+ * @param {number} p3 - 后一段控制点
+ * @returns {number} 样条导数（参数域 dx/dt）
  */
-function _smoothStepDerivative(t) {
-  return 0.5 * Math.PI * Math.sin(Math.PI * t);
+function _catmullRomDerivative(t, p0, p1, p2, p3) {
+  const t2 = t * t;
+  return 0.5 * (
+    (-p0 + p2) +
+    2 * (2 * p0 - 5 * p1 + 4 * p2 - p3) * t +
+    3 * (-p0 + 3 * p1 - 3 * p2 + p3) * t2
+  );
 }
 
 /**
  * 计算道路中心线在指定 z 处的水平偏移 x
  * 每个 baseIndex = (segmentIndex mod ROAD_SEGMENT_COUNT) 拥有一个随机中心偏移，
- * 任意 z 通过"所在段 → 下一段"的平滑插值（余弦 s(t)）得到连续结果；
- * 因 s(0) = 0、s(1) = 1 且 s'(0) = s'(1) = 0，
- * 段内为平滑曲线，段间 C¹ 衔接，整条中心线无折角。
+ * 任意 z 通过 Catmull-Rom 样条 q(t) 在 4 个控制点 (P0=P_{idx-1}, P1=P_idx,
+ * P2=P_{idx+1}, P3=P_{idx+2}) 之间插值，满足 q(0)=P1、q(1)=P2。
+ * 索引均模 ROAD_SEGMENT_COUNT 以实现周期包装；因 Catmull-Rom 段间切线
+ *  q'(0) = 0.5·(P2-P0) 与上一段 q'(1) = 0.5·(P1-P_{-1}) 共享同一表达式
+ *  0.5·(P_{i+1} - P_{i-1})，整条中心线 C¹ 自然连续，无折角。
+ * 周期边界处因控制点集循环映射（P_{N}=P_0, P_{N+1}=P_1），切向自然连续（C¹）。
  * 因 baseIndex 以 ROAD_SEGMENT_COUNT 为周期，本函数以 ROAD_TOTAL_LENGTH 为周期：
  *   roadCenterOffsetAt(z) === roadCenterOffsetAt(z + ROAD_TOTAL_LENGTH)
  *
@@ -279,22 +308,27 @@ export function roadCenterOffsetAt(z) {
   const idx = Math.floor(zz / sl);
   // 把 z 落在 [idx*sl, (idx+1)*sl) 的局部参数 t
   const tRaw = (zz - idx * sl) / sl;
-  // 钳制避免浮点边界上出现 t 越界
+  // 钳制避免浮点边界上出现 t 越界。
+  // t ∈ [0, 1)：t=1 时钳为 1-1e-9 而非精确 1，避免 _catmullRomValue 在
+  // t=1 时返回 P2 而非 P1 的混淆（段边界处落在相邻段起点而非本段终点）。
+  // 此偏移极小（1e-9·SL ≈ 6e-9 世界单位），对几何精度无实质影响。
   const t = tRaw <= 0 ? 0 : tRaw >= 1 ? 1 - 1e-9 : tRaw;
-  const segA = _ensureSegment(idx);
-  const segB = _ensureSegment(idx + 1);
-  // 段内为平滑插值 s(t)：segA.centerOffsetX·(1-s(t)) + segB.centerOffsetX·s(t)
-  // s(0) = 0, s(1) = 1, s'(0) = s'(1) = 0 ⇒ 段间 C¹ 衔接
-  const s = _smoothStep(t);
-  return segA.centerOffsetX * (1 - s) + segB.centerOffsetX * s;
+  // Catmull-Rom 需要 4 个控制点：P_{idx-1}, P_{idx}, P_{idx+1}, P_{idx+2}
+  // 所有索引经周期包装（模 ROAD_SEGMENT_COUNT），确保周期边界自然连续
+  const p0 = _ensureSegment(idx - 1).centerOffsetX;
+  const p1 = _ensureSegment(idx).centerOffsetX;
+  const p2 = _ensureSegment(idx + 1).centerOffsetX;
+  const p3 = _ensureSegment(idx + 2).centerOffsetX;
+  return _catmullRomValue(t, p0, p1, p2, p3);
 }
 
 /**
  * 计算道路中心线在指定 z 处的切线斜率（弧度）
- * 段内为平滑插值，斜率（heading）为 s'(t) 在段内的连续函数：
- *   heading = (segB.centerOffsetX - segA.centerOffsetX) / ROAD_SEGMENT_LENGTH * s'(t)
- * 因 s'(0) = s'(1) = 0，相邻段的斜率在段边界处严格为 0，
- * 段间 C¹ 衔接（导数连续），无折角。
+ * 段内为 Catmull-Rom 样条导数 q'(t) / ROAD_SEGMENT_LENGTH 的连续函数：
+ *   heading = q'(t) / SL
+ * 其中 q'(t) 在段边界处的值为 0.5·(P_{i+1} - P_{i-1}) / SL，
+ * 相邻段在该值上完全一致（由 Catmull-Rom 的 C¹ 连续性保证），
+ * 因此段边界不再强制 heading 为 0，整条曲线 C¹ 连续。
  * 与 roadCenterOffsetAt 同为以 ROAD_TOTAL_LENGTH 为周期的函数。
  *
  * @param {number} z - 世界 z 坐标
@@ -308,9 +342,12 @@ export function roadHeadingAt(z) {
   // 钳制 t 与 roadCenterOffsetAt 一致，保证两函数在同一 t 上取值
   const tRaw = (zz - idx * sl) / sl;
   const t = tRaw <= 0 ? 0 : tRaw >= 1 ? 1 - 1e-9 : tRaw;
-  const segA = _ensureSegment(idx);
-  const segB = _ensureSegment(idx + 1);
-  return ((segB.centerOffsetX - segA.centerOffsetX) / sl) * _smoothStepDerivative(t);
+  // Catmull-Rom 需要 4 个控制点：P_{idx-1}, P_{idx}, P_{idx+1}, P_{idx+2}
+  const p0 = _ensureSegment(idx - 1).centerOffsetX;
+  const p1 = _ensureSegment(idx).centerOffsetX;
+  const p2 = _ensureSegment(idx + 1).centerOffsetX;
+  const p3 = _ensureSegment(idx + 2).centerOffsetX;
+  return _catmullRomDerivative(t, p0, p1, p2, p3) / sl;
 }
 
 /**

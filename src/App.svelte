@@ -4,6 +4,7 @@
   import Home from './routes/Home.svelte';
   import HelloWorld from './routes/HelloWorld.svelte';
   import MacOS from './routes/MacOS.svelte';
+  import RacingGame from './routes/RacingGame.svelte';
 
   let currentRoute = 'home';
 
@@ -12,6 +13,7 @@
     switch (hash) {
       case '/hello-world': return 'hello-world';
       case '/macos': return 'macos';
+      case '/racing-game': return 'racing-game';
       default: return 'home';
     }
   }
@@ -41,5 +43,9 @@
 {:else if currentRoute === 'macos'}
   <div in:fly={{ x: 20, duration: 300 }} out:fade={{ duration: 200 }}>
     <MacOS />
+  </div>
+{:else if currentRoute === 'racing-game'}
+  <div in:fly={{ x: 20, duration: 300 }} out:fade={{ duration: 200 }}>
+    <RacingGame />
   </div>
 {/if}

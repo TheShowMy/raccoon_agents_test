@@ -91,6 +91,11 @@
   const PLAYER_VISUAL_Z = Z_VISUAL_OFFSET; // 引擎 playerZ=0 → 渲染 z=90
   const ROAD_EDGE_HALF_THICKNESS = 0.12;
 
+  // 每个道路段沿 z 方向的细分段数。段首到段尾均匀采样 N+1 个点生成贴合
+  // Catmull-Rom 样条曲率的带状 mesh。4 细分 (1.5 单位 / 子段) 在典型
+  // 相机距离下足以消除弯道处的分段折线感，且顶点开销可控。
+  const ROAD_SUBDIVISIONS_PER_SEGMENT = 4;
+
   // 渲染层状态：是否已就绪
   let sceneReady = false;
   let sceneInitError = '';
@@ -323,41 +328,22 @@
     const group = new THREE.Group();
     group.name = `RoadSegment_${index}`;
 
-    // Bug1 修复：用贴合曲线的 BufferGeometry 重建道路段。
-    //
-    // 段首 / 段尾的曲线 x 值（绝对 z = index*SL 与 (index+1)*SL）由
-    // roadCenterOffsetAt 给出（等价于 laneLinesXAt 在 visualZ - progress
-    // 通路下的查询）。这两个值不随 progress 改变，段内线性插值得出
-    // centerOffsetX（与 buildRoadSegments 输出保持一致）。
-    // 渲染层通过 grp.position 平移把 mesh 对齐到曲线：每个 mesh 的 4 个
-    // 顶点直接落在曲线对应的 (x, z) 上，无需 heading 旋转。
-    //
-    // 不旋转 heading 的原因：原实现用 PlaneGeometry 旋转 heading 对齐曲线，
-    // 但 sin(h) 在大 heading 下不等于 h（线性近似失效），会导致相邻段在
-    // 弯道角点处出现错位 / 暗背景缝隙 / 标线断裂。新实现 4 顶点直接落在
-    // 曲线 (x, z) 上，从根本上消除该近似。
+    // 使用 Catmull-Rom 样条细分带状 mesh：每段沿 z 均匀采样 subDivs+1 个点，
+    // 逐点调用 roadCenterOffsetAt / laneLinesXAt，生成贴合样条曲率的带状 mesh。
+    // 相邻段在共享 z 边界处 (z = index*SL 与 (index+1)*SL) 顶点坐标通过
+    // 相同的 centerOffset 折算到局部坐标系，再由 syncRoadSegments 的
+    // grp.position 补偿回世界坐标，确保共享边界处精确衔接无错位缝隙。
+    // 不再旋转 heading：每个顶点的 x 直接落在曲线 (roadCenterOffsetAt(z), z) 上。
     const sl = ROAD_SEGMENT_LENGTH;
-    // 段首 / 段尾的曲线中线 x（绝对 z = index*SL 与 (index+1)*SL）。
-    // 注意：buildCurveAlignedQuad 的 xAtStart/xAtEnd 语义是“中线 x”，
-    // 路面 mesh 顶点会从 (中线 - halfWidth) 扩展到 (中线 + halfWidth)，
-    // 因此路面传 ROAD_HALF_WIDTH 作为 halfWidth 时必须传中线 x（roadCenterOffsetAt），
-    // 不能传 leftEdge / rightEdge（否则路面会向左/右偏移 ROAD_HALF_WIDTH，
-    // 露出暗背景缝隙）。4 条标线则传各自的世界 x（leftEdge / leftDivider /
-    // rightDivider / rightEdge），halfWidth 是标线半厚，扩展后落在路面表面。
-    const startCenter = roadCenterOffsetAt(index * sl);
-    const endCenter = roadCenterOffsetAt((index + 1) * sl);
-    const startLines = laneLinesXAt(index * sl);
-    const endLines = laneLinesXAt((index + 1) * sl);
-    const centerOffsetX = roadCenterOffsetAt(index * sl + sl / 2);
+    const zStart = index * sl;
+    const zEnd = (index + 1) * sl;
+    const subDivs = ROAD_SUBDIVISIONS_PER_SEGMENT;
 
-    // 路面：4 顶点贴合曲线的 quad，halfWidth = ROAD_HALF_WIDTH
-    // → 段首处顶点 x 范围为 [startCenter - ROAD_HALF_WIDTH, startCenter + ROAD_HALF_WIDTH]
-    //    ≡ [-ROAD_HALF_WIDTH + offset, +ROAD_HALF_WIDTH + offset]，覆盖整条路面。
-    const surfaceGeo = buildCurveAlignedQuad(
-      startCenter,
-      endCenter,
-      ROAD_HALF_WIDTH,
-      centerOffsetX,
+    // 路面：中线 = roadCenterOffsetAt(z)，左右扩展 ROAD_HALF_WIDTH
+    const surfaceGeo = buildTessellatedStrip(
+      zStart, zEnd, subDivs,
+      (z) => roadCenterOffsetAt(z) - ROAD_HALF_WIDTH,
+      (z) => roadCenterOffsetAt(z) + ROAD_HALF_WIDTH,
       0
     );
     const surfaceMat = new THREE.MeshStandardMaterial({
@@ -370,20 +356,19 @@
     group.add(surface);
 
     // 4 条标线：leftEdge / leftDivider / rightDivider / rightEdge
-    // 各为独立 4 顶点 quad，y 抬高 0.005 防 z-fighting
+    // 各为独立带状 mesh，y 抬高 0.005 防 z-fighting
     const lineY = 0.005;
     const lines = [
-      { start: startLines.leftEdge, end: endLines.leftEdge, halfWidth: ROAD_EDGE_HALF_THICKNESS, color: 0xe6e9f5 },
-      { start: startLines.leftDivider, end: endLines.leftDivider, halfWidth: 0.18, color: 0xf7c948 },
-      { start: startLines.rightDivider, end: endLines.rightDivider, halfWidth: 0.18, color: 0xf7c948 },
-      { start: startLines.rightEdge, end: endLines.rightEdge, halfWidth: ROAD_EDGE_HALF_THICKNESS, color: 0xe6e9f5 },
+      { fn: (z) => laneLinesXAt(z).leftEdge,      halfWidth: ROAD_EDGE_HALF_THICKNESS, color: 0xe6e9f5 },
+      { fn: (z) => laneLinesXAt(z).leftDivider,   halfWidth: 0.18,                     color: 0xf7c948 },
+      { fn: (z) => laneLinesXAt(z).rightDivider,  halfWidth: 0.18,                     color: 0xf7c948 },
+      { fn: (z) => laneLinesXAt(z).rightEdge,     halfWidth: ROAD_EDGE_HALF_THICKNESS, color: 0xe6e9f5 },
     ];
     for (const line of lines) {
-      const lineGeo = buildCurveAlignedQuad(
-        line.start,
-        line.end,
-        line.halfWidth,
-        centerOffsetX,
+      const lineGeo = buildTessellatedStrip(
+        zStart, zEnd, subDivs,
+        (z) => line.fn(z) - line.halfWidth,
+        (z) => line.fn(z) + line.halfWidth,
         lineY
       );
       const lineMat = new THREE.MeshStandardMaterial({
@@ -400,38 +385,68 @@
   }
 
   /**
-   * 构建一段贴合曲线的 4 顶点 quad BufferGeometry，作为路面或标线使用。
+   * 构建一段沿 z 方向细分的带状 BufferGeometry，贴合 Catmull-Rom 样条曲率。
    *
-   * 语义：xAtStart / xAtEnd 是“段首 / 段尾处的曲线中线 x”（world），
-   * mesh 横向会从中线 ± halfWidth 处展开，4 个顶点的 world x 分别为
-   *   xAtStart - halfWidth、xAtStart + halfWidth、xAtEnd + halfWidth、xAtEnd - halfWidth。
+   * 在 [zStart, zEnd] 均匀采样 subDivs+1 个点，逐个调用 leftXFn(z) / rightXFn(z)
+   * 获取左右边界的世界 x 坐标，生成 subDivs 个连续 quad 组成一条带状 mesh。
+   * 每两个相邻行构成一个 quad（两个三角形），法线朝 +y。
    *
-   * 调用约定：
-   *   - 路面：中线 x = roadCenterOffsetAt(index*SL) / roadCenterOffsetAt((index+1)*SL)，
-   *           halfWidth = ROAD_HALF_WIDTH，使 mesh 覆盖
-   *           [-ROAD_HALF_WIDTH+offset, +ROAD_HALF_WIDTH+offset] 的路面；
-   *     ⚠ 切勿传入 laneLinesXAt().leftEdge / rightEdge（那是边缘 x，不是中线 x），
-   *       否则路面会偏移 ROAD_HALF_WIDTH，露出右半 / 左半边暗背景缝隙。
-   *   - 标线：中线 x = laneLinesXAt().leftEdge / leftDivider / rightDivider / rightEdge，
-   *           halfWidth = ROAD_EDGE_HALF_THICKNESS（0.12）或 0.18，标线会落在路面表面。
+   * 局部坐标：
+   *   - x 以段中心 (zStart+zEnd)/2 处的 roadCenterOffsetAt 为基准偏移（后续由
+   *     syncRoadSegments 的 grp.position.x 补偿），使 world x 精确落在曲线上；
+   *   - z 以段中心为原点（-SL/2 到 +SL/2），后续由 grp.position.z 补偿。
    *
-   * 4 顶点的局部 x 已减去 centerOffset，使 mesh 局部原点对齐到段中心；
-   * 4 顶点的局部 z 分别为 -SL/2、-SL/2、+SL/2、+SL/2，使 mesh 在 z 方向
-   * 横跨整段长度。仅通过 grp.position 平移即可让 mesh 在世界坐标中对齐
-   * 当前 progress 下的曲线，不再需要 heading 旋转。
+   * 传入 leftXFn / rightXFn 示例：
+   *   - 路面：leftXFn=(z) => roadCenterOffsetAt(z) - ROAD_HALF_WIDTH,
+   *           rightXFn=(z) => roadCenterOffsetAt(z) + ROAD_HALF_WIDTH
+   *   - 左边缘标线：leftXFn=(z) => laneLinesXAt(z).leftEdge - ROAD_EDGE_HALF_THICKNESS,
+   *                rightXFn=(z) => laneLinesXAt(z).leftEdge + ROAD_EDGE_HALF_THICKNESS
+   *
+   * @param {number} zStart - 段首世界 z
+   * @param {number} zEnd - 段尾世界 z
+   * @param {number} subDivs - 沿 z 方向的细分段数（>=1）
+   * @param {(z:number)=>number} leftXFn - 给定世界 z 返回左边界世界 x
+   * @param {(z:number)=>number} rightXFn - 给定世界 z 返回右边界世界 x
+   * @param {number} y - mesh 局部 y 高度
+   * @returns {THREE.BufferGeometry}
    */
-  function buildCurveAlignedQuad(xAtStart, xAtEnd, halfWidth, centerOffset, y) {
-    const halfLen = ROAD_SEGMENT_LENGTH / 2;
-    const localStartX = xAtStart - centerOffset;
-    const localEndX = xAtEnd - centerOffset;
-    const verts = new Float32Array([
-      localStartX - halfWidth, y, -halfLen,
-      localStartX + halfWidth, y, -halfLen,
-      localEndX + halfWidth,   y,  halfLen,
-      localEndX - halfWidth,   y,  halfLen,
-    ]);
-    // 三角形顺序 (0, 2, 1) 与 (0, 3, 2) 使法线指向 +y（路面与标线在水平面，正面朝上）
-    const indices = new Uint16Array([0, 2, 1, 0, 3, 2]);
+  function buildTessellatedStrip(zStart, zEnd, subDivs, leftXFn, rightXFn, y) {
+    const sl = zEnd - zStart;
+    const subLen = sl / subDivs;
+    const segCenterZ = (zStart + zEnd) / 2;
+    const centerOffset = roadCenterOffsetAt(segCenterZ);
+
+    // (subDivs+1) 行 × 2 列（左/右顶点）
+    const rowCount = subDivs + 1;
+    const verts = new Float32Array(rowCount * 2 * 3);
+    for (let i = 0; i < rowCount; i++) {
+      const z = zStart + i * subLen;
+      const localZ = z - segCenterZ;
+      const lx = leftXFn(z) - centerOffset;
+      const rx = rightXFn(z) - centerOffset;
+      verts[i * 6 + 0] = lx;
+      verts[i * 6 + 1] = y;
+      verts[i * 6 + 2] = localZ;
+      verts[i * 6 + 3] = rx;
+      verts[i * 6 + 4] = y;
+      verts[i * 6 + 5] = localZ;
+    }
+
+    // subDivs 个 quad → 每个 2 个三角形 → 6 个索引
+    const indices = new Uint16Array(subDivs * 6);
+    for (let i = 0; i < subDivs; i++) {
+      const a = i * 2;
+      const b = i * 2 + 1;
+      const c = (i + 1) * 2 + 1;
+      const d = (i + 1) * 2;
+      indices[i * 6 + 0] = a;
+      indices[i * 6 + 1] = c;
+      indices[i * 6 + 2] = b;
+      indices[i * 6 + 3] = a;
+      indices[i * 6 + 4] = d;
+      indices[i * 6 + 5] = c;
+    }
+
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
     geo.setIndex(new THREE.BufferAttribute(indices, 1));

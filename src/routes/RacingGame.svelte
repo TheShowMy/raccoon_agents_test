@@ -128,8 +128,13 @@
     if (cur.status === RACING_STATUS.PLAYING) return;
     // 每局使用新的道路种子，确保道路形态不同
     setRoadSeed(Date.now() % 10000 + Math.random() * 1000);
-    engine.start();
+    // 种子变更后重建路段 mesh，使几何与新曲线精确对齐，
+    // 避免旧 mesh 顶点偏移与新曲线错位导致视觉缝隙 / 断裂
     roadProgress = 0;
+    rebuildRoadSegments();
+    // 重建后立即同步位置，避免新 mesh 在 (0,0,0) 处滞留一帧造成闪烁
+    syncRoadSegments();
+    engine.start();
   }
 
   /**
@@ -317,6 +322,24 @@
   }
 
   function initRoadSegments() {
+    for (let i = 0; i < ROAD_SEGMENT_COUNT; i++) {
+      const segGroup = buildRoadSegmentGroup(i);
+      scene.add(segGroup);
+      roadSegmentGroups.push(segGroup);
+    }
+  }
+
+  /**
+   * 销毁旧路段 mesh 并用当前种子重建全部路段，确保 mesh 几何与
+   * roadCenterOffsetAt / roadHeadingAt 使用的曲线精确一致。
+   * 在 setRoadSeed 变更种子后调用，避免旧几何与新曲线错位导致断裂。
+   */
+  function rebuildRoadSegments() {
+    for (const grp of roadSegmentGroups) {
+      scene.remove(grp);
+      disposeObject(grp);
+    }
+    roadSegmentGroups = [];
     for (let i = 0; i < ROAD_SEGMENT_COUNT; i++) {
       const segGroup = buildRoadSegmentGroup(i);
       scene.add(segGroup);
@@ -758,7 +781,9 @@
 </svelte:head>
 
 <div class="racing-game-page">
-  <BackNav href="#/" />
+  <div class="back-nav-wrapper">
+    <BackNav href="#/" />
+  </div>
 
   <PageHeader
     title="&lt;3D 越野车竞速 /&gt;"
@@ -922,11 +947,25 @@
   .racing-game-page {
     --page-max-width: 1480px;
     position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  .back-nav-wrapper {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: var(--bg-primary);
+    flex-shrink: 0;
   }
 
   .main {
     position: relative;
     flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     padding: 1.5rem 1.5rem 2rem;
     max-width: var(--page-max-width);
     margin: 0 auto;
@@ -937,7 +976,8 @@
   .scene-stage {
     position: relative;
     width: 100%;
-    height: clamp(380px, 62vh, 720px);
+    flex: 1;
+    min-height: 120px;
     border-radius: var(--radius);
     overflow: hidden;
     background: #14151f;
@@ -1316,7 +1356,8 @@
     }
 
     .scene-stage {
-      height: clamp(320px, 56vh, 560px);
+      flex: 1;
+      min-height: 80px;
       border-radius: calc(var(--radius) - 2px);
     }
 

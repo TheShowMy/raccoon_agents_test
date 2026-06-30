@@ -58,26 +58,6 @@
       </div>
     </a>
 
-    <a href="#/racing" class="list-card">
-      <div class="list-card__header">
-        <div class="list-card__header-left">
-          <span class="card__dots">
-            <span class="card__dot card__dot--red"></span>
-            <span class="card__dot card__dot--yellow"></span>
-            <span class="card__dot card__dot--green"></span>
-          </span>
-          <span class="list-card__title">3D 越野车竞速</span>
-        </div>
-        <span class="list-card__arrow">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="9 18 15 12 9 6"/>
-          </svg>
-        </span>
-      </div>
-      <div class="list-card__body">
-        <p class="list-card__desc">键盘操控越野车在 3D 蜿蜒赛道上无尽狂奔</p>
-      </div>
-    </a>
   </div>
 </Layout>
 

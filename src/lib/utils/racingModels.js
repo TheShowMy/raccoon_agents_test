@@ -1,8 +1,10 @@
 /**
- * 3D 越野车竞速模型工厂
+ * 极简高可读性 3D 赛车模型工厂
  *
- * 提供玩家越野车、障碍物、对向车辆、加血道具的 three.js 工厂函数。
- * 全部使用基础几何体（Box / Cylinder / Sphere 等）组合而成。
+ * 提供玩家越野车、障碍物、对向车辆、加血道具的 Three.js 工厂函数。
+ * 全部使用基础几何体（BoxGeometry / CylinderGeometry / SphereGeometry）组合而成，
+ * 采用柔和配色、简洁几何，避免高饱和与过度光效。
+ *
  * 本模块只负责构建可视的 3D 模型，不包含任何移动、碰撞或游戏逻辑。
  *
  * 方向约定（所有模型统一）：
@@ -83,63 +85,20 @@ export const PICKUP_BOUNDS = {
  * ============================================================ */
 
 /**
- * 创建一个统一的 PBR 风格材质实例。
+ * 创建一个柔和哑光材质。
  *
  * @param {number | string} color - 颜色（十六进制或字符串）。
  * @param {object} [opts] - 附加材质参数。
- * @param {number} [opts.roughness=0.55] - 粗糙度。
- * @param {number} [opts.metalness=0.25] - 金属度。
- * @param {number} [opts.emissive=0] - 自发光颜色。
- * @param {number} [opts.emissiveIntensity=0] - 自发光强度。
+ * @param {number} [opts.roughness=0.7] - 粗糙度。
+ * @param {number} [opts.metalness=0.0] - 金属度。
  * @returns {THREE.MeshStandardMaterial}
  */
-function makeMaterial(color, opts = {}) {
+function softMat(color, opts = {}) {
   return new THREE.MeshStandardMaterial({
     color,
-    roughness: opts.roughness ?? 0.55,
-    metalness: opts.metalness ?? 0.25,
-    emissive: opts.emissive ?? 0x000000,
-    emissiveIntensity: opts.emissiveIntensity ?? 0,
+    roughness: opts.roughness ?? 0.7,
+    metalness: opts.metalness ?? 0.0,
   });
-}
-
-/**
- * 创建一个车轮（圆柱），轴向沿 X 轴。
- *
- * @param {object} [opts] - 配置项。
- * @param {number} [opts.radius=0.26] - 车轮半径。
- * @param {number} [opts.width=0.22] - 车轮厚度（沿 X 轴）。
- * @param {number | string} [opts.tireColor=0x111111] - 轮胎颜色。
- * @param {number | string} [opts.rimColor=0xcccccc] - 轮毂颜色。
- * @returns {THREE.Group} 包含轮胎与轮毂的 Group，中心位于车轮中心。
- */
-function makeWheel(opts = {}) {
-  const radius = opts.radius ?? 0.26;
-  const width = opts.width ?? 0.22;
-  const tireColor = opts.tireColor ?? 0x111111;
-  const rimColor = opts.rimColor ?? 0xcccccc;
-
-  const group = new THREE.Group();
-  group.name = 'Wheel';
-
-  // 轮胎：圆柱沿 Y 轴，旋转后沿 X 轴
-  const tireGeo = new THREE.CylinderGeometry(radius, radius, width, 18);
-  const tireMat = makeMaterial(tireColor, { roughness: 0.85, metalness: 0.05 });
-  const tire = new THREE.Mesh(tireGeo, tireMat);
-  tire.rotation.z = Math.PI / 2;
-  tire.castShadow = true;
-  tire.receiveShadow = true;
-  group.add(tire);
-
-  // 轮毂：略小的圆柱
-  const rimGeo = new THREE.CylinderGeometry(radius * 0.55, radius * 0.55, width + 0.01, 12);
-  const rimMat = makeMaterial(rimColor, { roughness: 0.4, metalness: 0.6 });
-  const rim = new THREE.Mesh(rimGeo, rimMat);
-  rim.rotation.z = Math.PI / 2;
-  rim.castShadow = true;
-  group.add(rim);
-
-  return group;
 }
 
 /* ============================================================
@@ -149,166 +108,90 @@ function makeWheel(opts = {}) {
 /**
  * 创建玩家越野车。
  *
- * 组合结构（off-road SUV 风格）：
- * - 高底盘车身 + 底盘护板
- * - 驾驶舱（前后挡风玻璃 + 侧窗）
- * - 前 / 后保险杠
- * - 4 个大轮子（off-road 风格）
- * - 2 个前大灯 + 2 个后尾灯
- * - 简化的防滚架（4 立柱 + 顶部横梁）
+ * 极简风格：扁宽车身 + 略缩驾驶舱 + 4 个圆柱车轮 + 小圆大灯。
+ * 柔和色调、清晰轮廓，无过多装饰。
  *
- * 模型局部原点位于车底地面中心。
- * "车头"朝向 -Z 方向。
+ * 模型局部原点位于车底地面中心，"车头"朝向 -Z。
  *
  * @param {object} [options] - 配置项。
- * @param {number | string} [options.bodyColor=0xd9543d] - 车身主色。
- * @param {number | string} [options.cageColor=0x2a2a2a] - 防滚架颜色。
+ * @param {number | string} [options.bodyColor=0xc9734e] - 车身主色（暖土色）。
+ * @param {number | string} [options.wheelColor=0x2a2a2a] - 车轮颜色。
  * @returns {THREE.Group} 玩家越野车根节点，.userData.bounds = PLAYER_CAR_BOUNDS。
  */
 export function createPlayerCar(options = {}) {
-  const bodyColor = options.bodyColor ?? 0xd9543d;
-  const cageColor = options.cageColor ?? 0x2a2a2a;
+  const bodyColor = options.bodyColor ?? 0xc9734e;
+  const wheelColor = options.wheelColor ?? 0x2a2a2a;
 
   const group = new THREE.Group();
   group.name = 'PlayerCar';
   group.userData.bounds = PLAYER_CAR_BOUNDS;
   group.userData.kind = 'player';
 
-  const bodyMat = makeMaterial(bodyColor, { roughness: 0.45, metalness: 0.35 });
-  const darkMat = makeMaterial(0x1d1d1f, { roughness: 0.7, metalness: 0.2 });
-  const cageMat = makeMaterial(cageColor, { roughness: 0.6, metalness: 0.5 });
-  const glassMat = makeMaterial(0x8ab4f8, { roughness: 0.2, metalness: 0.4 });
-  const headlightMat = makeMaterial(0xfff4c2, {
-    roughness: 0.3,
-    metalness: 0.1,
-    emissive: 0xfff4c2,
-    emissiveIntensity: 0.4,
-  });
-  const taillightMat = makeMaterial(0xff3030, {
-    roughness: 0.3,
-    metalness: 0.1,
-    emissive: 0xff3030,
-    emissiveIntensity: 0.5,
-  });
+  const bodyMat = softMat(bodyColor);
+  const cabinMat = softMat(0xe8946a, { roughness: 0.6 });
+  const wheelMat = softMat(wheelColor, { roughness: 0.9 });
+  const windowMat = softMat(0xaac8e8, { roughness: 0.3 });
+  const accentMat = softMat(0xf5e6a0);
 
-  // —— 底盘（高离地间隙） ——
-  const chassisGeo = new THREE.BoxGeometry(0.85, 0.26, 1.55);
-  const chassis = new THREE.Mesh(chassisGeo, bodyMat);
-  chassis.position.y = 0.5;
-  chassis.castShadow = true;
-  chassis.receiveShadow = true;
-  group.add(chassis);
+  // —— 车身（扁宽 Box） —— 精确填充宽度 1.1 深度 1.8
+  const bodyGeo = new THREE.BoxGeometry(0.9, 0.32, 1.8);
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.y = 0.44;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  group.add(body);
 
-  // 底盘下方的护板
-  const skidGeo = new THREE.BoxGeometry(0.7, 0.06, 1.4);
-  const skid = new THREE.Mesh(skidGeo, darkMat);
-  skid.position.y = 0.36;
-  skid.castShadow = true;
-  group.add(skid);
-
-  // —— 驾驶舱 ——
-  const cabinGeo = new THREE.BoxGeometry(0.72, 0.3, 0.85);
-  const cabin = new THREE.Mesh(cabinGeo, bodyMat);
-  cabin.position.set(0, 0.78, 0.05);
+  // —— 驾驶舱 —— 顶部达 y=1.0 以满足 CAR_HEIGHT
+  const cabinGeo = new THREE.BoxGeometry(0.72, 0.36, 0.85);
+  const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+  cabin.position.y = 0.82;
   cabin.castShadow = true;
   group.add(cabin);
 
-  // 挡风玻璃（前）
-  const windshieldGeo = new THREE.BoxGeometry(0.66, 0.24, 0.04);
-  const windshield = new THREE.Mesh(windshieldGeo, glassMat);
-  windshield.position.set(0, 0.8, -0.36);
-  windshield.rotation.x = -0.35;
+  // —— 前挡风（薄片） ——
+  const windshieldGeo = new THREE.BoxGeometry(0.66, 0.22, 0.04);
+  const windshield = new THREE.Mesh(windshieldGeo, windowMat);
+  windshield.position.set(0, 0.82, -0.42);
+  windshield.castShadow = true;
   group.add(windshield);
 
-  // 后车窗
-  const rearWindowGeo = new THREE.BoxGeometry(0.66, 0.2, 0.04);
-  const rearWindow = new THREE.Mesh(rearWindowGeo, glassMat);
-  rearWindow.position.set(0, 0.82, 0.46);
-  rearWindow.rotation.x = 0.4;
+  // —— 后窗 ——
+  const rearWindowGeo = new THREE.BoxGeometry(0.66, 0.18, 0.04);
+  const rearWindow = new THREE.Mesh(rearWindowGeo, windowMat);
+  rearWindow.position.set(0, 0.82, 0.42);
+  rearWindow.castShadow = true;
   group.add(rearWindow);
 
-  // 侧窗（左右）
-  const sideWindowGeo = new THREE.BoxGeometry(0.04, 0.16, 0.7);
-  const sideWindowL = new THREE.Mesh(sideWindowGeo, glassMat);
-  sideWindowL.position.set(-0.37, 0.82, 0.05);
-  group.add(sideWindowL);
-  const sideWindowR = new THREE.Mesh(sideWindowGeo, glassMat);
-  sideWindowR.position.set(0.37, 0.82, 0.05);
-  group.add(sideWindowR);
-
-  // —— 防滚架：4 根短立柱 + 顶部 2 根横梁 ——
-  const postGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.1, 8);
-  const postPositions = [
-    [-0.34, 0.93, -0.32],
-    [0.34, 0.93, -0.32],
-    [-0.34, 0.93, 0.32],
-    [0.34, 0.93, 0.32],
-  ];
-  for (const [x, y, z] of postPositions) {
-    const post = new THREE.Mesh(postGeo, cageMat);
-    post.position.set(x, y, z);
-    post.castShadow = true;
-    group.add(post);
-  }
-
-  // 顶部横梁（沿 X 轴）
-  const cageTopXGeo = new THREE.BoxGeometry(0.72, 0.025, 0.025);
-  const cageTopX = new THREE.Mesh(cageTopXGeo, cageMat);
-  cageTopX.position.set(0, 0.99, 0);
-  cageTopX.castShadow = true;
-  group.add(cageTopX);
-
-  // 顶部横梁（沿 Z 轴，前后各一）
-  const cageTopZGeo = new THREE.BoxGeometry(0.025, 0.025, 0.65);
-  const cageTopZ = new THREE.Mesh(cageTopZGeo, cageMat);
-  cageTopZ.position.set(0, 0.99, 0);
-  cageTopZ.castShadow = true;
-  group.add(cageTopZ);
-
-  // —— 前 / 后保险杠 ——
-  const frontBumperGeo = new THREE.BoxGeometry(0.88, 0.14, 0.08);
-  const frontBumper = new THREE.Mesh(frontBumperGeo, darkMat);
-  frontBumper.position.set(0, 0.42, -0.79);
-  frontBumper.castShadow = true;
-  group.add(frontBumper);
-
-  const rearBumperGeo = new THREE.BoxGeometry(0.88, 0.14, 0.08);
-  const rearBumper = new THREE.Mesh(rearBumperGeo, darkMat);
-  rearBumper.position.set(0, 0.42, 0.79);
-  rearBumper.castShadow = true;
-  group.add(rearBumper);
-
-  // —— 大灯与尾灯 ——
-  const headlightGeo = new THREE.SphereGeometry(0.06, 12, 8);
-  const headlightL = new THREE.Mesh(headlightGeo, headlightMat);
-  headlightL.position.set(-0.3, 0.58, -0.78);
+  // —— 前大灯（两颗小圆球） ——
+  const headlightGeo = new THREE.SphereGeometry(0.06, 8, 6);
+  const headlightL = new THREE.Mesh(headlightGeo, accentMat);
+  headlightL.position.set(-0.28, 0.52, -0.84);
+  headlightL.castShadow = true;
   group.add(headlightL);
-  const headlightR = new THREE.Mesh(headlightGeo, headlightMat);
-  headlightR.position.set(0.3, 0.58, -0.78);
+  const headlightR = new THREE.Mesh(headlightGeo, accentMat);
+  headlightR.position.set(0.28, 0.52, -0.84);
+  headlightR.castShadow = true;
   group.add(headlightR);
 
-  const taillightGeo = new THREE.BoxGeometry(0.14, 0.07, 0.04);
-  const taillightL = new THREE.Mesh(taillightGeo, taillightMat);
-  taillightL.position.set(-0.3, 0.58, 0.79);
-  group.add(taillightL);
-  const taillightR = new THREE.Mesh(taillightGeo, taillightMat);
-  taillightR.position.set(0.3, 0.58, 0.79);
-  group.add(taillightR);
+  // —— 4 个车轮（圆柱） —— 确保车轮最外沿达到 ±0.55 使 width=1.1
+  const wheelRadius = 0.24;
+  const wheelWidth = 0.18;
+  const wheelGeo = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelWidth, 12);
 
-  // —— 4 个轮子 ——
-  const wheelOffsetX = 0.43;
-  const wheelOffsetZ = 0.55;
-  const wheelRadius = 0.26;
-  const wheelWidth = 0.22;
+  const wheelOffsetX = 0.46;
+  const wheelOffsetZ = 0.56;
   const wheelPositions = [
-    [-wheelOffsetX, wheelRadius, -wheelOffsetZ], // 前左
-    [wheelOffsetX, wheelRadius, -wheelOffsetZ],  // 前右
-    [-wheelOffsetX, wheelRadius, wheelOffsetZ],  // 后左
-    [wheelOffsetX, wheelRadius, wheelOffsetZ],   // 后右
+    [-wheelOffsetX, wheelRadius, -wheelOffsetZ],
+    [wheelOffsetX, wheelRadius, -wheelOffsetZ],
+    [-wheelOffsetX, wheelRadius, wheelOffsetZ],
+    [wheelOffsetX, wheelRadius, wheelOffsetZ],
   ];
   for (const [x, y, z] of wheelPositions) {
-    const wheel = makeWheel({ radius: wheelRadius, width: wheelWidth });
+    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+    wheel.rotation.z = Math.PI / 2; // cylindrical axis → X
     wheel.position.set(x, y, z);
+    wheel.castShadow = true;
+    wheel.receiveShadow = true;
     group.add(wheel);
   }
 
@@ -318,61 +201,47 @@ export function createPlayerCar(options = {}) {
 /**
  * 创建道路障碍物。
  *
- * 组合结构（路障风格）：橙色锥体主体 + 灰色方形底座 + 锥顶警示灯。
- * 障碍物高度小于跳跃上限（CAR_HEIGHT 以下），玩家可通过跳跃越过；
- * 同时宽度较窄，玩家亦可选择变道躲避。
+ * 极简风格：方形底座 + 截锥体（矮锥），柔和橙色。
+ * 障碍物高度小于跳跃上限，玩家可通过跳跃越过或变道躲避。
  *
- * 模型局部原点位于地面中心，"前方"朝向 -Z。
+ * 模型局部原点位于地面中心。
  *
  * @param {object} [options] - 配置项。
- * @param {number | string} [options.coneColor=0xff7a1a] - 锥体主色。
- * @param {number | string} [options.baseColor=0x3a3a44] - 底座颜色。
+ * @param {number | string} [options.color=0xe8854a] - 障碍物主色。
  * @returns {THREE.Group} 障碍物根节点，.userData.bounds = OBSTACLE_BOUNDS。
  */
 export function createObstacle(options = {}) {
-  const coneColor = options.coneColor ?? 0xff7a1a;
-  const baseColor = options.baseColor ?? 0x3a3a44;
+  const color = options.color ?? 0xe8854a;
 
   const group = new THREE.Group();
   group.name = 'Obstacle';
   group.userData.bounds = OBSTACLE_BOUNDS;
   group.userData.kind = 'obstacle';
 
-  const coneMat = makeMaterial(coneColor, { roughness: 0.5, metalness: 0.1 });
-  const stripeMat = makeMaterial(0xffffff, { roughness: 0.6, metalness: 0.05 });
-  const baseMat = makeMaterial(baseColor, { roughness: 0.7, metalness: 0.2 });
-  const tipMat = makeMaterial(0xff3030, {
-    roughness: 0.3,
-    metalness: 0.1,
-    emissive: 0xff3030,
-    emissiveIntensity: 0.6,
-  });
+  const mainMat = softMat(color);
+  const baseMat = softMat(0x4a4a52, { roughness: 0.8 });
+  const tipMat = softMat(0xee6666);
 
-  // 方形底座
-  const baseGeo = new THREE.BoxGeometry(0.7, 0.08, 0.7);
+  // —— 方形底座 —— 宽度 0.75 匹配 OBSTACLE_WIDTH
+  const baseGeo = new THREE.BoxGeometry(0.75, 0.08, 0.75);
   const base = new THREE.Mesh(baseGeo, baseMat);
   base.position.y = 0.04;
   base.castShadow = true;
   base.receiveShadow = true;
   group.add(base);
 
-  // 锥体主体（下宽上窄的圆柱）
-  const coneGeo = new THREE.CylinderGeometry(0.05, 0.3, 0.5, 16);
-  const cone = new THREE.Mesh(coneGeo, coneMat);
-  cone.position.y = 0.33;
+  // —— 矮锥体 ——
+  const coneGeo = new THREE.CylinderGeometry(0.06, 0.30, 0.46, 12);
+  const cone = new THREE.Mesh(coneGeo, mainMat);
+  cone.position.y = 0.31;
   cone.castShadow = true;
   group.add(cone);
 
-  // 白色反光条（中部环带）
-  const stripeGeo = new THREE.CylinderGeometry(0.21, 0.21, 0.07, 16);
-  const stripe = new THREE.Mesh(stripeGeo, stripeMat);
-  stripe.position.y = 0.27;
-  group.add(stripe);
-
-  // 顶部警示灯
-  const tipGeo = new THREE.SphereGeometry(0.055, 10, 8);
+  // —— 顶球 —— 球心 y=0.63 使顶部达到 0.70
+  const tipGeo = new THREE.SphereGeometry(0.07, 8, 6);
   const tip = new THREE.Mesh(tipGeo, tipMat);
-  tip.position.y = 0.62;
+  tip.position.y = 0.63;
+  tip.castShadow = true;
   group.add(tip);
 
   return group;
@@ -381,121 +250,96 @@ export function createObstacle(options = {}) {
 /**
  * 创建对向车辆。
  *
- * 组合结构（普通轿车风格）：扁宽的车身 + 平滑的驾驶舱 + 4 个较小的轮子
- * + 2 个前大灯（朝向 -Z，即朝向来车方向）+ 2 个后尾灯 + 前后保险杠。
+ * 极简风格：扁宽车身 + 驾驶舱 + 4 个小车轮 + 前灯/尾灯。
  * 整体高度超过跳跃上限，玩家只能通过切换车道躲避。
  *
  * 模型局部原点位于车底地面中心，"前方"朝向 -Z。
  *
  * @param {object} [options] - 配置项。
- * @param {number | string} [options.bodyColor=0x4a78c8] - 车身主色。
+ * @param {number | string} [options.bodyColor=0x5a8ab5] - 车身主色（柔和蓝色）。
  * @returns {THREE.Group} 对向车辆根节点，.userData.bounds = VEHICLE_BOUNDS。
  */
 export function createOncomingVehicle(options = {}) {
-  const bodyColor = options.bodyColor ?? 0x4a78c8;
+  const bodyColor = options.bodyColor ?? 0x5a8ab5;
 
   const group = new THREE.Group();
   group.name = 'OncomingVehicle';
   group.userData.bounds = VEHICLE_BOUNDS;
   group.userData.kind = 'vehicle';
 
-  const bodyMat = makeMaterial(bodyColor, { roughness: 0.4, metalness: 0.45 });
-  const darkMat = makeMaterial(0x1d1d1f, { roughness: 0.7, metalness: 0.2 });
-  const glassMat = makeMaterial(0x6a8db5, { roughness: 0.2, metalness: 0.5 });
-  const headlightMat = makeMaterial(0xfff4c2, {
-    roughness: 0.3,
-    metalness: 0.1,
-    emissive: 0xfff4c2,
-    emissiveIntensity: 0.5,
-  });
-  const taillightMat = makeMaterial(0xff3030, {
-    roughness: 0.3,
-    metalness: 0.1,
-    emissive: 0xff3030,
-    emissiveIntensity: 0.45,
-  });
+  const bodyMat = softMat(bodyColor);
+  const cabinMat = softMat(0x7aa3cc, { roughness: 0.6 });
+  const wheelMat = softMat(0x222222, { roughness: 0.9 });
+  const windowMat = softMat(0xaac8e8, { roughness: 0.3 });
+  const headlightMat = softMat(0xf5e6a0);
+  const taillightMat = softMat(0xcc4444);
 
-  // 下车身（扁宽）
-  const lowerGeo = new THREE.BoxGeometry(0.88, 0.3, 1.7);
+  // —— 下车身 —— 深度 1.90 以匹配 VEHICLE_LENGTH
+  const lowerGeo = new THREE.BoxGeometry(0.88, 0.30, 1.90);
   const lower = new THREE.Mesh(lowerGeo, bodyMat);
-  lower.position.y = 0.38;
+  lower.position.y = 0.35;
   lower.castShadow = true;
   lower.receiveShadow = true;
   group.add(lower);
 
-  // 上车身（驾驶舱）—— 前后更窄，呈流线型
-  const upperGeo = new THREE.BoxGeometry(0.8, 0.26, 1.0);
-  const upper = new THREE.Mesh(upperGeo, bodyMat);
-  upper.position.set(0, 0.66, 0.0);
-  upper.castShadow = true;
-  group.add(upper);
+  // —— 驾驶舱 —— 顶部达到 y=0.85 以满足 VEHICLE_HEIGHT
+  const cabinGeo = new THREE.BoxGeometry(0.78, 0.26, 1.00);
+  const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+  cabin.position.y = 0.72;
+  cabin.castShadow = true;
+  group.add(cabin);
 
-  // 挡风玻璃（前）
-  const windshieldGeo = new THREE.BoxGeometry(0.74, 0.22, 0.04);
-  const windshield = new THREE.Mesh(windshieldGeo, glassMat);
-  windshield.position.set(0, 0.66, -0.5);
-  windshield.rotation.x = -0.5;
+  // —— 前挡风 ——
+  const windshieldGeo = new THREE.BoxGeometry(0.72, 0.20, 0.04);
+  const windshield = new THREE.Mesh(windshieldGeo, windowMat);
+  windshield.position.set(0, 0.74, -0.50);
+  windshield.castShadow = true;
   group.add(windshield);
 
-  // 后车窗
-  const rearWindowGeo = new THREE.BoxGeometry(0.74, 0.2, 0.04);
-  const rearWindow = new THREE.Mesh(rearWindowGeo, glassMat);
-  rearWindow.position.set(0, 0.66, 0.5);
-  rearWindow.rotation.x = 0.5;
+  // —— 后窗 ——
+  const rearWindowGeo = new THREE.BoxGeometry(0.72, 0.18, 0.04);
+  const rearWindow = new THREE.Mesh(rearWindowGeo, windowMat);
+  rearWindow.position.set(0, 0.74, 0.50);
+  rearWindow.castShadow = true;
   group.add(rearWindow);
 
-  // 侧窗
-  const sideWindowGeo = new THREE.BoxGeometry(0.04, 0.16, 0.85);
-  const sideWindowL = new THREE.Mesh(sideWindowGeo, glassMat);
-  sideWindowL.position.set(-0.41, 0.7, 0);
-  group.add(sideWindowL);
-  const sideWindowR = new THREE.Mesh(sideWindowGeo, glassMat);
-  sideWindowR.position.set(0.41, 0.7, 0);
-  group.add(sideWindowR);
-
-  // 前大灯
-  const headlightGeo = new THREE.BoxGeometry(0.14, 0.07, 0.04);
-  const headlightL = new THREE.Mesh(headlightGeo, headlightMat);
-  headlightL.position.set(-0.3, 0.46, -0.85);
+  // —— 前灯 ——
+  const lightGeo = new THREE.BoxGeometry(0.12, 0.06, 0.04);
+  const headlightL = new THREE.Mesh(lightGeo, headlightMat);
+  headlightL.position.set(-0.3, 0.44, -0.93);
+  headlightL.castShadow = true;
   group.add(headlightL);
-  const headlightR = new THREE.Mesh(headlightGeo, headlightMat);
-  headlightR.position.set(0.3, 0.46, -0.85);
+  const headlightR = new THREE.Mesh(lightGeo, headlightMat);
+  headlightR.position.set(0.3, 0.44, -0.93);
+  headlightR.castShadow = true;
   group.add(headlightR);
 
-  // 后尾灯
-  const taillightGeo = new THREE.BoxGeometry(0.14, 0.07, 0.04);
-  const taillightL = new THREE.Mesh(taillightGeo, taillightMat);
-  taillightL.position.set(-0.3, 0.46, 0.85);
+  // —— 尾灯 ——
+  const taillightL = new THREE.Mesh(lightGeo, taillightMat);
+  taillightL.position.set(-0.3, 0.44, 0.93);
+  taillightL.castShadow = true;
   group.add(taillightL);
-  const taillightR = new THREE.Mesh(taillightGeo, taillightMat);
-  taillightR.position.set(0.3, 0.46, 0.85);
+  const taillightR = new THREE.Mesh(lightGeo, taillightMat);
+  taillightR.position.set(0.3, 0.44, 0.93);
+  taillightR.castShadow = true;
   group.add(taillightR);
 
-  // 前 / 后保险杠
-  const frontBumperGeo = new THREE.BoxGeometry(0.92, 0.1, 0.06);
-  const frontBumper = new THREE.Mesh(frontBumperGeo, darkMat);
-  frontBumper.position.set(0, 0.3, -0.86);
-  group.add(frontBumper);
-
-  const rearBumperGeo = new THREE.BoxGeometry(0.92, 0.1, 0.06);
-  const rearBumper = new THREE.Mesh(rearBumperGeo, darkMat);
-  rearBumper.position.set(0, 0.3, 0.86);
-  group.add(rearBumper);
-
-  // 4 个较小的轮子
-  const wheelOffsetX = 0.42;
-  const wheelOffsetZ = 0.62;
-  const wheelRadius = 0.22;
-  const wheelWidth = 0.18;
+  // —— 4 个小车轮 —— wheelWidth=0.17 保证总宽 1.05
+  const wheelRadius = 0.2;
+  const wheelWidth = 0.17;
+  const wheelGeo = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelWidth, 16);
   const wheelPositions = [
-    [-wheelOffsetX, wheelRadius, -wheelOffsetZ],
-    [wheelOffsetX, wheelRadius, -wheelOffsetZ],
-    [-wheelOffsetX, wheelRadius, wheelOffsetZ],
-    [wheelOffsetX, wheelRadius, wheelOffsetZ],
+    [-0.44, wheelRadius, -0.64],
+    [0.44, wheelRadius, -0.64],
+    [-0.44, wheelRadius, 0.64],
+    [0.44, wheelRadius, 0.64],
   ];
   for (const [x, y, z] of wheelPositions) {
-    const wheel = makeWheel({ radius: wheelRadius, width: wheelWidth, rimColor: 0xb8b8b8 });
+    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+    wheel.rotation.z = Math.PI / 2;
     wheel.position.set(x, y, z);
+    wheel.castShadow = true;
+    wheel.receiveShadow = true;
     group.add(wheel);
   }
 
@@ -505,76 +349,52 @@ export function createOncomingVehicle(options = {}) {
 /**
  * 创建加血道具（医疗包）。
  *
- * 组合结构：白色立方体主体 + 前后两面红色十字（两条相互垂直的薄板）
- * + 顶面红色十字。整体带轻微的红色自发光，便于在场景中被发现。
+ * 极简风格：柔和灰色立方体 + 顶面浅绿色十字（两条薄板交叉）。
+ * 弱化自发光，通过柔和浅绿高亮吸引注意。
  *
- * 模型局部原点位于地面（即立方体底面）中心。
+ * 模型局部原点位于底面中心。
  *
  * @param {object} [options] - 配置项。
- * @param {number | string} [options.boxColor=0xf5f5f0] - 主体颜色。
- * @param {number | string} [options.crossColor=0xff3b3b] - 十字颜色。
+ * @param {number | string} [options.boxColor=0xe8e8e0] - 主体颜色。
+ * @param {number | string} [options.crossColor=0x66cc88] - 十字颜色。
  * @returns {THREE.Group} 加血道具根节点，.userData.bounds = PICKUP_BOUNDS。
  */
 export function createHealthPickup(options = {}) {
-  const boxColor = options.boxColor ?? 0xf5f5f0;
-  const crossColor = options.crossColor ?? 0xff3b3b;
+  const boxColor = options.boxColor ?? 0xe8e8e0;
+  const crossColor = options.crossColor ?? 0x66cc88;
 
   const group = new THREE.Group();
   group.name = 'HealthPickup';
   group.userData.bounds = PICKUP_BOUNDS;
   group.userData.kind = 'pickup';
 
-  const boxMat = makeMaterial(boxColor, {
-    roughness: 0.5,
-    metalness: 0.1,
-    emissive: crossColor,
-    emissiveIntensity: 0.05,
-  });
-  const crossMat = makeMaterial(crossColor, {
-    roughness: 0.4,
-    metalness: 0.1,
-    emissive: crossColor,
-    emissiveIntensity: 0.55,
-  });
+  const boxMat = softMat(boxColor, { roughness: 0.6 });
+  const crossMat = softMat(crossColor, { roughness: 0.5 });
 
-  // 主体立方体（底面在 y = 0，顶面在 y = 0.4）
-  const boxGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+  // —— 主体立方体 —— 精确 0.45 匹配 PICKUP_WIDTH/HEIGHT/DEPTH
+  const boxGeo = new THREE.BoxGeometry(0.45, 0.42, 0.45);
   const box = new THREE.Mesh(boxGeo, boxMat);
-  box.position.y = 0.2;
+  box.position.y = 0.21;
   box.castShadow = true;
   box.receiveShadow = true;
   group.add(box);
 
-  // 前（-Z）面十字
-  const crossHGGeo = new THREE.BoxGeometry(0.24, 0.05, 0.04);
-  const crossFrontH = new THREE.Mesh(crossHGGeo, crossMat);
-  crossFrontH.position.set(0, 0.2, -0.205);
-  group.add(crossFrontH);
-
-  const crossVGGeo = new THREE.BoxGeometry(0.05, 0.24, 0.04);
-  const crossFrontV = new THREE.Mesh(crossVGGeo, crossMat);
-  crossFrontV.position.set(0, 0.2, -0.205);
-  group.add(crossFrontV);
-
-  // 后（+Z）面十字
-  const crossRearH = new THREE.Mesh(crossHGGeo, crossMat);
-  crossRearH.position.set(0, 0.2, 0.205);
-  group.add(crossRearH);
-
-  const crossRearV = new THREE.Mesh(crossVGGeo, crossMat);
-  crossRearV.position.set(0, 0.2, 0.205);
-  group.add(crossRearV);
-
-  // 顶面十字
-  const crossTopXGeo = new THREE.BoxGeometry(0.24, 0.04, 0.05);
-  const crossTopX = new THREE.Mesh(crossTopXGeo, crossMat);
-  crossTopX.position.set(0, 0.405, 0);
-  group.add(crossTopX);
-
-  const crossTopZGeo = new THREE.BoxGeometry(0.05, 0.04, 0.24);
-  const crossTopZ = new THREE.Mesh(crossTopZGeo, crossMat);
-  crossTopZ.position.set(0, 0.405, 0);
-  group.add(crossTopZ);
+  // —— 顶面十字 —— 十字顶面使总高达到 0.45
+  const crossW = 0.27;
+  const crossT = 0.06;
+  const crossBarH = 0.04;
+  // 水平条
+  const barHGeo = new THREE.BoxGeometry(crossW, crossBarH, crossT);
+  const barH = new THREE.Mesh(barHGeo, crossMat);
+  barH.position.set(0, 0.43, 0);
+  barH.castShadow = true;
+  group.add(barH);
+  // 垂直条
+  const barVGeo = new THREE.BoxGeometry(crossT, crossBarH, crossW);
+  const barV = new THREE.Mesh(barVGeo, crossMat);
+  barV.position.set(0, 0.43, 0);
+  barV.castShadow = true;
+  group.add(barV);
 
   return group;
 }

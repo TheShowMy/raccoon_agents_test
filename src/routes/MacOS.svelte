@@ -74,14 +74,10 @@
 </div>
 
 <style>
-  :global(body) {
-    margin: 0;
-    overflow: hidden;
-  }
-
   .macos-desktop {
     position: fixed;
     inset: 0;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', system-ui, 'Helvetica Neue', sans-serif;

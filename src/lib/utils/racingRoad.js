@@ -99,9 +99,12 @@ export const ROAD_SEGMENT_LENGTH = ROAD_TOTAL_LENGTH / ROAD_SEGMENT_COUNT;
  *
  * 取值由验收标准中“单段最大斜率 ≤ 0.5 rad（约 28°）”硬性约束推导：
  *   3 * MAX_OFFSET / 6 ≤ 0.5  ⇒  MAX_OFFSET ≤ 1.0
- * 这里取 0.9 留出约 10% 安全裕量，对应 ROAD_PROCGEN_MAX_HEADING ≈ 0.45 rad。
+ * 后续任务要求弯道幅度明显增大且富有变化，将 MAX_OFFSET 从 0.9 提升至 2.0，
+ * 使道路产生明显的大弯与小弯交替，同时通过 Catmull-Rom 样条保证 C¹ 连续。
+ * 实际 heading 的上界 = 3 * 2.0 / 6 ≈ 1.0 rad（约 57°），但典型值因 PRNG 离散
+ * 采样远低于上界，呈现平滑蜿蜒而非急转弯。
  */
-export const ROAD_PROCGEN_MAX_OFFSET = 0.9;
+export const ROAD_PROCGEN_MAX_OFFSET = 2.0;
 
 /** 单段内 heading 的最大绝对值（Catmull-Rom 样条导数上界 = 3 * MAX_OFFSET / SL） */
 export const ROAD_PROCGEN_MAX_HEADING =

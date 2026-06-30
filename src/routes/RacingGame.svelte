@@ -758,7 +758,9 @@
 </svelte:head>
 
 <div class="racing-game-page">
-  <BackNav href="#/" />
+  <div class="back-nav-wrapper">
+    <BackNav href="#/" />
+  </div>
 
   <PageHeader
     title="&lt;3D 越野车竞速 /&gt;"
@@ -922,6 +924,17 @@
   .racing-game-page {
     --page-max-width: 1480px;
     position: relative;
+  }
+
+  .back-nav-wrapper {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--glass-border);
+    pointer-events: auto;
   }
 
   .main {

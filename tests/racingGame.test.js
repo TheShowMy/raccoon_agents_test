@@ -12,9 +12,15 @@ import {
   SEGMENT_LENGTH,
   MAX_CURVE_OFFSET,
   MAX_HEIGHT_DELTA,
+  CURVE_NOISE_FREQUENCY,
+  HEIGHT_NOISE_FREQUENCY,
+  HEIGHT_NOISE_OFFSET,
+  NOISE_OCTAVES,
   generateSegment,
   generateSegments,
   getRoadOffsetAt,
+  sampleCurveOffset,
+  sampleHeightOffset,
   OBJECT_TYPES,
   OBJECT_WEIGHTS,
   createObject,
@@ -172,13 +178,21 @@ describe('generateSegment', () => {
     expect(Math.abs(seg.heightOffset)).toBeLessThanOrEqual(0.5 + 1e-9);
   });
 
-  it('generates varying values across calls', () => {
+  it('generates varying values across different z positions', () => {
     const offsets = new Set();
     for (let i = 0; i < 20; i++) {
-      offsets.add(generateSegment(i * -20).curveOffset);
+      // Use non-integer z values so noise output is non-zero
+      offsets.add(generateSegment(i * -20 + 0.5).curveOffset);
     }
     // There should be some variety (not all identical)
     expect(offsets.size).toBeGreaterThan(1);
+  });
+
+  it('is deterministic (same zStart yields same values)', () => {
+    const a = generateSegment(-42.5);
+    const b = generateSegment(-42.5);
+    expect(b.curveOffset).toBe(a.curveOffset);
+    expect(b.heightOffset).toBe(a.heightOffset);
   });
 });
 
@@ -204,47 +218,128 @@ describe('generateSegments', () => {
 });
 
 /* ===================================================================
-   getRoadOffsetAt
+   sampleCurveOffset / sampleHeightOffset
+   =================================================================== */
+describe('sampleCurveOffset', () => {
+  it('returns finite values for all inputs', () => {
+    for (let i = -100; i <= 100; i += 5) {
+      expect(Number.isFinite(sampleCurveOffset(i))).toBe(true);
+    }
+  });
+
+  it('is continuous (small delta → small change)', () => {
+    const step = 0.001;
+    let maxDelta = 0;
+    for (let z = 0; z < 5; z += step) {
+      const d = Math.abs(sampleCurveOffset(z) - sampleCurveOffset(z + step));
+      maxDelta = Math.max(maxDelta, d);
+    }
+    // With low-frequency noise and 0.001 step, delta should be very small
+    expect(maxDelta).toBeLessThan(0.05);
+  });
+
+  it('is within ±MAX_CURVE_OFFSET', () => {
+    for (let i = -200; i <= 200; i++) {
+      expect(Math.abs(sampleCurveOffset(i * 0.5))).toBeLessThanOrEqual(MAX_CURVE_OFFSET + 1e-9);
+    }
+  });
+
+  it('is deterministic (same z → same result)', () => {
+    const z = -37.25;
+    expect(sampleCurveOffset(z)).toBe(sampleCurveOffset(z));
+  });
+});
+
+describe('sampleHeightOffset', () => {
+  it('returns finite values for all inputs', () => {
+    for (let i = -100; i <= 100; i += 5) {
+      expect(Number.isFinite(sampleHeightOffset(i))).toBe(true);
+    }
+  });
+
+  it('is continuous (small delta → small change)', () => {
+    const step = 0.001;
+    let maxDelta = 0;
+    for (let z = 0; z < 5; z += step) {
+      const d = Math.abs(sampleHeightOffset(z) - sampleHeightOffset(z + step));
+      maxDelta = Math.max(maxDelta, d);
+    }
+    expect(maxDelta).toBeLessThan(0.05);
+  });
+
+  it('is within ±MAX_HEIGHT_DELTA', () => {
+    for (let i = -200; i <= 200; i++) {
+      expect(Math.abs(sampleHeightOffset(i * 0.5))).toBeLessThanOrEqual(MAX_HEIGHT_DELTA + 1e-9);
+    }
+  });
+
+  it('is deterministic (same z → same result)', () => {
+    const z = -43.75;
+    expect(sampleHeightOffset(z)).toBe(sampleHeightOffset(z));
+  });
+});
+
+/* ===================================================================
+   getRoadOffsetAt — delegates to sample*Offset functions
    =================================================================== */
 describe('getRoadOffsetAt', () => {
-  it('returns zeros for empty segments', () => {
-    expect(getRoadOffsetAt([], -10)).toEqual({ curveOffset: 0, heightOffset: 0 });
-  });
-
-  it('returns zeros for null segments', () => {
-    expect(getRoadOffsetAt(null, -10)).toEqual({ curveOffset: 0, heightOffset: 0 });
-  });
-
-  it('returns zeros when z is at the start of the first segment', () => {
-    const segs = [generateSegment(0)];
-    const result = getRoadOffsetAt(segs, 0);
+  it('returns noise-based offset regardless of segments argument', () => {
+    // With noise, the value at z=0 is 0 (Perlin noise is 0 at integer lattice points).
+    // Empty segments and null segments should still return values.
+    const result = getRoadOffsetAt([], 0);
     expect(result.curveOffset).toBeCloseTo(0);
     expect(result.heightOffset).toBeCloseTo(0);
   });
 
-  it('returns segment full offset when z is at the end of the segment', () => {
-    const segs = [{ zStart: 0, curveOffset: 2, heightOffset: 1.5, length: 20 }];
-    const result = getRoadOffsetAt(segs, -20);
-    expect(result.curveOffset).toBeCloseTo(2);
-    expect(result.heightOffset).toBeCloseTo(1.5);
+  it('ignores segments content and uses noise directly', () => {
+    // Even with hand-crafted segment offsets, getRoadOffsetAt returns noise values.
+    const segs = [{ zStart: 0, curveOffset: 999, heightOffset: 999, length: 20 }];
+    const result = getRoadOffsetAt(segs, 0);
+    // At z=0, noise gives 0, not 999
+    expect(result.curveOffset).toBeCloseTo(0);
+    expect(result.heightOffset).toBeCloseTo(0);
   });
 
-  it('returns half offset at mid‑segment', () => {
-    const segs = [{ zStart: 0, curveOffset: 4, heightOffset: 2, length: 20 }];
-    const result = getRoadOffsetAt(segs, -10);
-    expect(result.curveOffset).toBeCloseTo(2);
-    expect(result.heightOffset).toBeCloseTo(1);
+  it('returns the same as sampling functions directly', () => {
+    const z = -47.25;
+    const direct = {
+      curveOffset: sampleCurveOffset(z),
+      heightOffset: sampleHeightOffset(z),
+    };
+    const viaSegments = getRoadOffsetAt([], z);
+    expect(viaSegments.curveOffset).toBe(direct.curveOffset);
+    expect(viaSegments.heightOffset).toBe(direct.heightOffset);
   });
 
-  it('returns total cumulative offset for z beyond all segments', () => {
-    const segs = [
-      { zStart: 0, curveOffset: 1, heightOffset: 0.5, length: 20 },
-      { zStart: -20, curveOffset: 3, heightOffset: 1, length: 20 },
-    ];
-    const result = getRoadOffsetAt(segs, -100);
-    // Both segments fully accumulated: 1+3=4, 0.5+1=1.5
-    expect(result.curveOffset).toBeCloseTo(4);
-    expect(result.heightOffset).toBeCloseTo(1.5);
+  it('returns finite values for any z', () => {
+    for (let z = -500; z <= 500; z += 10) {
+      const result = getRoadOffsetAt([], z);
+      expect(Number.isFinite(result.curveOffset)).toBe(true);
+      expect(Number.isFinite(result.heightOffset)).toBe(true);
+    }
+  });
+
+  it('is continuous (no step changes between adjacent z values)', () => {
+    const step = 0.001;
+    let maxCurveDelta = 0;
+    let maxHeightDelta = 0;
+    for (let z = -10; z < 10; z += step) {
+      const a = getRoadOffsetAt([], z);
+      const b = getRoadOffsetAt([], z + step);
+      maxCurveDelta = Math.max(maxCurveDelta, Math.abs(b.curveOffset - a.curveOffset));
+      maxHeightDelta = Math.max(maxHeightDelta, Math.abs(b.heightOffset - a.heightOffset));
+    }
+    // With step = 0.001, continuous noise should give very small deltas
+    expect(maxCurveDelta).toBeLessThan(0.05);
+    expect(maxHeightDelta).toBeLessThan(0.05);
+  });
+
+  it('is within expected amplitude range', () => {
+    for (let z = -200; z <= 200; z += 0.5) {
+      const result = getRoadOffsetAt([], z);
+      expect(Math.abs(result.curveOffset)).toBeLessThanOrEqual(MAX_CURVE_OFFSET + 1e-9);
+      expect(Math.abs(result.heightOffset)).toBeLessThanOrEqual(MAX_HEIGHT_DELTA + 1e-9);
+    }
   });
 });
 

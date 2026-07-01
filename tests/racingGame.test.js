@@ -27,6 +27,8 @@ import {
   randomObjectType,
   generateObjectsForSegment,
   recycleObjects,
+  CAMERA_Z,
+  CAMERA_RECYCLE_MARGIN,
   JUMP_IMMUNITY_HEIGHT,
   ROAD_Y,
   checkCollision,
@@ -449,6 +451,26 @@ describe('generateObjectsForSegment', () => {
       });
     }
   });
+
+  it('obstacle collision descriptor matches the visual 1.2×0.8×1.2 box (zWidth=0.6, xWidth=0.6, height=0.8)', () => {
+    // The obstacle is rendered as BoxGeometry(1.2, 0.8, 1.2) in the scene;
+    // the collision descriptor (zWidth is half-extent) must align with that
+    // visual volume so collision feels fair.
+    const seg = { zStart: 0, length: 20 };
+    let sawObstacle = false;
+    for (let i = 0; i < 200; i++) {
+      const objs = generateObjectsForSegment(seg, 3);
+      for (const o of objs) {
+        if (o.type === OBJECT_TYPES.OBSTACLE) {
+          expect(o.zWidth).toBe(0.6);
+          expect(o.xWidth).toBe(0.6);
+          expect(o.height).toBe(0.8);
+          sawObstacle = true;
+        }
+      }
+    }
+    expect(sawObstacle).toBe(true);
+  });
 });
 
 /* ===================================================================
@@ -462,9 +484,9 @@ describe('recycleObjects', () => {
       { z: 5 },
       { z: 15 },
     ];
-    // threshold = 0 + default cleanupMargin(10) = 10
+    // Default cleanupMargin is now CAMERA_RECYCLE_MARGIN (12), so
+    // threshold = 0 + 12 = 12; z=-10, 0, 5 are <12 → kept; z=15 → removed.
     const result = recycleObjects(objects, 0);
-    // z=-10, 0, 5 are <10 → kept; z=15 >= 10 → removed
     expect(result).toHaveLength(3);
     expect(result[0].z).toBe(-10);
     expect(result[1].z).toBe(0);
@@ -493,6 +515,21 @@ describe('recycleObjects', () => {
     const objects = [{ z: -10 }, { z: undefined }, { z: 'abc' }, { z: 5 }];
     const result = recycleObjects(objects, 0);
     expect(result).toHaveLength(2);
+  });
+
+  it('default cleanup margin keeps objects until they exit the camera near plane', () => {
+    // Regression: the previous default (10) recycled objects while they
+    // were still in the camera's view at z≈12. The default must be at
+    // least as large as the camera Z position so the player never sees
+    // an object pop out while it's still rendered.
+    expect(CAMERA_RECYCLE_MARGIN).toBeGreaterThanOrEqual(CAMERA_Z);
+
+    const objects = [{ z: 8 }, { z: 11 }, { z: 12.5 }, { z: 20 }];
+    const result = recycleObjects(objects, 0);
+    // z=8 and z=11 are in front of / right at the camera → keep
+    // z=12.5 and z=20 are behind the camera → remove
+    expect(result).toHaveLength(2);
+    expect(result.map((o) => o.z)).toEqual([8, 11]);
   });
 });
 
@@ -530,11 +567,20 @@ describe('checkCollision', () => {
     expect(checkCollision(player, object)).toBe(false);
   });
 
-  it('returns false for obstacle when player is exactly at immunity height', () => {
-    const player = { lane: 0, z: -10, y: JUMP_IMMUNITY_HEIGHT };
-    const object = { active: true, lane: 0, z: -10, zWidth: 1, type: OBJECT_TYPES.OBSTACLE, height: 0.8 };
-    // > JUMP_IMMUNITY_HEIGHT is required for immunity
+  it('returns true for obstacle when player Y is exactly at the obstacle top (boundary, not strictly above)', () => {
+    // Jump immunity requires player.y to be strictly greater than object.height.
+    // At exactly object.height the player still grazes the top of the
+    // obstacle, so the collision is registered.
+    const player = { lane: 0, z: -10, y: 0.8 };
+    const object = { active: true, lane: 0, z: -10, zWidth: 0.6, type: OBJECT_TYPES.OBSTACLE, height: 0.8 };
     expect(checkCollision(player, object)).toBe(true);
+  });
+
+  it('returns false for obstacle when player Y is just above the obstacle top', () => {
+    // Just barely above object.height — jump immunity kicks in.
+    const player = { lane: 0, z: -10, y: 0.8 + 1e-3 };
+    const object = { active: true, lane: 0, z: -10, zWidth: 0.6, type: OBJECT_TYPES.OBSTACLE, height: 0.8 };
+    expect(checkCollision(player, object)).toBe(false);
   });
 
   it('returns true for obstacle when player jumps but is below immunity height', () => {

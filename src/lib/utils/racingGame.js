@@ -270,6 +270,13 @@ export function randomObjectType() {
  * Places 0–2 objects randomly across lanes. Objects are positioned within
  * the segment's Z range. Oncoming vehicles always get a larger height.
  *
+ * Collision dimensions are aligned with the visual model:
+ *   - Obstacles use a 1.2 × 0.8 × 1.2 box, so collision half-extents are
+ *     zWidth = 0.6 (half of 1.2 depth), xWidth = 0.6 (half of 1.2 width),
+ *     and height = 0.8 (full visual height). This matches
+ *     `new THREE.BoxGeometry(1.2, 0.8, 1.2)` in the scene.
+ *   - Oncoming vehicles keep a tall height so they cannot be jumped over.
+ *
  * @param {object} segment - Segment descriptor.
  * @param {number} [maxObjects=2] - Maximum objects per segment.
  * @returns {Array<object>} New object descriptors.
@@ -300,8 +307,8 @@ export function generateObjectsForSegment(segment, maxObjects = 2) {
         type,
         lane,
         z,
-        /* zWidth */ 1.5,
-        /* xWidth */ 1.2,
+        /* zWidth */ isVehicle ? 1.5 : 0.6,
+        /* xWidth */ isVehicle ? 1.2 : 0.6,
         /* height */ isVehicle ? 2.0 : 0.8,
       ),
     );
@@ -310,17 +317,45 @@ export function generateObjectsForSegment(segment, maxObjects = 2) {
 }
 
 /**
+ * Z position of the in-game camera (world units).
+ *
+ * The camera sits roughly at world z = CAMERA_Z looking forward at the
+ * player, so anything past this point has already fully cleared the
+ * near plane and is no longer rendered in front of the player. The
+ * recycle threshold for objects is calibrated against this distance so
+ * that the player never sees an object "pop" out of existence while it
+ * was still in view.
+ */
+export const CAMERA_Z = 12;
+
+/**
+ * Default cleanup margin for {@link recycleObjects}, in world units.
+ *
+ * Kept synchronised with the camera's Z position so that, by default, an
+ * object is only recycled after it has travelled past the camera (and
+ * therefore past the camera near plane) rather than the moment it passes
+ * the player. Callers may still pass a different value to override this.
+ */
+export const CAMERA_RECYCLE_MARGIN = 12;
+
+/**
  * Filter out objects that have passed behind the player.
  *
- * Objects behind the player (z > playerZ + cleanupMargin) are considered
- * passed and should be recycled / removed.
+ * Objects whose world Z is greater than `playerZ + cleanupMargin` are
+ * considered passed and are removed from the returned list. The default
+ * {@link CAMERA_RECYCLE_MARGIN} matches the camera's Z position so
+ * objects are kept visible until they fully exit the camera's field of
+ * view (past the near plane), preventing the visual pop-out where an
+ * object disappears while still on-screen.
  *
  * @param {Array<object>} objects - Current active objects.
  * @param {number} playerZ - Player's current Z position.
- * @param {number} [cleanupMargin=10] - Extra margin behind the player.
- * @returns {Array<object>} Objects still ahead of the player.
+ * @param {number} [cleanupMargin=CAMERA_RECYCLE_MARGIN] - Extra margin
+ *   behind the player; defaults to {@link CAMERA_RECYCLE_MARGIN} so the
+ *   threshold aligns with the camera view distance.
+ * @returns {Array<object>} Objects still ahead of the camera / player.
  */
-export function recycleObjects(objects, playerZ, cleanupMargin = 10) {
+export function recycleObjects(objects, playerZ, cleanupMargin = CAMERA_RECYCLE_MARGIN) {
   const threshold = playerZ + cleanupMargin;
   return objects.filter((o) => o != null && typeof o.z === 'number' && o.z < threshold);
 }
@@ -329,7 +364,19 @@ export function recycleObjects(objects, playerZ, cleanupMargin = 10) {
    Collision detection
    =================================================================== */
 
-/** Jump height threshold — obstacles are ignored if vehicle Y > this. */
+/**
+ * Legacy jump-height constant for obstacles.
+ *
+ * Historically {@link checkCollision} ignored an obstacle when the player's Y
+ * was strictly greater than this constant. The collision check has since been
+ * changed so that immunity is determined by the obstacle's own height
+ * (see {@link checkCollision}), making jumps feel fair relative to the
+ * visual model. This export is retained for backwards compatibility with
+ * any external consumer and is no longer consulted inside the collision
+ * logic.
+ *
+ * @deprecated Use `object.height` instead — see {@link checkCollision}.
+ */
 export const JUMP_IMMUNITY_HEIGHT = 1.2;
 
 /** Y position of the road surface. */
@@ -348,10 +395,18 @@ export const ROAD_Y = 0;
  * A collision occurs when:
  *  1. The object is active.
  *  2. The player's lane matches the object's lane.
- *  3. The player's Z position is within the object's Z bounds.
- *  4. If the object is an obstacle AND the player's Y position is above
- *     JUMP_IMMUNITY_HEIGHT, the collision is ignored.
- *  5. Oncoming vehicles always collide regardless of the player's Y position.
+ *  3. The player's Z position is within the object's Z bounds
+ *     (using `object.zWidth` as a half-extent around the object's Z).
+ *  4. If the object is an obstacle AND the player's Y position is
+ *     **strictly greater than the obstacle's own height**, the collision
+ *     is ignored (jump immunity). This makes the immunity threshold track
+ *     the visual model: a jump that visually clears the top of the
+ *     obstacle is treated as having cleared it. At exactly the obstacle
+ *     height, the player still grazes the top and the collision is
+ *     registered.
+ *  5. Oncoming vehicles always collide regardless of the player's Y
+ *     position; repair kits never apply jump-immunity either and are
+ *     collected by simple overlap.
  *
  * @param {object} player - Player state: { lane, z, y }.
  * @param {object} object - Object descriptor from createObject.
@@ -363,16 +418,20 @@ export function checkCollision(player, object) {
   // Lane check
   if (player.lane !== object.lane) return false;
 
-  // Z bounds check
+  // Z bounds check (zWidth is the half-extent of the collision zone along Z)
   const halfZ = object.zWidth;
   if (player.z < object.z - halfZ || player.z > object.z + halfZ) return false;
 
-  // Jump immunity for obstacles only
-  if (object.type === OBJECT_TYPES.OBSTACLE && player.y > JUMP_IMMUNITY_HEIGHT) {
+  // Jump immunity for obstacles only — strict greater-than the obstacle's
+  // own height makes the check tolerant: a jump that visually clears the
+  // obstacle is treated as a successful clear.
+  if (object.type === OBJECT_TYPES.OBSTACLE && player.y > object.height) {
     return false;
   }
 
-  // Oncoming vehicles always collide regardless of player Y position
+  // Oncoming vehicles and repair kits always react to overlap regardless
+  // of the player's Y position (vehicles always collide; repair kits are
+  // simply picked up).
   return true;
 }
 

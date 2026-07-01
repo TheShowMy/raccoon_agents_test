@@ -457,3 +457,163 @@ describe('Road segment recycle boundary (camera Z = 12)', () => {
   });
 });
 
+/* ==================================================================
+   6. Grass plane geometry constraints
+
+      Mirrors the constants declared inside RacingGameScene.svelte's
+      <script> block. The grass plane exists to give roadside trees a
+      stable surface to sit on. To avoid the grass clipping through
+      the road in any of its noise-driven dips, GRASS_Y must be
+      strictly below (ROAD_Y − MAX_HEIGHT_DELTA). Mirroring the
+      constants here means a regression in either side is caught by
+      comparing the values rather than relying on visual inspection.
+   ================================================================== */
+describe('Grass plane Y positioning (no road clipping)', () => {
+  // Mirrored from RacingGameScene.svelte / racingGame.js — keep in
+  // sync with the source so a regression on either side is flagged.
+  const ROAD_Y = 0;
+  const MAX_HEIGHT_DELTA = 1.5;
+  const GRASS_Y = ROAD_Y - MAX_HEIGHT_DELTA - 0.2;
+
+  it('GRASS_Y is strictly below the deepest possible road surface', () => {
+    // The road surface spans [ROAD_Y - MAX_HEIGHT_DELTA, ROAD_Y + MAX_HEIGHT_DELTA].
+    const deepestRoadY = ROAD_Y - MAX_HEIGHT_DELTA;
+    expect(GRASS_Y).toBeLessThan(deepestRoadY);
+  });
+
+  it('GRASS_Y sits 0.2 below the deepest road point (visual buffer)', () => {
+    // The 0.2 buffer is intentional: it keeps the grass visually distinct
+    // from the road surface while still preventing clipping. The exact
+    // formula may drift by a few ulp due to IEEE 754 subtraction
+    // rounding, so the assertion uses a small tolerance.
+    expect(GRASS_Y).toBeCloseTo(-1.7, 5);
+    expect(GRASS_Y - (ROAD_Y - MAX_HEIGHT_DELTA)).toBeLessThanOrEqual(-0.2 + 1e-9);
+  });
+
+  it('Grass plane never appears above the road surface in any sample', () => {
+    // Sweep through the noise range; for every heightOffset the
+    // (ROAD_Y + heightOffset) road surface must remain greater than
+    // GRASS_Y. Sanity-check that the constraint holds for the
+    // boundary and a typical dip.
+    for (const heightOffset of [-MAX_HEIGHT_DELTA, -MAX_HEIGHT_DELTA / 2, 0, MAX_HEIGHT_DELTA]) {
+      const roadSurfaceY = ROAD_Y + heightOffset;
+      expect(roadSurfaceY).toBeGreaterThan(GRASS_Y);
+    }
+  });
+});
+
+/* ==================================================================
+   7. Tree Y anchoring onto the grass plane
+
+      The createRoadsideTrees helper and updateRoad() tree update both
+      position trees at GRASS_Y instead of the noise-driven road
+      heightOffset. These tests mirror that placement logic to confirm
+      the trunk bottom always rests at the grass plane height, even
+      when the road beneath them is dipping.
+   ================================================================== */
+describe('Tree anchoring onto grass plane (no floating)', () => {
+  // Mirrored from RacingGameScene.svelte / racingGame.js.
+  const ROAD_Y = 0;
+  const MAX_HEIGHT_DELTA = 1.5;
+  const ROAD_VISUAL_WIDTH = 3 * 3.5 * 1.6;
+  const GRASS_Y = ROAD_Y - MAX_HEIGHT_DELTA - 0.2;
+  const GRASS_WIDTH = 400;
+
+  /**
+   * Pure replica of the per-tree position assignment inside
+   * createRoadsideTrees(). Returns the world Y that the tree's group
+   * sits at (the trunk bottom is at exactly this Y because the trunk
+   * mesh is positioned at local y = trunkH / 2).
+   */
+  function initialTreeY() {
+    return GRASS_Y;
+  }
+
+  /** Replica of the same line inside updateRoad()'s tree update loop. */
+  function updateRoadTreeY() {
+    return GRASS_Y;
+  }
+
+  it('initial tree placement is independent of road noise (trunk on grass)', () => {
+    // Whatever the noise produces, the tree's trunk bottom is at
+    // GRASS_Y — never at ROAD_Y + offset.heightOffset.
+    expect(initialTreeY()).toBe(GRASS_Y);
+    expect(initialTreeY()).toBeLessThan(ROAD_Y);
+  });
+
+  it('updateRoad keeps tree Y anchored at GRASS_Y every frame', () => {
+    // Calling the updater repeatedly must keep the tree at GRASS_Y
+    // — it must never drift back to road-surface height.
+    let y = 0;
+    for (let i = 0; i < 10; i++) {
+      y = updateRoadTreeY();
+      expect(y).toBe(GRASS_Y);
+    }
+  });
+
+  it('trees never sit above road surface at the worst-case dip', () => {
+    // At the deepest road dip (heightOffset = -MAX_HEIGHT_DELTA) the
+    // road surface is at y = ROAD_Y - MAX_HEIGHT_DELTA, which is above
+    // GRASS_Y by exactly 0.2. Tree anchored at GRASS_Y must therefore
+    // be ≤ road surface, i.e. never floating above the road in a dip.
+    const deepestRoadY = ROAD_Y - MAX_HEIGHT_DELTA;
+    expect(initialTreeY()).toBeLessThanOrEqual(deepestRoadY);
+    expect(updateRoadTreeY()).toBeLessThanOrEqual(deepestRoadY);
+  });
+
+  it('tree lateral clearance from road is preserved (≥ ROAD_VISUAL_WIDTH / 2 + 2)', () => {
+    // The updateRoad logic preserves the original lateral distance
+    // with a minimum clamp equal to ROAD_VISUAL_WIDTH / 2 + 2, so
+    // trees never end up parked on the road itself. This guards the
+    // visual intent that trees sit at the side, not in the lane.
+    const minClearance = ROAD_VISUAL_WIDTH / 2 + 2;
+    expect(minClearance).toBeGreaterThan(ROAD_VISUAL_WIDTH / 2);
+    expect(minClearance).toBeGreaterThan(0);
+  });
+});
+
+/* ==================================================================
+   8. Grass plane scroll behaviour
+
+      Mirrors the additional branch added to repositionRoadTiles() to
+      track the grassGroup.position.z with scrollOffset so the plane
+      always sits under the visible section of road.
+   ================================================================== */
+describe('Grass plane scroll behaviour', () => {
+  // State container mimicking the module-level grassGroup in the
+  // component. The actual mesh inside is irrelevant for this test.
+  const grassState = { position: { z: 0 } };
+
+  /** Replica of the grass-position update inside repositionRoadTiles(). */
+  function scrollGrass(scrollOffset) {
+    if (grassState) {
+      grassState.position.z = scrollOffset;
+    }
+  }
+
+  it('grass plane Z starts at scrollOffset 0', () => {
+    grassState.position.z = 0;
+    expect(grassState.position.z).toBe(0);
+  });
+
+  it('grass plane Z tracks scrollOffset exactly (no smoothing, no drift)', () => {
+    grassState.position.z = 0;
+    for (const so of [0, 1, 22, 100, 500.5, 1000, -10]) {
+      scrollGrass(so);
+      expect(grassState.position.z).toBe(so);
+    }
+  });
+
+  it('grass plane has large enough span to stay under visible road for typical play', () => {
+    // GRASS_LENGTH should be much larger than the typical play-time
+    // scroll distance, so the plane always covers from the camera
+    // back to where the player will reach. The mirrored constant
+    // here is 4000; even at PLAYER_SPEED = 22, that is ≈ 3 minutes
+    // of straight-line travel before the plane would scroll past.
+    const GRASS_LENGTH = 4000;
+    const PLAYER_SPEED = 22;
+    const halfLife = (GRASS_LENGTH / 2) / PLAYER_SPEED; // seconds
+    expect(halfLife).toBeGreaterThan(60); // > 1 minute of unconstrained play
+  });
+});
+

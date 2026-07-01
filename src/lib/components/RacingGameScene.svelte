@@ -5,6 +5,7 @@
     LANE_COUNT, LANE_WIDTH, getLaneX, clampLane,
     MAX_HEALTH, OBSTACLE_DAMAGE, VEHICLE_DAMAGE, REPAIR_HEAL,
     SEGMENT_LENGTH,
+    MAX_HEIGHT_DELTA,
     generateSegment, generateSegments, getRoadOffsetAt,
     OBJECT_TYPES,
     generateObjectsForSegment,
@@ -47,6 +48,15 @@
 
   /** @type {THREE.Group|null} */
   let sceneryGroup = null;
+
+  /** @type {THREE.Group|null} */
+  let grassGroup = null;
+
+  /** @type {THREE.BufferGeometry|null} */
+  let grassGeometry = null;
+
+  /** @type {THREE.Material|null} */
+  let grassMaterial = null;
 
   /** @type {ResizeObserver|null} */
   let resizeObserver = null;
@@ -143,6 +153,20 @@
   const ROAD_SHOULDER_COLOR = 0x6a7a6a;
   const LANE_LINE_COLOR = 0xd8e8d8;
 
+  // Grass / ground plane that covers the area below and around the road,
+  // giving roadside trees a visible surface to stand on instead of floating
+  // at road-surface height. The road surface itself can dip by up to
+  // MAX_HEIGHT_DELTA below ROAD_Y, so GRASS_Y is anchored to
+  // ROAD_Y - MAX_HEIGHT_DELTA - 0.2 to guarantee the grass plane stays
+  // strictly below the deepest possible road surface — preventing the
+  // grass from clipping through the road in dips. The small 0.2 unit
+  // buffer keeps the surfaces visually distinct while trees stay
+  // anchored to a stable, non-jittery ground plane.
+  const GRASS_Y = ROAD_Y - MAX_HEIGHT_DELTA - 0.2;
+  const GRASS_COLOR = 0x4a7a3a;
+  const GRASS_WIDTH = 400;
+  const GRASS_LENGTH = 4000;
+
   // Vehicle transform smoothing factors.
   // Fast convergence is safe because the Perlin noise road centreline
   // is continuous and low-frequency (0.008 Hz, 2 octaves).
@@ -203,6 +227,7 @@
 
     setupLighting();
     createBackgroundScenery();
+    createGrassPlane();
     createRoadSystem();
     createVehicle();
 
@@ -286,6 +311,39 @@
       );
       sceneryGroup.add(mesh);
     }
+  }
+
+  /* ===================================================================
+     Grass / Ground Plane
+     =================================================================== */
+  function createGrassPlane() {
+    // A wide, flat green plane covering the area below and around the road.
+    // It exists purely as scenery — a stable surface that roadside trees
+    // can sit on at a constant Y instead of inheriting the road's noise-
+    // driven heightOffset (which would make them float in dips and sink on
+    // hilltops). The plane is added to its own group so it doesn't get
+    // recycled by the road tile system; the group's Z position tracks
+    // scrollOffset each frame so the grass always extends under whatever
+    // section of road the player is on.
+    grassGroup = new THREE.Group();
+    grassGroup.position.z = scrollOffset;
+    scene.add(grassGroup);
+
+    // Capture the geometry and material at module level so onDestroy can
+    // explicitly dispose them. The scene.traverse() in onDestroy already
+    // disposes every mesh, but retaining direct references guarantees the
+    // GPU resources are freed even if the grass group is ever detached
+    // from the scene graph during a future refactor.
+    grassMaterial = new THREE.MeshPhongMaterial({
+      color: GRASS_COLOR,
+      flatShading: true,
+    });
+    grassGeometry = new THREE.PlaneGeometry(GRASS_WIDTH, GRASS_LENGTH);
+    const grass = new THREE.Mesh(grassGeometry, grassMaterial);
+    grass.rotation.x = -Math.PI / 2;
+    grass.position.y = GRASS_Y;
+    grass.receiveShadow = true;
+    grassGroup.add(grass);
   }
 
   /* ===================================================================
@@ -505,6 +563,12 @@
         s.position.z = scrollOffset;
       }
     }
+
+    // Scroll the grass plane with the world so trees continue to sit on
+    // grass regardless of how far the player has travelled.
+    if (grassGroup) {
+      grassGroup.position.z = scrollOffset;
+    }
   }
 
   /** Simple cone-shaped trees along the road. */
@@ -547,9 +611,14 @@
         tree.add(foliage);
       }
 
+      // Anchor the tree at GRASS_Y instead of the noise-driven road
+      // height so the trunk bottom sits on the grass plane (a stable,
+      // constant Y) rather than floating in road dips or sinking on
+      // hilltops. The X position still follows the road curve so trees
+      // track the direction of the road.
       tree.position.set(
         offset.curveOffset + side * distFromCenter,
-        ROAD_Y + offset.heightOffset,
+        GRASS_Y,
         roadZ
       );
       tree.userData.roadZ = roadZ;
@@ -618,9 +687,13 @@
         const offset = getRoadOffsetAt(roadSegments, child.userData.roadZ);
         const side = child.position.x > 0 ? 1 : -1;
         const dist = Math.abs(child.position.x - offset.curveOffset);
+        // Anchor trees to GRASS_Y so the trunk bottom rests on the grass
+        // plane at a constant Y, instead of inheriting the road's
+        // heightOffset (which would lift them off the ground in dips and
+        // push them into the terrain on hilltops).
         child.position.set(
           offset.curveOffset + side * Math.max(dist, ROAD_VISUAL_WIDTH / 2 + 2),
-          ROAD_Y + offset.heightOffset,
+          GRASS_Y,
           child.userData.roadZ + scrollOffset
         );
       }
@@ -1594,6 +1667,19 @@
       });
     }
 
+    // Explicitly dispose grass GPU resources. The scene.traverse() loop
+    // above already covers them, but releasing the cached references up
+    // front prevents accidental retention if grassGroup is later detached
+    // from the scene (and makes the cleanup contract explicit).
+    if (grassGeometry) {
+      try { grassGeometry.dispose(); } catch {}
+      grassGeometry = null;
+    }
+    if (grassMaterial) {
+      try { grassMaterial.dispose(); } catch {}
+      grassMaterial = null;
+    }
+
     if (renderer) {
       renderer.dispose();
       if (renderer.domElement && renderer.domElement.parentNode) {
@@ -1612,6 +1698,9 @@
     roadGroup = null;
     objectsGroup = null;
     sceneryGroup = null;
+    grassGroup = null;
+    grassGeometry = null;
+    grassMaterial = null;
     roadSegments = [];
     roadTileData = [];
     objectDescriptors = [];

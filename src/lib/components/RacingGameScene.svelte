@@ -88,6 +88,22 @@
   let laneVisualX = 0;
   let laneSwitchProgress = 1; // 1 = done
 
+  // Vehicle Z-axis tilt is the sum of two independently tracked
+  // components. Tracking them separately (rather than accumulating
+  // into `vehicle.rotation.z`) is required because each component
+  // has a different lifecycle:
+  //   * lane-switch tilt: snaps to the animation curve value while
+  //     a lane switch is in progress, then exponentially decays to
+  //     0 once the switch completes.
+  //   * curve-bank tilt: lerps toward the curve direction so the
+  //     vehicle leans into the road in a curve and eases back to
+  //     flat on a straight.
+  // Composing them each frame (instead of adding on top of last
+  // frame's rotation.z) prevents either component from
+  // accumulating across frames and producing a runaway tilt.
+  let currentLaneSwitchTilt = 0;
+  let currentCurveBank = 0;
+
   let playerY = 0; // jump height above road surface
   let isJumping = false;
   let jumpVelocity = 0;
@@ -169,7 +185,9 @@
 
   // Vehicle transform smoothing factors.
   // Fast convergence is safe because the Perlin noise road centreline
-  // is continuous and low-frequency (0.008 Hz, 2 octaves).
+  // is continuous and low-frequency (0.006 Hz, 2 octaves), and the
+  // lateral amplitude is now amplified by MAX_CURVE_OFFSET = 5.0 so
+  // curves produce visibly wider swings than before.
   const VEHICLE_SMOOTH_X = 0.35;
   const VEHICLE_SMOOTH_Y = 0.25;
 
@@ -177,7 +195,34 @@
   // smoothly into curves, fast enough to avoid perceptible lag.
   const CAMERA_SMOOTH = 0.15;
   // Fraction of the lane offset visible in the camera target position.
-  const CAMERA_LANE_FACTOR = 0.4;
+  // Bumped from 0.4 to 0.7 so the camera visibly swings with the road
+  // when the player changes lane inside a curve, reinforcing the
+  // sense that curves are wider than straights.
+  const CAMERA_LANE_FACTOR = 0.7;
+
+  // Curve-banking factors: when the road curves ahead, the camera and
+  // vehicle roll a small amount around the Z axis. The factor converts
+  // the lateral curveOffset delta ahead of the player into a roll
+  // angle. The CAMERA_BANK_FACTOR controls how dramatically the
+  // camera leans into a curve; VEHICLE_BANK_FACTOR keeps the vehicle
+  // tilt subtle so it doesn't fight the existing lane-switch tilt.
+  // Both are computed from the *change* in curveOffset over a small
+  // look-ahead window so straights (curveOffset flat across the look-
+  // ahead) produce ~0 banking while curves (curveOffset changing
+  // ahead of the player) produce a visible lean.
+  const CAMERA_BANK_LOOK_AHEAD = 8;
+  const VEHICLE_BANK_LOOK_AHEAD = 6;
+  const CAMERA_BANK_FACTOR = 0.3;
+  const VEHICLE_BANK_FACTOR = 0.04;
+  // Smoothing factor for the vehicle curve-bank tilt. Each frame the
+  // vehicle's curve-bank component lerps toward the new target by
+  // this fraction. Equivalent exponential-decay rate is ~85%/frame
+  // (≈96% converged in ~20 frames / 0.33 s) — fast enough to lean
+  // visibly into curves but slow enough that the tilt does not
+  // jitter on the noisy Perlin road. Crucially, using lerp toward
+  // the target (not += delta) means the bank component converges
+  // to its per-frame target and does not accumulate.
+  const VEHICLE_BANK_SMOOTH = 0.15;
 
   let frameCount = 0;
   const COLLISION_CHECK_MOD = 4;
@@ -1164,6 +1209,8 @@
     targetLane = 0;
     laneVisualX = 0;
     laneSwitchProgress = 1;
+    currentLaneSwitchTilt = 0;
+    currentCurveBank = 0;
     playerY = 0;
     isJumping = false;
     jumpVelocity = 0;
@@ -1374,19 +1421,55 @@
     const targetY = ROAD_Y + offset.heightOffset + playerY;
 
     // Fast convergence on the smooth noise road centreline.
-    // The Perlin noise is low-frequency (0.008 Hz, 2 octaves) so
-    // curveOffset changes gradually — no jitter from direct tracking.
+    // The Perlin noise is low-frequency (0.006 Hz, 2 octaves) and the
+    // lateral amplitude is amplified by MAX_CURVE_OFFSET = 5.0, so
+    // curveOffset changes gradually but produces visibly larger
+    // swings than before — no jitter from direct tracking.
     vehicle.position.x += (targetX - vehicle.position.x) * VEHICLE_SMOOTH_X;
     vehicle.position.y += (targetY - vehicle.position.y) * VEHICLE_SMOOTH_Y;
     vehicle.position.z = 0;
 
-    // Tilt during lane switch
+    // -- Z-axis tilt: lane-switch component ----------------------------
+    // While a lane switch is in progress, snap directly to the
+    // animation curve value (matches the original behaviour of
+    // assigning rotation.z to the computed tilt each frame).
+    // After the switch completes, the previous tilt decays
+    // exponentially toward 0 — this is exactly the original
+    // `rotation.z *= 0.9` behaviour, just expressed on a separate
+    // state variable so the curve-bank component below is not
+    // pulled along with the decay.
+    let targetLaneSwitchTilt = 0;
     if (laneSwitchProgress < 1) {
       const laneDelta = targetLane - currentLane;
-      vehicle.rotation.z = -laneDelta * 0.12 * (1 - Math.abs(laneSwitchProgress - 0.5) * 2);
+      targetLaneSwitchTilt = -laneDelta * 0.12 * (1 - Math.abs(laneSwitchProgress - 0.5) * 2);
+      currentLaneSwitchTilt = targetLaneSwitchTilt;
     } else {
-      vehicle.rotation.z *= 0.9;
+      // Decay rate 0.1 ⇒ 90% retained per frame, matches the
+      // original `*= 0.9` exponential decay toward 0.
+      currentLaneSwitchTilt += (0 - currentLaneSwitchTilt) * 0.1;
     }
+
+    // -- Z-axis tilt: curve-bank component -----------------------------
+    // Sample the curveOffset change a few units ahead of the player
+    // and lerp the smoothed bank tilt toward the target by
+    // VEHICLE_BANK_SMOOTH each frame. Unlike the previous
+    // implementation (`rotation.z += delta`), this lerp converges
+    // to the current target without accumulating across frames: in
+    // a sustained curve the bank eases toward `targetCurveBank` and
+    // stays there; when the road straightens, `targetCurveBank`
+    // approaches 0 and the smoothed bank eases back to flat. No
+    // accumulation, no runaway tilt.
+    const aheadRoadZ = playerRoadZ - VEHICLE_BANK_LOOK_AHEAD;
+    const aheadOffset = getRoadOffsetAt(roadSegments, aheadRoadZ);
+    const curveDelta = aheadOffset.curveOffset - offset.curveOffset;
+    const targetCurveBank = -curveDelta * VEHICLE_BANK_FACTOR;
+    currentCurveBank += (targetCurveBank - currentCurveBank) * VEHICLE_BANK_SMOOTH;
+
+    // -- Z-axis tilt: compose ------------------------------------------
+    // Set rotation.z fresh each frame as the sum of the two
+    // independently-tracked components. No `+=`, no cross-frame
+    // accumulation.
+    vehicle.rotation.z = currentLaneSwitchTilt + currentCurveBank;
 
     // Tilt during jump
     if (isJumping) {
@@ -1423,6 +1506,27 @@
       -10
     );
     camera.lookAt(lookTarget);
+
+    // Curve banking: tilt the camera around its forward axis based on
+    // the lateral curveOffset change a short distance ahead of the
+    // player. When the road ahead bends to the right (curveOffset
+    // increasing as Z goes more negative), curveDelta is positive and
+    // we rotate the camera so its top tilts to the right, giving the
+    // player a visual cue that they are entering / continuing a
+    // curve. On straight sections curveDelta is ≈ 0 so the camera
+    // stays level, making the contrast between straights and curves
+    // obvious. The CAMERA_BANK_FACTOR keeps the roll moderate — a
+    // large enough swing to be felt, small enough that it does not
+    // disorient the player.
+    const playerRoadZ = -scrollOffset;
+    const aheadRoadZ = playerRoadZ - CAMERA_BANK_LOOK_AHEAD;
+    const playerOffset = getRoadOffsetAt(roadSegments, playerRoadZ);
+    const aheadOffset = getRoadOffsetAt(roadSegments, aheadRoadZ);
+    const curveDelta = aheadOffset.curveOffset - playerOffset.curveOffset;
+    // Negative factor: rotateZ(bankAngle) with negative angle tilts
+    // the camera's up vector to the right (camera-local Z = back
+    // axis, so a negative rotation around it leans the top right).
+    camera.rotateZ(-curveDelta * CAMERA_BANK_FACTOR);
   }
 
   /* ===================================================================

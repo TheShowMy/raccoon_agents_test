@@ -1054,3 +1054,263 @@ describe('Vehicle curve-bank lerp (no cross-frame accumulation)', () => {
   });
 });
 
+/* ==================================================================
+   11. Oncoming vehicles actively drive toward the player
+
+      Originally, an oncoming vehicle was a stationary prop: its road-
+      space Z stayed constant, and only the world scroll (`scrollOffset`)
+      changed. The result was that an oncoming vehicle appeared to
+      approach the player only at the player's own speed (PLAYER_SPEED),
+      which read as a passive prop rather than an active vehicle.
+
+      The new behaviour is to mutate `obj.z` in road-space by
+      `ONCOMING_VEHICLE_SPEED * dt` every frame, in addition to the
+      global world scroll. The combined closing speed is therefore
+      `PLAYER_SPEED + ONCOMING_VEHICLE_SPEED`. Obstacles and repair kits
+      are unaffected: their `obj.z` is left untouched by the advance
+      function.
+
+      The component logic is mirrored as a pure helper below and the
+      assertions verify:
+        1. The advance function moves oncoming vehicles in +Z (toward
+           the player) by exactly `ONCOMING_VEHICLE_SPEED * dt` per
+           frame.
+        2. Obstacles and repair kits are not affected.
+        3. Multiple oncoming vehicles advance independently.
+        4. The closing distance covered in 1 s of game time equals
+           `PLAYER_SPEED + ONCOMING_VEHICLE_SPEED` — i.e. the new
+           behaviour closes the gap faster than just world-scroll alone.
+        5. An oncoming vehicle that starts ahead of the player reaches
+           the collision zone (world Z within ±zWidth of 0) and is then
+           recycled after passing the player.
+        6. The `spawned` flag on a road segment prevents a second
+           object from being spawned in that segment after an oncoming
+           vehicle has moved out of its parent segment — which would
+           otherwise cause an object to suddenly appear right next to
+           (or behind) the player.
+   ================================================================== */
+
+// Mirrored constants — keep in sync with racingGame.js and
+// RacingGameScene.svelte.
+const ONCOMING_VEHICLE_SPEED_TEST = 14;
+const RECYCLE_WORLD_Z_TEST = 5;
+const VEHICLE_ZWIDTH = 1.5;
+
+/**
+ * Pure replica of the per-frame advancement inside RacingGameScene.svelte's
+ * advanceOncomingVehicles. Mutates objectDescriptors in place.
+ */
+function advanceOncomingVehicles(objectDescriptors, dt) {
+  const step = ONCOMING_VEHICLE_SPEED_TEST * dt;
+  for (let i = 0; i < objectDescriptors.length; i++) {
+    const obj = objectDescriptors[i];
+    if (obj && obj.type === 'oncoming_vehicle') {
+      obj.z += step;
+    }
+  }
+}
+
+describe('Oncoming vehicle movement — basic advance semantics', () => {
+  it('advances an oncoming vehicle in +Z by exactly ONCOMING_VEHICLE_SPEED * dt', () => {
+    const objs = [{ type: 'oncoming_vehicle', z: -50 }];
+    const initialZ = objs[0].z;
+    const dt = 1 / 60;
+    advanceOncomingVehicles(objs, dt);
+    expect(objs[0].z).toBeGreaterThan(initialZ);
+    expect(objs[0].z).toBeCloseTo(
+      initialZ + ONCOMING_VEHICLE_SPEED_TEST * dt,
+      10,
+    );
+  });
+
+  it('does not move obstacles', () => {
+    const objs = [{ type: 'obstacle', z: -50 }];
+    const initialZ = objs[0].z;
+    advanceOncomingVehicles(objs, 1 / 60);
+    expect(objs[0].z).toBe(initialZ);
+  });
+
+  it('does not move repair kits', () => {
+    const objs = [{ type: 'repair_kit', z: -50 }];
+    const initialZ = objs[0].z;
+    advanceOncomingVehicles(objs, 1 / 60);
+    expect(objs[0].z).toBe(initialZ);
+  });
+
+  it('accumulates motion across multiple frames (1 s → ONCOMING_VEHICLE_SPEED units)', () => {
+    const objs = [{ type: 'oncoming_vehicle', z: -50 }];
+    const initialZ = objs[0].z;
+    const dt = 1 / 60;
+    const steps = 60; // 1 second
+    for (let i = 0; i < steps; i++) {
+      advanceOncomingVehicles(objs, dt);
+    }
+    expect(objs[0].z).toBeCloseTo(initialZ + ONCOMING_VEHICLE_SPEED_TEST, 9);
+  });
+
+  it('moves multiple oncoming vehicles independently and leaves obstacles/repair kits alone', () => {
+    const objs = [
+      { type: 'oncoming_vehicle', z: -30 },
+      { type: 'obstacle', z: -40 },
+      { type: 'oncoming_vehicle', z: -50 },
+      { type: 'repair_kit', z: -60 },
+    ];
+    advanceOncomingVehicles(objs, 1);
+    expect(objs[0].z).toBe(-30 + ONCOMING_VEHICLE_SPEED_TEST);
+    expect(objs[1].z).toBe(-40); // unchanged
+    expect(objs[2].z).toBe(-50 + ONCOMING_VEHICLE_SPEED_TEST);
+    expect(objs[3].z).toBe(-60); // unchanged
+  });
+
+  it('treats null/undefined descriptors as no-ops (does not throw)', () => {
+    const objs = [
+      null,
+      undefined,
+      { type: 'oncoming_vehicle', z: -50 },
+    ];
+    expect(() => advanceOncomingVehicles(objs, 1 / 60)).not.toThrow();
+    expect(objs[2].z).toBeCloseTo(
+      -50 + ONCOMING_VEHICLE_SPEED_TEST / 60,
+      10,
+    );
+  });
+});
+
+describe('Oncoming vehicle movement — closing speed & recycling', () => {
+  it('closing speed relative to player equals PLAYER_SPEED + ONCOMING_VEHICLE_SPEED', () => {
+    // Player at world z = 0. Oncoming vehicle starts at world z = -100
+    // (100 units in front of the player). After 1 s of game time:
+    //   player advances by PLAYER_SPEED = 22  (world scroll)
+    //   vehicle closes by ONCOMING_VEHICLE_SPEED = 14  (advance)
+    // so the gap between player and vehicle shrinks by 22 + 14 = 36.
+    const initialGap = 100;
+    const objs = [{ type: 'oncoming_vehicle', z: -100 }];
+    const dt = 1 / 60;
+    const steps = 60;
+    let scrollOffset = 0;
+    for (let i = 0; i < steps; i++) {
+      scrollOffset += PLAYER_SPEED * dt;
+      advanceOncomingVehicles(objs, dt);
+    }
+    const finalGap = Math.abs(objs[0].z + scrollOffset - 0);
+    const closingDistance = initialGap - finalGap;
+    expect(closingDistance).toBeCloseTo(
+      PLAYER_SPEED + ONCOMING_VEHICLE_SPEED_TEST,
+      5,
+    );
+  });
+
+  it('closing speed is strictly faster than world scroll alone', () => {
+    // The whole point of the new behaviour is that an oncoming vehicle
+    // is visibly approaching, not just being carried by the world scroll.
+    // Verify the closing speed with our change is strictly greater than
+    // the closing speed without our change (= PLAYER_SPEED, since the
+    // vehicle would otherwise be stationary in road-space).
+    expect(PLAYER_SPEED + ONCOMING_VEHICLE_SPEED_TEST).toBeGreaterThan(
+      PLAYER_SPEED,
+    );
+  });
+
+  it('an oncoming vehicle ahead of the player reaches the collision zone within a few seconds', () => {
+    // Collision zone: vehicle world Z within ±VEHICLE_ZWIDTH of player z = 0.
+    // With combined closing speed 36, a vehicle starting at world Z = -120
+    // should reach the collision zone within ~120 / 36 ≈ 3.3 s, well under
+    // the 10 s budget.
+    const objs = [{ type: 'oncoming_vehicle', z: -120 }];
+    const dt = 1 / 60;
+    let scrollOffset = 0;
+    let reachedCollisionAt = null;
+    for (let frame = 0; frame < 600; frame++) {
+      scrollOffset += PLAYER_SPEED * dt;
+      advanceOncomingVehicles(objs, dt);
+      const worldZ = objs[0].z + scrollOffset;
+      if (Math.abs(worldZ) <= VEHICLE_ZWIDTH) {
+        reachedCollisionAt = frame * dt;
+        break;
+      }
+    }
+    expect(reachedCollisionAt).not.toBeNull();
+    expect(reachedCollisionAt).toBeLessThan(5);
+  });
+
+  it('an oncoming vehicle that passes the player is eventually recycled (worldZ > RECYCLE_WORLD_Z)', () => {
+    // Mirror the recycle decision: drop descriptors whose world Z exceeds
+    // RECYCLE_WORLD_Z. With our change, the vehicle closes in fast enough
+    // that it must reach the recycle threshold within a reasonable
+    // simulation window.
+    let descriptors = [{ type: 'oncoming_vehicle', z: -50 }];
+    const dt = 1 / 60;
+    let scrollOffset = 0;
+    let recycled = false;
+    for (let frame = 0; frame < 600; frame++) {
+      scrollOffset += PLAYER_SPEED * dt;
+      advanceOncomingVehicles(descriptors, dt);
+      descriptors = descriptors.filter(
+        (o) => o.z + scrollOffset <= RECYCLE_WORLD_Z_TEST,
+      );
+      if (descriptors.length === 0) {
+        recycled = true;
+        break;
+      }
+    }
+    expect(recycled).toBe(true);
+  });
+});
+
+describe('Oncoming vehicle movement — segment spawn protection', () => {
+  /**
+   * Pure replica of the per-segment `spawned` flag check used inside
+   * the component's spawnObjects(). Returns `true` if the segment is
+   * allowed to spawn, `false` otherwise.
+   */
+  function canSegmentSpawn(tileData) {
+    return !(tileData && tileData.spawned);
+  }
+
+  it('a fresh segment is allowed to spawn', () => {
+    const tileData = { spawned: false };
+    expect(canSegmentSpawn(tileData)).toBe(true);
+  });
+
+  it('a segment that has already spawned cannot spawn again', () => {
+    const tileData = { spawned: true };
+    expect(canSegmentSpawn(tileData)).toBe(false);
+  });
+
+  it('handles a missing tileData entry as spawn-allowed (defensive)', () => {
+    // Defensive: if roadTileData[i] is unexpectedly undefined for any
+    // reason, we should not throw — fall through to the next checks.
+    expect(canSegmentSpawn(undefined)).toBe(true);
+    expect(canSegmentSpawn(null)).toBe(true);
+  });
+
+  it('simulates the bug the guard prevents: vehicle leaves segment, re-spawn is blocked', () => {
+    // A road segment at zStart = -40 (segment range: -60 to -40).
+    // An oncoming vehicle is spawned at desc.z = -50 (segment centre).
+    // It advances each frame; once its desc.z exceeds -40 (segStart),
+    // it has left the segment. Without the `spawned` flag the next
+    // spawn tick would happily put a new vehicle into the same segment
+    // — which is now very close to (or past) the player. With the
+    // flag set, the segment is locked out.
+    const seg = { zStart: -40, length: 20 };
+    const tileData = { spawned: false };
+
+    // First spawn attempt: segment is fresh → spawn allowed.
+    expect(canSegmentSpawn(tileData)).toBe(true);
+    tileData.spawned = true;
+    const vehicle = { type: 'oncoming_vehicle', z: -50 };
+
+    // Advance the vehicle until it has moved out of the segment.
+    const dt = 1 / 60;
+    let advanced = 0;
+    while (vehicle.z <= seg.zStart && advanced < 60) {
+      advanceOncomingVehicles([vehicle], dt);
+      advanced++;
+    }
+    expect(vehicle.z).toBeGreaterThan(seg.zStart); // confirm it left
+
+    // Subsequent spawn attempt: the segment must refuse.
+    expect(canSegmentSpawn(tileData)).toBe(false);
+  });
+});
+

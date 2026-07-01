@@ -9,6 +9,7 @@
     generateSegment, generateSegments, getRoadOffsetAt,
     OBJECT_TYPES,
     generateObjectsForSegment,
+    ONCOMING_VEHICLE_SPEED,
     ROAD_Y, JUMP_IMMUNITY_HEIGHT, checkCollision, applyCollision,
     calculateScore,
     startEngineHum, stopEngineHum,
@@ -428,7 +429,16 @@
     const rows = ROAD_SUBDIVISIONS + 1;
     const halfW = ROAD_VISUAL_WIDTH / 2;
 
-    let data = { segment, surface: null, lines: [], shoulders: [] };
+    // `spawned` records whether objects have already been generated for
+    // this segment during its lifetime. It stays false until spawnObjects
+    // produces objects in this segment, then is flipped to true so the
+    // segment never spawns again. This prevents an oncoming vehicle from
+    // leaving its parent segment (its desc.z is advanced toward the
+    // player every frame) and a fresh vehicle being spawned into the
+    // same segment which is now very close to — or already past — the
+    // player, causing an object to suddenly pop in front of or behind
+    // them.
+    let data = { segment, surface: null, lines: [], shoulders: [], spawned: false };
 
     // ---- Road surface ----
     const surfacePositions = [];
@@ -1056,14 +1066,31 @@
     if (!roadSegments.length) return;
 
     // Only spawn on segments that are approaching the player
-    for (const seg of roadSegments) {
+    for (let i = 0; i < roadSegments.length; i++) {
+      const seg = roadSegments[i];
+      // roadSegments and roadTileData are kept in sync (same length,
+      // shifted together during recycling), so we can look up the
+      // per-segment `spawned` flag by the same index.
+      const tileData = roadTileData[i];
       const roadZ = seg.zStart - seg.length / 2;
       const worldZ = roadZ + scrollOffset;
 
       // Only spawn if within visible range ahead
       if (worldZ < -120 || worldZ > -5) continue;
 
-      // Check if segment already has objects
+      // Each segment spawns objects at most once during its lifetime.
+      // Oncoming vehicles move in road-space toward the player every
+      // frame, so without this guard a spawned vehicle could leave the
+      // segment it was placed in (the `hasObjects` check below would
+      // then return false) and a fresh vehicle could spawn into the
+      // same segment which is now very close to — or already past —
+      // the player, causing an object to suddenly pop in front of or
+      // behind them.
+      if (tileData && tileData.spawned) continue;
+
+      // Check if segment already has objects (defence in depth — covers
+      // the brief window between `spawned` being set and the descriptors
+      // being pushed, and any future refactor that might skip the flag).
       const segStart = seg.zStart;
       const segEnd = seg.zStart - seg.length;
       const hasObjects = objectDescriptors.some(
@@ -1076,6 +1103,7 @@
 
       const objects = generateObjectsForSegment(seg, 1);
       objectDescriptors.push(...objects);
+      if (tileData) tileData.spawned = true;
     }
   }
 
@@ -1092,6 +1120,31 @@
           objectMeshMap.delete(obj);
         }
         objectDescriptors.splice(i, 1);
+      }
+    }
+  }
+
+  /**
+   * Advance every active oncoming vehicle in road-space toward the
+   * player (+Z direction). Obstacles and repair kits stay anchored to
+   * their road-space Z and are only moved visually by the world scroll,
+   * so this function only touches objects whose type is
+   * OBJECT_TYPES.ONCOMING_VEHICLE.
+   *
+   * Mutating obj.z (rather than a separate "vehicle-local Z" field)
+   * keeps the downstream world-Z calculation `obj.z + scrollOffset`
+   * unchanged, so visual repositioning, recycling and collision
+   * detection all keep working with their existing arithmetic — the
+   * oncoming vehicle simply closes the gap faster than a stationary
+   * prop would (at PLAYER_SPEED + ONCOMING_VEHICLE_SPEED instead of
+   * just PLAYER_SPEED).
+   */
+  function advanceOncomingVehicles(dt) {
+    const step = ONCOMING_VEHICLE_SPEED * dt;
+    for (let i = 0; i < objectDescriptors.length; i++) {
+      const obj = objectDescriptors[i];
+      if (obj && obj.type === OBJECT_TYPES.ONCOMING_VEHICLE) {
+        obj.z += step;
       }
     }
   }
@@ -1127,6 +1180,12 @@
       spawnObjects();
       spawnCooldown = 0.25;
     }
+    // Oncoming vehicles actively drive toward the player in addition to
+    // the world scroll. Mutate obj.z here (rather than later in the
+    // updateObjectVisuals step) so the same value is consumed by
+    // recycleWorldObjects, updateObjectVisuals and handleCollisions —
+    // keeping a single source of truth for each object's road-space Z.
+    advanceOncomingVehicles(dt);
     recycleWorldObjects();
 
     // -- Update road --

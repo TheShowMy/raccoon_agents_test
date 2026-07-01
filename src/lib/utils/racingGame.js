@@ -235,6 +235,18 @@ export const OBJECT_WEIGHTS = Object.freeze({
 });
 
 /**
+ * Approaching speed of an oncoming vehicle in world units per second,
+ * measured in the +Z direction (toward the player). Oncoming vehicles
+ * advance their own road-space Z by this amount every frame in addition
+ * to the global world scroll, so they close in on the player at the
+ * sum of this constant and the player's forward speed. This makes them
+ * visibly drive toward the player like real oncoming traffic rather
+ * than appearing as stationary props carried past the camera by the
+ * world scroll.
+ */
+export const ONCOMING_VEHICLE_SPEED = 14;
+
+/**
  * Create a road object descriptor.
  *
  * @param {string} type - One of OBJECT_TYPES.

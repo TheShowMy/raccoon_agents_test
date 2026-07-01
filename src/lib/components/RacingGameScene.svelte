@@ -161,6 +161,13 @@
   // Objects with worldZ > this are recycled (behind the player)
   const RECYCLE_WORLD_Z = 5;
 
+  // Road segments are kept until their far end has scrolled past the
+  // camera (camera Z = 12, looking toward -Z). Recycling on segment
+  // "center" caused the road under the player to disappear while its far
+  // portion was still in view; checking the far end ensures each segment
+  // only disappears after it is entirely behind the camera.
+  const CAMERA_RECYCLE_Z = 12;
+
   /* ===================================================================
      Three.js — Scene Setup
      =================================================================== */
@@ -521,15 +528,17 @@
   function updateRoad() {
     if (!roadGroup) return;
 
-    // -- Recycle old segments that are now behind the player --
-    // A segment with worldZ = roadZ + scrollOffset > RECYCLE_WORLD_Z is behind.
-    // Since roadZ is negative (ahead when scrollOffset=0), it scrolls toward +Z.
+    // -- Recycle old segments that are fully past the camera --
+    // Each segment extends in road-space from seg.zStart (near end, +Z
+    // side when viewed in front of the player) to seg.zStart - seg.length
+    // (far end, -Z side). We recycle only when this far end has scrolled
+    // past the camera, guaranteeing the segment is no longer visible.
     while (roadTileData.length > 0) {
       const data = roadTileData[0];
       const seg = data.segment;
-      const roadZ = seg.zStart - seg.length / 2;
-      const worldZ = roadZ + scrollOffset;
-      if (worldZ < RECYCLE_WORLD_Z) break;
+      const roadFarZ = seg.zStart - seg.length;
+      const worldZ = roadFarZ + scrollOffset;
+      if (worldZ < CAMERA_RECYCLE_Z) break;
 
       // Remove from roadSegments (index 0 = closest segment)
       roadSegments.shift();

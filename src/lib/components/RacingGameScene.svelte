@@ -5,9 +5,11 @@
     LANE_COUNT, LANE_WIDTH, getLaneX, clampLane,
     MAX_HEALTH, OBSTACLE_DAMAGE, VEHICLE_DAMAGE, REPAIR_HEAL,
     SEGMENT_LENGTH,
+    MAX_HEIGHT_DELTA,
     generateSegment, generateSegments, getRoadOffsetAt,
     OBJECT_TYPES,
     generateObjectsForSegment,
+    ONCOMING_VEHICLE_SPEED,
     ROAD_Y, JUMP_IMMUNITY_HEIGHT, checkCollision, applyCollision,
     calculateScore,
     startEngineHum, stopEngineHum,
@@ -48,6 +50,15 @@
   /** @type {THREE.Group|null} */
   let sceneryGroup = null;
 
+  /** @type {THREE.Group|null} */
+  let grassGroup = null;
+
+  /** @type {THREE.BufferGeometry|null} */
+  let grassGeometry = null;
+
+  /** @type {THREE.Material|null} */
+  let grassMaterial = null;
+
   /** @type {ResizeObserver|null} */
   let resizeObserver = null;
 
@@ -77,6 +88,22 @@
   // Visual lane X position (smoothed during switch)
   let laneVisualX = 0;
   let laneSwitchProgress = 1; // 1 = done
+
+  // Vehicle Z-axis tilt is the sum of two independently tracked
+  // components. Tracking them separately (rather than accumulating
+  // into `vehicle.rotation.z`) is required because each component
+  // has a different lifecycle:
+  //   * lane-switch tilt: snaps to the animation curve value while
+  //     a lane switch is in progress, then exponentially decays to
+  //     0 once the switch completes.
+  //   * curve-bank tilt: lerps toward the curve direction so the
+  //     vehicle leans into the road in a curve and eases back to
+  //     flat on a straight.
+  // Composing them each frame (instead of adding on top of last
+  // frame's rotation.z) prevents either component from
+  // accumulating across frames and producing a runaway tilt.
+  let currentLaneSwitchTilt = 0;
+  let currentCurveBank = 0;
 
   let playerY = 0; // jump height above road surface
   let isJumping = false;
@@ -143,9 +170,25 @@
   const ROAD_SHOULDER_COLOR = 0x6a7a6a;
   const LANE_LINE_COLOR = 0xd8e8d8;
 
+  // Grass / ground plane that covers the area below and around the road,
+  // giving roadside trees a visible surface to stand on instead of floating
+  // at road-surface height. The road surface itself can dip by up to
+  // MAX_HEIGHT_DELTA below ROAD_Y, so GRASS_Y is anchored to
+  // ROAD_Y - MAX_HEIGHT_DELTA - 0.2 to guarantee the grass plane stays
+  // strictly below the deepest possible road surface — preventing the
+  // grass from clipping through the road in dips. The small 0.2 unit
+  // buffer keeps the surfaces visually distinct while trees stay
+  // anchored to a stable, non-jittery ground plane.
+  const GRASS_Y = ROAD_Y - MAX_HEIGHT_DELTA - 0.2;
+  const GRASS_COLOR = 0x4a7a3a;
+  const GRASS_WIDTH = 400;
+  const GRASS_LENGTH = 4000;
+
   // Vehicle transform smoothing factors.
   // Fast convergence is safe because the Perlin noise road centreline
-  // is continuous and low-frequency (0.008 Hz, 2 octaves).
+  // is continuous and low-frequency (0.006 Hz, 2 octaves), and the
+  // lateral amplitude is now amplified by MAX_CURVE_OFFSET = 5.0 so
+  // curves produce visibly wider swings than before.
   const VEHICLE_SMOOTH_X = 0.35;
   const VEHICLE_SMOOTH_Y = 0.25;
 
@@ -153,7 +196,34 @@
   // smoothly into curves, fast enough to avoid perceptible lag.
   const CAMERA_SMOOTH = 0.15;
   // Fraction of the lane offset visible in the camera target position.
-  const CAMERA_LANE_FACTOR = 0.4;
+  // Bumped from 0.4 to 0.7 so the camera visibly swings with the road
+  // when the player changes lane inside a curve, reinforcing the
+  // sense that curves are wider than straights.
+  const CAMERA_LANE_FACTOR = 0.7;
+
+  // Curve-banking factors: when the road curves ahead, the camera and
+  // vehicle roll a small amount around the Z axis. The factor converts
+  // the lateral curveOffset delta ahead of the player into a roll
+  // angle. The CAMERA_BANK_FACTOR controls how dramatically the
+  // camera leans into a curve; VEHICLE_BANK_FACTOR keeps the vehicle
+  // tilt subtle so it doesn't fight the existing lane-switch tilt.
+  // Both are computed from the *change* in curveOffset over a small
+  // look-ahead window so straights (curveOffset flat across the look-
+  // ahead) produce ~0 banking while curves (curveOffset changing
+  // ahead of the player) produce a visible lean.
+  const CAMERA_BANK_LOOK_AHEAD = 8;
+  const VEHICLE_BANK_LOOK_AHEAD = 6;
+  const CAMERA_BANK_FACTOR = 0.3;
+  const VEHICLE_BANK_FACTOR = 0.04;
+  // Smoothing factor for the vehicle curve-bank tilt. Each frame the
+  // vehicle's curve-bank component lerps toward the new target by
+  // this fraction. Equivalent exponential-decay rate is ~85%/frame
+  // (≈96% converged in ~20 frames / 0.33 s) — fast enough to lean
+  // visibly into curves but slow enough that the tilt does not
+  // jitter on the noisy Perlin road. Crucially, using lerp toward
+  // the target (not += delta) means the bank component converges
+  // to its per-frame target and does not accumulate.
+  const VEHICLE_BANK_SMOOTH = 0.15;
 
   let frameCount = 0;
   const COLLISION_CHECK_MOD = 4;
@@ -203,6 +273,7 @@
 
     setupLighting();
     createBackgroundScenery();
+    createGrassPlane();
     createRoadSystem();
     createVehicle();
 
@@ -289,6 +360,39 @@
   }
 
   /* ===================================================================
+     Grass / Ground Plane
+     =================================================================== */
+  function createGrassPlane() {
+    // A wide, flat green plane covering the area below and around the road.
+    // It exists purely as scenery — a stable surface that roadside trees
+    // can sit on at a constant Y instead of inheriting the road's noise-
+    // driven heightOffset (which would make them float in dips and sink on
+    // hilltops). The plane is added to its own group so it doesn't get
+    // recycled by the road tile system; the group's Z position tracks
+    // scrollOffset each frame so the grass always extends under whatever
+    // section of road the player is on.
+    grassGroup = new THREE.Group();
+    grassGroup.position.z = scrollOffset;
+    scene.add(grassGroup);
+
+    // Capture the geometry and material at module level so onDestroy can
+    // explicitly dispose them. The scene.traverse() in onDestroy already
+    // disposes every mesh, but retaining direct references guarantees the
+    // GPU resources are freed even if the grass group is ever detached
+    // from the scene graph during a future refactor.
+    grassMaterial = new THREE.MeshPhongMaterial({
+      color: GRASS_COLOR,
+      flatShading: true,
+    });
+    grassGeometry = new THREE.PlaneGeometry(GRASS_WIDTH, GRASS_LENGTH);
+    const grass = new THREE.Mesh(grassGeometry, grassMaterial);
+    grass.rotation.x = -Math.PI / 2;
+    grass.position.y = GRASS_Y;
+    grass.receiveShadow = true;
+    grassGroup.add(grass);
+  }
+
+  /* ===================================================================
      Road System
      =================================================================== */
   function createRoadSystem() {
@@ -325,7 +429,16 @@
     const rows = ROAD_SUBDIVISIONS + 1;
     const halfW = ROAD_VISUAL_WIDTH / 2;
 
-    let data = { segment, surface: null, lines: [], shoulders: [] };
+    // `spawned` records whether objects have already been generated for
+    // this segment during its lifetime. It stays false until spawnObjects
+    // produces objects in this segment, then is flipped to true so the
+    // segment never spawns again. This prevents an oncoming vehicle from
+    // leaving its parent segment (its desc.z is advanced toward the
+    // player every frame) and a fresh vehicle being spawned into the
+    // same segment which is now very close to — or already past — the
+    // player, causing an object to suddenly pop in front of or behind
+    // them.
+    let data = { segment, surface: null, lines: [], shoulders: [], spawned: false };
 
     // ---- Road surface ----
     const surfacePositions = [];
@@ -363,42 +476,79 @@
     roadGroup.add(surface);
     data.surface = surface;
 
-    // ---- Lane divider lines (2 dividers for 3 lanes) ----
+    // ---- Lane divider lines (2 dividers for 3 lanes, drawn as dashes) ----
+    // Each divider is split into short mesh strips separated by gaps, so the
+    // three lane boundaries read as intermittent dashed lines rather than a
+    // continuous band. Road width, lane count and surface geometry are
+    // unchanged.
     const lineMat = new THREE.MeshBasicMaterial({ color: LANE_LINE_COLOR });
     const lineHalfW = 0.075;
+    // Dash pattern based on subdivision indices: every DASH_PATTERN_SUBDIVS
+    // subdivisions we draw DASH_LENGTH_SUBDIVS rows of stripe then leave the
+    // rest as a gap.  ROAD_SUBDIVISIONS (6) is a multiple of 3, so each
+    // segment cleanly contains two full dashes and segments tile seamlessly.
+    const DASH_PATTERN_SUBDIVS = 3;
+    const DASH_LENGTH_SUBDIVS = 2;
 
     for (let li = 0; li < LANE_COUNT - 1; li++) {
       const lineCenterX = (li - (LANE_COUNT - 2) / 2) * LANE_WIDTH;
-      const linePositions = [];
-      const lineIndices = [];
+      let dashPositions = [];
+      let dashIndices = [];
+
+      const flushDash = () => {
+        // Skip building a mesh when the buffered strip has no triangles.
+        // This happens at the trailing edge of every segment because
+        // rows = ROAD_SUBDIVISIONS + 1 = 7 leaves the final dash row with
+        // no following row to pair into a quad within the same segment.
+        // Without this guard we'd allocate a degenerate 2-vertex / 0-index
+        // mesh for every lane of every segment.
+        if (dashIndices.length === 0) {
+          dashPositions = [];
+          dashIndices = [];
+          return;
+        }
+        const lineGeo = new THREE.BufferGeometry();
+        lineGeo.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute(dashPositions, 3),
+        );
+        lineGeo.setIndex(dashIndices);
+        lineGeo.computeVertexNormals();
+
+        const lineMesh = new THREE.Mesh(lineGeo, lineMat);
+        lineMesh.position.set(0, ROAD_Y, 0);
+        roadGroup.add(lineMesh);
+        data.lines.push(lineMesh);
+        dashPositions = [];
+        dashIndices = [];
+      };
 
       for (let i = 0; i < rows; i++) {
         const z = zStart - i * step;
         const offset = getRoadOffsetAt(roadSegments, z);
         const cx = offset.curveOffset;
         const cy = offset.heightOffset;
+        const inDash = (i % DASH_PATTERN_SUBDIVS) < DASH_LENGTH_SUBDIVS;
 
-        linePositions.push(cx + lineCenterX - lineHalfW, cy + 0.12, z);
-        linePositions.push(cx + lineCenterX + lineHalfW, cy + 0.12, z);
+        if (inDash) {
+          const v0 = dashPositions.length / 3;
+          dashPositions.push(cx + lineCenterX - lineHalfW, cy + 0.12, z);
+          dashPositions.push(cx + lineCenterX + lineHalfW, cy + 0.12, z);
+          // Only emit quad indices once we have a previous row to pair with.
+          if (v0 >= 2) {
+            const a = v0 - 2;
+            const b = v0 - 1;
+            const c = v0;
+            const d = v0 + 1;
+            dashIndices.push(a, c, b, b, c, d);
+          }
+        } else {
+          flushDash();
+        }
       }
 
-      for (let i = 0; i < ROAD_SUBDIVISIONS; i++) {
-        const a = i * 2;
-        const b = i * 2 + 1;
-        const c = (i + 1) * 2;
-        const d = (i + 1) * 2 + 1;
-        lineIndices.push(a, c, b, b, c, d);
-      }
-
-      const lineGeo = new THREE.BufferGeometry();
-      lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
-      lineGeo.setIndex(lineIndices);
-      lineGeo.computeVertexNormals();
-
-      const lineMesh = new THREE.Mesh(lineGeo, lineMat);
-      lineMesh.position.set(0, ROAD_Y, 0);
-      roadGroup.add(lineMesh);
-      data.lines.push(lineMesh);
+      // Flush any trailing dash that reaches the end of the segment.
+      flushDash();
     }
 
     // ---- Road shoulders ----
@@ -468,6 +618,12 @@
         s.position.z = scrollOffset;
       }
     }
+
+    // Scroll the grass plane with the world so trees continue to sit on
+    // grass regardless of how far the player has travelled.
+    if (grassGroup) {
+      grassGroup.position.z = scrollOffset;
+    }
   }
 
   /** Simple cone-shaped trees along the road. */
@@ -510,9 +666,14 @@
         tree.add(foliage);
       }
 
+      // Anchor the tree at GRASS_Y instead of the noise-driven road
+      // height so the trunk bottom sits on the grass plane (a stable,
+      // constant Y) rather than floating in road dips or sinking on
+      // hilltops. The X position still follows the road curve so trees
+      // track the direction of the road.
       tree.position.set(
         offset.curveOffset + side * distFromCenter,
-        ROAD_Y + offset.heightOffset,
+        GRASS_Y,
         roadZ
       );
       tree.userData.roadZ = roadZ;
@@ -581,9 +742,13 @@
         const offset = getRoadOffsetAt(roadSegments, child.userData.roadZ);
         const side = child.position.x > 0 ? 1 : -1;
         const dist = Math.abs(child.position.x - offset.curveOffset);
+        // Anchor trees to GRASS_Y so the trunk bottom rests on the grass
+        // plane at a constant Y, instead of inheriting the road's
+        // heightOffset (which would lift them off the ground in dips and
+        // push them into the terrain on hilltops).
         child.position.set(
           offset.curveOffset + side * Math.max(dist, ROAD_VISUAL_WIDTH / 2 + 2),
-          ROAD_Y + offset.heightOffset,
+          GRASS_Y,
           child.userData.roadZ + scrollOffset
         );
       }
@@ -901,14 +1066,31 @@
     if (!roadSegments.length) return;
 
     // Only spawn on segments that are approaching the player
-    for (const seg of roadSegments) {
+    for (let i = 0; i < roadSegments.length; i++) {
+      const seg = roadSegments[i];
+      // roadSegments and roadTileData are kept in sync (same length,
+      // shifted together during recycling), so we can look up the
+      // per-segment `spawned` flag by the same index.
+      const tileData = roadTileData[i];
       const roadZ = seg.zStart - seg.length / 2;
       const worldZ = roadZ + scrollOffset;
 
       // Only spawn if within visible range ahead
       if (worldZ < -120 || worldZ > -5) continue;
 
-      // Check if segment already has objects
+      // Each segment spawns objects at most once during its lifetime.
+      // Oncoming vehicles move in road-space toward the player every
+      // frame, so without this guard a spawned vehicle could leave the
+      // segment it was placed in (the `hasObjects` check below would
+      // then return false) and a fresh vehicle could spawn into the
+      // same segment which is now very close to — or already past —
+      // the player, causing an object to suddenly pop in front of or
+      // behind them.
+      if (tileData && tileData.spawned) continue;
+
+      // Check if segment already has objects (defence in depth — covers
+      // the brief window between `spawned` being set and the descriptors
+      // being pushed, and any future refactor that might skip the flag).
       const segStart = seg.zStart;
       const segEnd = seg.zStart - seg.length;
       const hasObjects = objectDescriptors.some(
@@ -921,6 +1103,7 @@
 
       const objects = generateObjectsForSegment(seg, 1);
       objectDescriptors.push(...objects);
+      if (tileData) tileData.spawned = true;
     }
   }
 
@@ -937,6 +1120,31 @@
           objectMeshMap.delete(obj);
         }
         objectDescriptors.splice(i, 1);
+      }
+    }
+  }
+
+  /**
+   * Advance every active oncoming vehicle in road-space toward the
+   * player (+Z direction). Obstacles and repair kits stay anchored to
+   * their road-space Z and are only moved visually by the world scroll,
+   * so this function only touches objects whose type is
+   * OBJECT_TYPES.ONCOMING_VEHICLE.
+   *
+   * Mutating obj.z (rather than a separate "vehicle-local Z" field)
+   * keeps the downstream world-Z calculation `obj.z + scrollOffset`
+   * unchanged, so visual repositioning, recycling and collision
+   * detection all keep working with their existing arithmetic — the
+   * oncoming vehicle simply closes the gap faster than a stationary
+   * prop would (at PLAYER_SPEED + ONCOMING_VEHICLE_SPEED instead of
+   * just PLAYER_SPEED).
+   */
+  function advanceOncomingVehicles(dt) {
+    const step = ONCOMING_VEHICLE_SPEED * dt;
+    for (let i = 0; i < objectDescriptors.length; i++) {
+      const obj = objectDescriptors[i];
+      if (obj && obj.type === OBJECT_TYPES.ONCOMING_VEHICLE) {
+        obj.z += step;
       }
     }
   }
@@ -972,6 +1180,12 @@
       spawnObjects();
       spawnCooldown = 0.25;
     }
+    // Oncoming vehicles actively drive toward the player in addition to
+    // the world scroll. Mutate obj.z here (rather than later in the
+    // updateObjectVisuals step) so the same value is consumed by
+    // recycleWorldObjects, updateObjectVisuals and handleCollisions —
+    // keeping a single source of truth for each object's road-space Z.
+    advanceOncomingVehicles(dt);
     recycleWorldObjects();
 
     // -- Update road --
@@ -1054,6 +1268,8 @@
     targetLane = 0;
     laneVisualX = 0;
     laneSwitchProgress = 1;
+    currentLaneSwitchTilt = 0;
+    currentCurveBank = 0;
     playerY = 0;
     isJumping = false;
     jumpVelocity = 0;
@@ -1264,19 +1480,55 @@
     const targetY = ROAD_Y + offset.heightOffset + playerY;
 
     // Fast convergence on the smooth noise road centreline.
-    // The Perlin noise is low-frequency (0.008 Hz, 2 octaves) so
-    // curveOffset changes gradually — no jitter from direct tracking.
+    // The Perlin noise is low-frequency (0.006 Hz, 2 octaves) and the
+    // lateral amplitude is amplified by MAX_CURVE_OFFSET = 5.0, so
+    // curveOffset changes gradually but produces visibly larger
+    // swings than before — no jitter from direct tracking.
     vehicle.position.x += (targetX - vehicle.position.x) * VEHICLE_SMOOTH_X;
     vehicle.position.y += (targetY - vehicle.position.y) * VEHICLE_SMOOTH_Y;
     vehicle.position.z = 0;
 
-    // Tilt during lane switch
+    // -- Z-axis tilt: lane-switch component ----------------------------
+    // While a lane switch is in progress, snap directly to the
+    // animation curve value (matches the original behaviour of
+    // assigning rotation.z to the computed tilt each frame).
+    // After the switch completes, the previous tilt decays
+    // exponentially toward 0 — this is exactly the original
+    // `rotation.z *= 0.9` behaviour, just expressed on a separate
+    // state variable so the curve-bank component below is not
+    // pulled along with the decay.
+    let targetLaneSwitchTilt = 0;
     if (laneSwitchProgress < 1) {
       const laneDelta = targetLane - currentLane;
-      vehicle.rotation.z = -laneDelta * 0.12 * (1 - Math.abs(laneSwitchProgress - 0.5) * 2);
+      targetLaneSwitchTilt = -laneDelta * 0.12 * (1 - Math.abs(laneSwitchProgress - 0.5) * 2);
+      currentLaneSwitchTilt = targetLaneSwitchTilt;
     } else {
-      vehicle.rotation.z *= 0.9;
+      // Decay rate 0.1 ⇒ 90% retained per frame, matches the
+      // original `*= 0.9` exponential decay toward 0.
+      currentLaneSwitchTilt += (0 - currentLaneSwitchTilt) * 0.1;
     }
+
+    // -- Z-axis tilt: curve-bank component -----------------------------
+    // Sample the curveOffset change a few units ahead of the player
+    // and lerp the smoothed bank tilt toward the target by
+    // VEHICLE_BANK_SMOOTH each frame. Unlike the previous
+    // implementation (`rotation.z += delta`), this lerp converges
+    // to the current target without accumulating across frames: in
+    // a sustained curve the bank eases toward `targetCurveBank` and
+    // stays there; when the road straightens, `targetCurveBank`
+    // approaches 0 and the smoothed bank eases back to flat. No
+    // accumulation, no runaway tilt.
+    const aheadRoadZ = playerRoadZ - VEHICLE_BANK_LOOK_AHEAD;
+    const aheadOffset = getRoadOffsetAt(roadSegments, aheadRoadZ);
+    const curveDelta = aheadOffset.curveOffset - offset.curveOffset;
+    const targetCurveBank = -curveDelta * VEHICLE_BANK_FACTOR;
+    currentCurveBank += (targetCurveBank - currentCurveBank) * VEHICLE_BANK_SMOOTH;
+
+    // -- Z-axis tilt: compose ------------------------------------------
+    // Set rotation.z fresh each frame as the sum of the two
+    // independently-tracked components. No `+=`, no cross-frame
+    // accumulation.
+    vehicle.rotation.z = currentLaneSwitchTilt + currentCurveBank;
 
     // Tilt during jump
     if (isJumping) {
@@ -1313,6 +1565,27 @@
       -10
     );
     camera.lookAt(lookTarget);
+
+    // Curve banking: tilt the camera around its forward axis based on
+    // the lateral curveOffset change a short distance ahead of the
+    // player. When the road ahead bends to the right (curveOffset
+    // increasing as Z goes more negative), curveDelta is positive and
+    // we rotate the camera so its top tilts to the right, giving the
+    // player a visual cue that they are entering / continuing a
+    // curve. On straight sections curveDelta is ≈ 0 so the camera
+    // stays level, making the contrast between straights and curves
+    // obvious. The CAMERA_BANK_FACTOR keeps the roll moderate — a
+    // large enough swing to be felt, small enough that it does not
+    // disorient the player.
+    const playerRoadZ = -scrollOffset;
+    const aheadRoadZ = playerRoadZ - CAMERA_BANK_LOOK_AHEAD;
+    const playerOffset = getRoadOffsetAt(roadSegments, playerRoadZ);
+    const aheadOffset = getRoadOffsetAt(roadSegments, aheadRoadZ);
+    const curveDelta = aheadOffset.curveOffset - playerOffset.curveOffset;
+    // Negative factor: rotateZ(bankAngle) with negative angle tilts
+    // the camera's up vector to the right (camera-local Z = back
+    // axis, so a negative rotation around it leans the top right).
+    camera.rotateZ(-curveDelta * CAMERA_BANK_FACTOR);
   }
 
   /* ===================================================================
@@ -1557,6 +1830,19 @@
       });
     }
 
+    // Explicitly dispose grass GPU resources. The scene.traverse() loop
+    // above already covers them, but releasing the cached references up
+    // front prevents accidental retention if grassGroup is later detached
+    // from the scene (and makes the cleanup contract explicit).
+    if (grassGeometry) {
+      try { grassGeometry.dispose(); } catch {}
+      grassGeometry = null;
+    }
+    if (grassMaterial) {
+      try { grassMaterial.dispose(); } catch {}
+      grassMaterial = null;
+    }
+
     if (renderer) {
       renderer.dispose();
       if (renderer.domElement && renderer.domElement.parentNode) {
@@ -1575,6 +1861,9 @@
     roadGroup = null;
     objectsGroup = null;
     sceneryGroup = null;
+    grassGroup = null;
+    grassGeometry = null;
+    grassMaterial = null;
     roadSegments = [];
     roadTileData = [];
     objectDescriptors = [];

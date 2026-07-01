@@ -75,9 +75,14 @@ export const REPAIR_HEAL = 1;
 
 /**
  * Noise frequency for lateral (curve) offset.
- * Low frequency = long wavelength, giving gentle bends.
+ * Low frequency = long wavelength, giving long, smooth bends that
+ * read clearly as either "straight" (the noise is near zero for an
+ * extended Z range) or "curve" (the noise ramps to a sustained ±
+ * MAX_CURVE_OFFSET for a longer run). Tuned in tandem with
+ * {@link MAX_CURVE_OFFSET} so the player can tell curves and
+ * straights apart at a glance.
  */
-export const CURVE_NOISE_FREQUENCY = 0.008;
+export const CURVE_NOISE_FREQUENCY = 0.006;
 
 /**
  * Noise frequency for vertical (height) offset.
@@ -105,9 +110,13 @@ export const SEGMENT_LENGTH = 20;
 
 /**
  * Maximum lateral offset amplitude for the road centre-line.
- * The noise output is scaled by this value.
+ * The noise output is scaled by this value. Increasing this constant
+ * amplifies the lateral swing of the road: the player, camera and
+ * roadside scenery all swing much further sideways in a curve than
+ * they do on a straight, so curves become visually obvious instead
+ * of feeling like a slightly-bent line.
  */
-export const MAX_CURVE_OFFSET = 2.5;
+export const MAX_CURVE_OFFSET = 5.0;
 
 /**
  * Maximum vertical offset amplitude for the road centre-line.
@@ -224,6 +233,18 @@ export const OBJECT_WEIGHTS = Object.freeze({
   [OBJECT_TYPES.ONCOMING_VEHICLE]: 0.35,
   [OBJECT_TYPES.REPAIR_KIT]: 0.25,
 });
+
+/**
+ * Approaching speed of an oncoming vehicle in world units per second,
+ * measured in the +Z direction (toward the player). Oncoming vehicles
+ * advance their own road-space Z by this amount every frame in addition
+ * to the global world scroll, so they close in on the player at the
+ * sum of this constant and the player's forward speed. This makes them
+ * visibly drive toward the player like real oncoming traffic rather
+ * than appearing as stationary props carried past the camera by the
+ * world scroll.
+ */
+export const ONCOMING_VEHICLE_SPEED = 14;
 
 /**
  * Create a road object descriptor.

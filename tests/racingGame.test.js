@@ -23,6 +23,7 @@ import {
   sampleHeightOffset,
   OBJECT_TYPES,
   OBJECT_WEIGHTS,
+  ONCOMING_VEHICLE_SPEED,
   createObject,
   randomObjectType,
   generateObjectsForSegment,
@@ -89,6 +90,39 @@ describe('constants', () => {
   it('OBJECT_WEIGHTS sum to ~1', () => {
     const sum = Object.values(OBJECT_WEIGHTS).reduce((a, b) => a + b, 0);
     expect(sum).toBeCloseTo(1.0);
+  });
+});
+
+/* ===================================================================
+   ONCOMING_VEHICLE_SPEED
+
+   The oncoming-vehicle approaching speed is exposed as a tunable
+   constant so the component can advance oncoming vehicles in
+   road-space each frame (see `advanceOncomingVehicles` inside
+   RacingGameScene.svelte). The tests below pin down its sign,
+   finiteness and an upper bound that guards against accidental
+   tweaks that would let vehicles zoom past the player before the
+   player can react.
+   =================================================================== */
+describe('ONCOMING_VEHICLE_SPEED constant', () => {
+  it('is exported and is a finite number', () => {
+    expect(typeof ONCOMING_VEHICLE_SPEED).toBe('number');
+    expect(Number.isFinite(ONCOMING_VEHICLE_SPEED)).toBe(true);
+  });
+
+  it('is positive (vehicles approach the player in +Z, do not recede)', () => {
+    // A negative value would push oncoming vehicles *away* from the
+    // player, which is the opposite of the requirement. A zero value
+    // would leave them stationary (the previous behaviour), so the
+    // sign strictly positive check is the core contract.
+    expect(ONCOMING_VEHICLE_SPEED).toBeGreaterThan(0);
+  });
+
+  it('has a sane magnitude (not absurdly large)', () => {
+    // Generous upper bound: any reasonable oncoming-vehicle speed is
+    // well below 100 units / second. This guards against accidental
+    // unit-mix-ups (e.g. ms vs s) or runaway tuning.
+    expect(ONCOMING_VEHICLE_SPEED).toBeLessThan(100);
   });
 });
 

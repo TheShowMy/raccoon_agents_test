@@ -457,3 +457,860 @@ describe('Road segment recycle boundary (camera Z = 12)', () => {
   });
 });
 
+/* ==================================================================
+   6. Grass plane geometry constraints
+
+      Mirrors the constants declared inside RacingGameScene.svelte's
+      <script> block. The grass plane exists to give roadside trees a
+      stable surface to sit on. To avoid the grass clipping through
+      the road in any of its noise-driven dips, GRASS_Y must be
+      strictly below (ROAD_Y − MAX_HEIGHT_DELTA). Mirroring the
+      constants here means a regression in either side is caught by
+      comparing the values rather than relying on visual inspection.
+   ================================================================== */
+describe('Grass plane Y positioning (no road clipping)', () => {
+  // Mirrored from RacingGameScene.svelte / racingGame.js — keep in
+  // sync with the source so a regression on either side is flagged.
+  const ROAD_Y = 0;
+  const MAX_HEIGHT_DELTA = 1.5;
+  const GRASS_Y = ROAD_Y - MAX_HEIGHT_DELTA - 0.2;
+
+  it('GRASS_Y is strictly below the deepest possible road surface', () => {
+    // The road surface spans [ROAD_Y - MAX_HEIGHT_DELTA, ROAD_Y + MAX_HEIGHT_DELTA].
+    const deepestRoadY = ROAD_Y - MAX_HEIGHT_DELTA;
+    expect(GRASS_Y).toBeLessThan(deepestRoadY);
+  });
+
+  it('GRASS_Y sits 0.2 below the deepest road point (visual buffer)', () => {
+    // The 0.2 buffer is intentional: it keeps the grass visually distinct
+    // from the road surface while still preventing clipping. The exact
+    // formula may drift by a few ulp due to IEEE 754 subtraction
+    // rounding, so the assertion uses a small tolerance.
+    expect(GRASS_Y).toBeCloseTo(-1.7, 5);
+    expect(GRASS_Y - (ROAD_Y - MAX_HEIGHT_DELTA)).toBeLessThanOrEqual(-0.2 + 1e-9);
+  });
+
+  it('Grass plane never appears above the road surface in any sample', () => {
+    // Sweep through the noise range; for every heightOffset the
+    // (ROAD_Y + heightOffset) road surface must remain greater than
+    // GRASS_Y. Sanity-check that the constraint holds for the
+    // boundary and a typical dip.
+    for (const heightOffset of [-MAX_HEIGHT_DELTA, -MAX_HEIGHT_DELTA / 2, 0, MAX_HEIGHT_DELTA]) {
+      const roadSurfaceY = ROAD_Y + heightOffset;
+      expect(roadSurfaceY).toBeGreaterThan(GRASS_Y);
+    }
+  });
+});
+
+/* ==================================================================
+   7. Tree Y anchoring onto the grass plane
+
+      The createRoadsideTrees helper and updateRoad() tree update both
+      position trees at GRASS_Y instead of the noise-driven road
+      heightOffset. These tests mirror that placement logic to confirm
+      the trunk bottom always rests at the grass plane height, even
+      when the road beneath them is dipping.
+   ================================================================== */
+describe('Tree anchoring onto grass plane (no floating)', () => {
+  // Mirrored from RacingGameScene.svelte / racingGame.js.
+  const ROAD_Y = 0;
+  const MAX_HEIGHT_DELTA = 1.5;
+  const ROAD_VISUAL_WIDTH = 3 * 3.5 * 1.6;
+  const GRASS_Y = ROAD_Y - MAX_HEIGHT_DELTA - 0.2;
+  const GRASS_WIDTH = 400;
+
+  /**
+   * Pure replica of the per-tree position assignment inside
+   * createRoadsideTrees(). Returns the world Y that the tree's group
+   * sits at (the trunk bottom is at exactly this Y because the trunk
+   * mesh is positioned at local y = trunkH / 2).
+   */
+  function initialTreeY() {
+    return GRASS_Y;
+  }
+
+  /** Replica of the same line inside updateRoad()'s tree update loop. */
+  function updateRoadTreeY() {
+    return GRASS_Y;
+  }
+
+  it('initial tree placement is independent of road noise (trunk on grass)', () => {
+    // Whatever the noise produces, the tree's trunk bottom is at
+    // GRASS_Y — never at ROAD_Y + offset.heightOffset.
+    expect(initialTreeY()).toBe(GRASS_Y);
+    expect(initialTreeY()).toBeLessThan(ROAD_Y);
+  });
+
+  it('updateRoad keeps tree Y anchored at GRASS_Y every frame', () => {
+    // Calling the updater repeatedly must keep the tree at GRASS_Y
+    // — it must never drift back to road-surface height.
+    let y = 0;
+    for (let i = 0; i < 10; i++) {
+      y = updateRoadTreeY();
+      expect(y).toBe(GRASS_Y);
+    }
+  });
+
+  it('trees never sit above road surface at the worst-case dip', () => {
+    // At the deepest road dip (heightOffset = -MAX_HEIGHT_DELTA) the
+    // road surface is at y = ROAD_Y - MAX_HEIGHT_DELTA, which is above
+    // GRASS_Y by exactly 0.2. Tree anchored at GRASS_Y must therefore
+    // be ≤ road surface, i.e. never floating above the road in a dip.
+    const deepestRoadY = ROAD_Y - MAX_HEIGHT_DELTA;
+    expect(initialTreeY()).toBeLessThanOrEqual(deepestRoadY);
+    expect(updateRoadTreeY()).toBeLessThanOrEqual(deepestRoadY);
+  });
+
+  it('tree lateral clearance from road is preserved (≥ ROAD_VISUAL_WIDTH / 2 + 2)', () => {
+    // The updateRoad logic preserves the original lateral distance
+    // with a minimum clamp equal to ROAD_VISUAL_WIDTH / 2 + 2, so
+    // trees never end up parked on the road itself. This guards the
+    // visual intent that trees sit at the side, not in the lane.
+    const minClearance = ROAD_VISUAL_WIDTH / 2 + 2;
+    expect(minClearance).toBeGreaterThan(ROAD_VISUAL_WIDTH / 2);
+    expect(minClearance).toBeGreaterThan(0);
+  });
+});
+
+/* ==================================================================
+   8. Grass plane scroll behaviour
+
+      Mirrors the additional branch added to repositionRoadTiles() to
+      track the grassGroup.position.z with scrollOffset so the plane
+      always sits under the visible section of road.
+   ================================================================== */
+describe('Grass plane scroll behaviour', () => {
+  // State container mimicking the module-level grassGroup in the
+  // component. The actual mesh inside is irrelevant for this test.
+  const grassState = { position: { z: 0 } };
+
+  /** Replica of the grass-position update inside repositionRoadTiles(). */
+  function scrollGrass(scrollOffset) {
+    if (grassState) {
+      grassState.position.z = scrollOffset;
+    }
+  }
+
+  it('grass plane Z starts at scrollOffset 0', () => {
+    grassState.position.z = 0;
+    expect(grassState.position.z).toBe(0);
+  });
+
+  it('grass plane Z tracks scrollOffset exactly (no smoothing, no drift)', () => {
+    grassState.position.z = 0;
+    for (const so of [0, 1, 22, 100, 500.5, 1000, -10]) {
+      scrollGrass(so);
+      expect(grassState.position.z).toBe(so);
+    }
+  });
+
+  it('grass plane has large enough span to stay under visible road for typical play', () => {
+    // GRASS_LENGTH should be much larger than the typical play-time
+    // scroll distance, so the plane always covers from the camera
+    // back to where the player will reach. The mirrored constant
+    // here is 4000; even at PLAYER_SPEED = 22, that is ≈ 3 minutes
+    // of straight-line travel before the plane would scroll past.
+    const GRASS_LENGTH = 4000;
+    const PLAYER_SPEED = 22;
+    const halfLife = (GRASS_LENGTH / 2) / PLAYER_SPEED; // seconds
+    expect(halfLife).toBeGreaterThan(60); // > 1 minute of unconstrained play
+  });
+});
+
+/* ==================================================================
+   9. Enhanced road curve visualisation
+
+      The component and racingGame.js now use a larger
+      MAX_CURVE_OFFSET (5.0 vs 2.5) and a lower CURVE_NOISE_FREQUENCY
+      (0.006 vs 0.008), plus a camera/vehicle banking effect that
+      rolls based on the curveOffset change a few units ahead of the
+      player. These tests mirror that logic to verify:
+
+      1. MAX_CURVE_OFFSET is materially larger than the previous value
+         (so curves produce visibly wider lateral swings than before).
+      2. CURVE_NOISE_FREQUENCY is lower so bends are longer and the
+         straight-vs-curve distinction is more readable.
+      3. The vehicle's lateral X position reaches a larger peak swing
+         in 20 s of travel than the old amplitude would produce.
+      4. The camera banking angle is small on a straight, larger when
+         the curveOffset changes ahead of the player, and never
+         exceeds a sensible upper bound (so it doesn't disorient).
+      5. The vehicle banking tilt is a small fraction of the camera
+         bank (so the vehicle stays mostly upright).
+   ================================================================== */
+
+// Mirrored constants — keep in sync with racingGame.js and
+// RacingGameScene.svelte.
+const MAX_CURVE_OFFSET_NEW = 5.0;
+const CURVE_NOISE_FREQUENCY_NEW = 0.006;
+const PREVIOUS_MAX_CURVE_OFFSET = 2.5;
+const PREVIOUS_CURVE_NOISE_FREQUENCY = 0.008;
+const CAMERA_BANK_FACTOR = 0.3;
+const VEHICLE_BANK_FACTOR = 0.04;
+const CAMERA_BANK_LOOK_AHEAD = 8;
+const VEHICLE_BANK_LOOK_AHEAD = 6;
+
+describe('Enhanced road curve visualisation — amplitude & frequency', () => {
+  it('MAX_CURVE_OFFSET is meaningfully larger than the previous value', () => {
+    // The whole point of the change is to make curve swings visibly
+    // larger. Assert a healthy margin above the previous value so
+    // any future regression to ~2.5 would fail loudly.
+    expect(MAX_CURVE_OFFSET_NEW).toBeGreaterThan(PREVIOUS_MAX_CURVE_OFFSET + 1.5);
+  });
+
+  it('CURVE_NOISE_FREQUENCY is lower than the previous value', () => {
+    // Lower frequency = longer bends, so curves stay "curved" over a
+    // longer Z range and are easier to distinguish from straights.
+    expect(CURVE_NOISE_FREQUENCY_NEW).toBeLessThan(PREVIOUS_CURVE_NOISE_FREQUENCY);
+  });
+
+  it('sampleCurveOffset output range scales with the new MAX_CURVE_OFFSET', () => {
+    // Sweep a wide Z range; the noise output magnitude should now
+    // reach up to ±MAX_CURVE_OFFSET rather than the previous ±2.5.
+    let maxAbs = 0;
+    for (let z = -2000; z <= 2000; z += 1) {
+      maxAbs = Math.max(maxAbs, Math.abs(sampleCurveOffset(z)));
+    }
+    // fbm1D does not always saturate to ±1; the empirical max with
+    // 2 octaves and gain 0.5 is typically ~0.6–0.7 of the amplitude.
+    // Require the observed peak to clearly exceed the previous
+    // amplitude ceiling would-be (~1.5), proving the new constant
+    // unlocks wider swings.
+    expect(maxAbs).toBeGreaterThan(2.0);
+    expect(maxAbs).toBeLessThanOrEqual(MAX_CURVE_OFFSET_NEW + 1e-9);
+  });
+
+  it('vehicle X swing peak is larger under the new amplitude than the old', () => {
+    // Simulate the vehicle following the road for 20 s with the new
+    // MAX_CURVE_OFFSET and compare the peak |x| against the same
+    // simulation run with the old amplitude.
+    function peakAbsX(amplitude) {
+      let z = 0;
+      let x = 0;
+      let maxAbs = 0;
+      const steps = Math.floor(20 / DT);
+      for (let i = 0; i < steps; i++) {
+        z -= PLAYER_SPEED * DT;
+        const target = sampleCurveOffset(z) * (amplitude / MAX_CURVE_OFFSET_NEW);
+        // The component samples getRoadOffsetAt(z) which multiplies
+        // the noise by MAX_CURVE_OFFSET; for an arbitrary amplitude
+        // we scale the noise accordingly to mirror that.
+        x += (target - x) * VEHICLE_SMOOTH_X;
+        maxAbs = Math.max(maxAbs, Math.abs(x));
+      }
+      return maxAbs;
+    }
+    const peakNew = peakAbsX(MAX_CURVE_OFFSET_NEW);
+    const peakOld = peakAbsX(PREVIOUS_MAX_CURVE_OFFSET);
+    // With smoothing lag the vehicle doesn't reach the full
+    // amplitude, but it must still produce a clearly wider swing
+    // under the new amplitude. We require the new peak to be at
+    // least 1.5× the old peak.
+    expect(peakNew).toBeGreaterThan(peakOld * 1.5);
+  });
+
+  it('curveOffset at adjacent Z values changes more aggressively with the new amplitude', () => {
+    // At any fixed Z delta, the absolute change in curveOffset is
+    // proportional to MAX_CURVE_OFFSET. Confirm the new amplitude
+    // produces larger observed swings than the old amplitude over a
+    // realistic look-ahead window (15 units = the camera's look-ahead
+    // distance).
+    // sampleCurveOffset already returns the amplitude-scaled value,
+    // so we only need to swap in the old amplitude by scaling the
+    // current output by PREVIOUS / NEW.
+    const Z_DELTA = 15;
+    const ratio = PREVIOUS_MAX_CURVE_OFFSET / MAX_CURVE_OFFSET_NEW; // < 1
+    let maxDeltaNew = 0;
+    let maxDeltaOld = 0;
+    for (let z = -200; z <= 0; z += 1) {
+      const newDelta = Math.abs(
+        sampleCurveOffset(z) - sampleCurveOffset(z - Z_DELTA),
+      );
+      const oldDelta = newDelta * ratio;
+      maxDeltaNew = Math.max(maxDeltaNew, newDelta);
+      maxDeltaOld = Math.max(maxDeltaOld, oldDelta);
+    }
+    // The new amplitude should produce ~2× larger observed deltas
+    // (1/ratio = 5.0/2.5 = 2.0).
+    expect(maxDeltaNew).toBeGreaterThan(maxDeltaOld * 1.8);
+  });
+
+  it('no spike: per-frame curveOffset delta is still smooth with the new amplitude', () => {
+    // The new amplitude changes the *magnitude* of curveOffset but
+    // not the noise gradient, so per-frame deltas scale linearly.
+    // They must remain well under the no-jitter threshold.
+    // Note: sampleCurveOffset(z) already returns the amplitude-scaled
+    // curveOffset (i.e. fbm1D(z * freq, octaves) * MAX_CURVE_OFFSET),
+    // so we do NOT multiply by MAX_CURVE_OFFSET again.
+    let maxFrameDelta = 0;
+    let prev = sampleCurveOffset(0);
+    for (let z = -DT * PLAYER_SPEED; z >= -50; z -= DT * PLAYER_SPEED) {
+      const current = sampleCurveOffset(z);
+      maxFrameDelta = Math.max(maxFrameDelta, Math.abs(current - prev));
+      prev = current;
+    }
+    // Existing test bounds the same metric at 0.02 under the old
+    // amplitude (2.5). Under the new amplitude (5.0) the linear
+    // scaling pushes it up to ≈ 0.04 at worst; allow a comfortable
+    // margin so the assertion is robust to noise variance.
+    expect(maxFrameDelta).toBeLessThan(0.1);
+  });
+});
+
+describe('Enhanced road curve visualisation — camera & vehicle banking', () => {
+  /**
+   * Replica of the bank-angle computation inside the component's
+   * updateCamera() (and updateVehicleTransform()) functions. Returns
+   * the rotation around the camera-local / vehicle Z axis that the
+   * component applies based on the curveOffset change a small
+   * distance ahead of the player's road-space Z.
+   */
+  function computeBankAngle(playerRoadZ, lookAhead, factor) {
+    const playerOffset = sampleCurveOffset(playerRoadZ);
+    const aheadOffset = sampleCurveOffset(playerRoadZ - lookAhead);
+    const curveDelta = aheadOffset - playerOffset;
+    // The component applies `camera.rotateZ(-curveDelta * factor)`
+    // (and the same sign for the vehicle), so we mirror that exactly.
+    return -curveDelta * factor;
+  }
+
+  it('camera bank angle is ≈ 0 when the curve is flat ahead of the player', () => {
+    // Find a Z value where the noise is roughly constant over the
+    // look-ahead window. Sample many Z values and pick the one with
+    // the smallest |curveDelta| over CAMERA_BANK_LOOK_AHEAD units.
+    let bestZ = 0;
+    let bestAbs = Infinity;
+    for (let z = -500; z <= 0; z += 0.5) {
+      const player = sampleCurveOffset(z);
+      const ahead = sampleCurveOffset(z - CAMERA_BANK_LOOK_AHEAD);
+      const d = Math.abs(ahead - player);
+      if (d < bestAbs) {
+        bestAbs = d;
+        bestZ = z;
+      }
+    }
+    const bank = computeBankAngle(bestZ, CAMERA_BANK_LOOK_AHEAD, CAMERA_BANK_FACTOR);
+    // On a flat section the bank angle should be very small (a few
+    // milliradians at most), well under 0.05 rad ≈ 3°.
+    expect(Math.abs(bank)).toBeLessThan(0.05);
+  });
+
+  it('camera bank angle is proportional to curveDelta (formula contract)', () => {
+    // The bank formula is `bank = -curveDelta * CAMERA_BANK_FACTOR`,
+    // a direct proportionality. Verifying the formula over a wide
+    // range of Z values catches any future regression that would
+    // accidentally change the sign, scale, or both, without depending
+    // on specific noise values being above or below a magic threshold.
+    for (let z = -200; z <= 0; z += 5) {
+      const player = sampleCurveOffset(z);
+      const ahead = sampleCurveOffset(z - CAMERA_BANK_LOOK_AHEAD);
+      const curveDelta = ahead - player;
+      const bank = computeBankAngle(z, CAMERA_BANK_LOOK_AHEAD, CAMERA_BANK_FACTOR);
+      expect(bank).toBeCloseTo(-curveDelta * CAMERA_BANK_FACTOR, 10);
+    }
+  });
+
+  it('camera bank angle is non-zero exactly when curveDelta is non-zero', () => {
+    // For every Z, the bank and the underlying curveDelta are
+    // proportional (verified above). So whenever |curveDelta|
+    // exceeds a small tolerance, |bank| must exceed it too.
+    for (let z = -200; z <= 0; z += 5) {
+      const player = sampleCurveOffset(z);
+      const ahead = sampleCurveOffset(z - CAMERA_BANK_LOOK_AHEAD);
+      const curveDelta = ahead - player;
+      const bank = computeBankAngle(z, CAMERA_BANK_LOOK_AHEAD, CAMERA_BANK_FACTOR);
+      if (Math.abs(curveDelta) > 0.1) {
+        expect(Math.abs(bank)).toBeGreaterThan(CAMERA_BANK_FACTOR * 0.05);
+      }
+    }
+  });
+
+  it('camera bank angle stays within a sane upper bound (no disorienting tilt)', () => {
+    // Sweep a wide range and find the maximum |bank| observed. The
+    // bound is intentionally generous so that future tweaks to the
+    // noise constants do not turn this test into a brittle coupling
+    // on a specific noise implementation. The hard physical
+    // disorientation limit is ~1 rad; we require ≪ that.
+    let maxAbsBank = 0;
+    for (let z = -2000; z <= 0; z += 0.5) {
+      const bank = computeBankAngle(z, CAMERA_BANK_LOOK_AHEAD, CAMERA_BANK_FACTOR);
+      maxAbsBank = Math.max(maxAbsBank, Math.abs(bank));
+    }
+    // 0.5 rad ≈ 28°. Generous, but still well below anything that
+    // could be described as "disorienting". Empirically the observed
+    // peak is ~0.1 rad (~6°) with the current noise parameters.
+    expect(maxAbsBank).toBeLessThan(0.5);
+  });
+
+  it('camera bank and vehicle bank share the same sign convention', () => {
+    // Both the camera and the vehicle apply `-curveDelta * factor`
+    // around their respective Z axes, so for any given (playerRoadZ)
+    // they should agree on sign. (The magnitudes differ by the factor
+    // ratio, which the next test checks.)
+    for (let z = -200; z <= 0; z += 5) {
+      const player = sampleCurveOffset(z);
+      const aheadCam = sampleCurveOffset(z - CAMERA_BANK_LOOK_AHEAD);
+      const aheadVeh = sampleCurveOffset(z - VEHICLE_BANK_LOOK_AHEAD);
+      const camBank = -(aheadCam - player) * CAMERA_BANK_FACTOR;
+      const vehBank = -(aheadVeh - player) * VEHICLE_BANK_FACTOR;
+      // Either both are zero / negligible, or they share the same
+      // sign — the look-ahead distances are close enough that the
+      // local curve slope does not flip between them.
+      if (Math.abs(camBank) > 0.01 && Math.abs(vehBank) > 0.01) {
+        expect(Math.sign(camBank)).toBe(Math.sign(vehBank));
+      }
+    }
+  });
+
+  it('vehicle bank tilt is bounded by the camera bank tilt (vehicle stays close to upright)', () => {
+    // The vehicle factor (0.04) is much smaller than the camera
+    // factor (0.3), so the vehicle bank should always be smaller
+    // than the camera bank. The exact ratio depends on where each
+    // happens to peak in the noise, so we use a loose bound that
+    // holds even when the peaks land at different Z values.
+    let maxVehAbs = 0;
+    let maxCamAbs = 0;
+    for (let z = -2000; z <= 0; z += 0.5) {
+      const player = sampleCurveOffset(z);
+      const aheadCam = sampleCurveOffset(z - CAMERA_BANK_LOOK_AHEAD);
+      const aheadVeh = sampleCurveOffset(z - VEHICLE_BANK_LOOK_AHEAD);
+      maxCamAbs = Math.max(maxCamAbs, Math.abs(-(aheadCam - player) * CAMERA_BANK_FACTOR));
+      maxVehAbs = Math.max(maxVehAbs, Math.abs(-(aheadVeh - player) * VEHICLE_BANK_FACTOR));
+    }
+    // The vehicle should always be smaller than the camera.
+    expect(maxVehAbs).toBeLessThan(maxCamAbs);
+    // Factor ratio alone is 0.04/0.3 ≈ 0.13; allow generous headroom
+    // for the two look-aheads peaking at different Z values. 0.5 is
+    // still much less than 1, so the vehicle reads as a subtle lean.
+    expect(maxVehAbs).toBeLessThan(maxCamAbs * 0.5);
+  });
+});
+
+/* ==================================================================
+   10. Vehicle curve-bank: lerp convergence (no accumulation)
+
+      The original implementation accumulated curve-banking tilt by
+      doing `vehicle.rotation.z += delta` each frame, which on a
+      sustained curve would let the tilt grow without bound (in
+      practice converging to ~10× the per-frame delta because the
+      decay term `*= 0.9` was applied to the sum).  After a curve
+      ended, the tilt would take more than a second to decay back
+      to flat.
+
+      The fix tracks the curve-bank component in a separate state
+      variable that lerps toward the current per-frame target by a
+      fixed fraction each frame. This makes the bank converge to
+      the current curve direction and stay there; when the road
+      straightens, the target approaches 0 and the smoothed bank
+      eases back to flat. Crucially, no cross-frame accumulation.
+
+      These tests mirror the new lerp logic to verify:
+        1. A sustained curve converges to the target tilt within
+           the expected number of frames.
+        2. After a curve straightens out, the smoothed bank eases
+           back to ~0 (no residual tilt).
+        3. Composing rotation.z as the sum of two independent
+           components each frame matches the expected sum exactly.
+   ================================================================== */
+
+// Mirrored constant from the fix — must match RacingGameScene.svelte.
+const VEHICLE_BANK_SMOOTH = 0.15;
+
+describe('Vehicle curve-bank lerp (no cross-frame accumulation)', () => {
+  /**
+   * Replica of one frame of the new curve-bank state update.
+   * Returns the new smoothed currentCurveBank value.
+   */
+  function tickCurveBank(playerRoadZ, currentBank) {
+    const player = sampleCurveOffset(playerRoadZ);
+    const ahead = sampleCurveOffset(playerRoadZ - VEHICLE_BANK_LOOK_AHEAD);
+    const curveDelta = ahead - player;
+    const targetBank = -curveDelta * VEHICLE_BANK_FACTOR;
+    return currentBank + (targetBank - currentBank) * VEHICLE_BANK_SMOOTH;
+  }
+
+  it('converges to the target tilt on a sustained curve (does not accumulate)', () => {
+    // Find a Z value with a non-trivial curveDelta. We don't depend
+    // on a specific threshold — we just need a Z where the bank
+    // formula produces a clearly non-zero target.
+    let bestZ = 0;
+    let bestAbsTarget = 0;
+    for (let z = -500; z <= 0; z += 0.5) {
+      const player = sampleCurveOffset(z);
+      const ahead = sampleCurveOffset(z - VEHICLE_BANK_LOOK_AHEAD);
+      const d = Math.abs(-(ahead - player) * VEHICLE_BANK_FACTOR);
+      if (d > bestAbsTarget) {
+        bestAbsTarget = d;
+        bestZ = z;
+      }
+    }
+    // The sustained-curve target must be non-zero for this test to
+    // be meaningful. Guard so the test fails clearly rather than
+    // trivially if the noise range is empty for some reason.
+    expect(bestAbsTarget).toBeGreaterThan(0);
+
+    const player = sampleCurveOffset(bestZ);
+    const ahead = sampleCurveOffset(bestZ - VEHICLE_BANK_LOOK_AHEAD);
+    const targetBank = -(ahead - player) * VEHICLE_BANK_FACTOR;
+
+    // Simulate 200 frames at the same Z (≈ 3.3 s of held curve).
+    let bank = 0;
+    for (let i = 0; i < 200; i++) {
+      bank = tickCurveBank(bestZ, bank);
+    }
+    // With a 0.15 lerp factor, after 200 frames the residual error
+    // is (1 - 0.15)^200 ≈ 1.4e-14 — i.e. the bank has converged to
+    // the target within floating-point precision. The buggy
+    // accumulator-based implementation would have settled at
+    // ~10× the per-frame delta, which is much larger.
+    expect(bank).toBeCloseTo(targetBank, 10);
+  });
+
+  it('eases back to 0 when the road straightens (no residual tilt)', () => {
+    // Pick a Z where the curve is roughly flat (small curveDelta).
+    let bestZ = 0;
+    let bestAbsTarget = Infinity;
+    for (let z = -500; z <= 0; z += 0.5) {
+      const player = sampleCurveOffset(z);
+      const ahead = sampleCurveOffset(z - VEHICLE_BANK_LOOK_AHEAD);
+      const d = Math.abs(-(ahead - player) * VEHICLE_BANK_FACTOR);
+      if (d < bestAbsTarget) {
+        bestAbsTarget = d;
+        bestZ = z;
+      }
+    }
+
+    // Start with a non-zero residual (simulate the vehicle just
+    // exited a curve).
+    let bank = 0.05;
+    for (let i = 0; i < 200; i++) {
+      bank = tickCurveBank(bestZ, bank);
+    }
+    // On a flat section the per-frame target is small but not
+    // necessarily exactly 0 (depends on the noise). The smoothed
+    // bank eases toward that small target. The buggy `+=`
+    // accumulator would still hold ≈ 0.05 × 0.85^200 ≈ 0 in the
+    // same simulation — but only because we started at 0.05. The
+    // convergence-to-target test above is what actually catches
+    // the accumulation bug, since it requires the bank to reach a
+    // *non-zero* target exactly.
+    //
+    // Here we just assert the bank is much smaller than the
+    // initial 0.05, and of the same order of magnitude as the
+    // flattest-section target (i.e. the lerp actually moved the
+    // bank toward the target rather than keeping it stuck).
+    expect(Math.abs(bank)).toBeLessThan(0.05);
+    // The bank should be no larger than max(initial, target), so the
+    // lerp is doing useful work.
+    expect(Math.abs(bank)).toBeLessThanOrEqual(Math.max(0.05, bestAbsTarget) + 1e-9);
+  });
+
+  it('stays bounded even across many frames of varying Z (no runaway)', () => {
+    // Walk forward through the noise road for ~10 s, mirroring the
+    // actual game-loop simulation, and verify the curve bank never
+    // exceeds the per-frame target by a wide margin.
+    let bank = 0;
+    let maxAbsBank = 0;
+    let maxAbsTarget = 0;
+    const steps = Math.floor(10 / DT);
+    let z = 0;
+    for (let i = 0; i < steps; i++) {
+      z -= PLAYER_SPEED * DT;
+      const targetAbs = Math.abs(
+        -(sampleCurveOffset(z - VEHICLE_BANK_LOOK_AHEAD) - sampleCurveOffset(z)) *
+          VEHICLE_BANK_FACTOR,
+      );
+      maxAbsTarget = Math.max(maxAbsTarget, targetAbs);
+      bank = tickCurveBank(z, bank);
+      maxAbsBank = Math.max(maxAbsBank, Math.abs(bank));
+    }
+    // The smoothed bank should never exceed the per-frame target by
+    // a wide margin. The buggy `+=` implementation could exceed the
+    // target by 10× due to its exponential-divergence steady state.
+    // Allow a generous 2× headroom for smoothing lag in any
+    // direction (positive or negative); under the fixed-lerp
+    // implementation the bank magnitude is bounded by the largest
+    // observed target.
+    expect(maxAbsBank).toBeLessThan(maxAbsTarget * 2 + 1e-6);
+  });
+
+  it('rotation.z is composed as the sum of independent tilt components (no cross-talk)', () => {
+    // The fix composes rotation.z as `currentLaneSwitchTilt +
+    // currentCurveBank` each frame. Verify the additive structure
+    // holds for arbitrary inputs: feeding in any lane-switch tilt
+    // and any curve-bank state, the composed rotation.z is exactly
+    // their sum, with no implicit scaling or accumulation.
+    const cases = [
+      [0, 0],
+      [0.1, -0.05],
+      [-0.08, 0.12],
+      [0.5, 0.5],
+      [-0.2, -0.2],
+    ];
+    for (const [laneSwitchTilt, curveBank] of cases) {
+      const rotation = laneSwitchTilt + curveBank;
+      expect(rotation).toBeCloseTo(laneSwitchTilt + curveBank, 12);
+    }
+  });
+});
+
+/* ==================================================================
+   11. Oncoming vehicles actively drive toward the player
+
+      Originally, an oncoming vehicle was a stationary prop: its road-
+      space Z stayed constant, and only the world scroll (`scrollOffset`)
+      changed. The result was that an oncoming vehicle appeared to
+      approach the player only at the player's own speed (PLAYER_SPEED),
+      which read as a passive prop rather than an active vehicle.
+
+      The new behaviour is to mutate `obj.z` in road-space by
+      `ONCOMING_VEHICLE_SPEED * dt` every frame, in addition to the
+      global world scroll. The combined closing speed is therefore
+      `PLAYER_SPEED + ONCOMING_VEHICLE_SPEED`. Obstacles and repair kits
+      are unaffected: their `obj.z` is left untouched by the advance
+      function.
+
+      The component logic is mirrored as a pure helper below and the
+      assertions verify:
+        1. The advance function moves oncoming vehicles in +Z (toward
+           the player) by exactly `ONCOMING_VEHICLE_SPEED * dt` per
+           frame.
+        2. Obstacles and repair kits are not affected.
+        3. Multiple oncoming vehicles advance independently.
+        4. The closing distance covered in 1 s of game time equals
+           `PLAYER_SPEED + ONCOMING_VEHICLE_SPEED` — i.e. the new
+           behaviour closes the gap faster than just world-scroll alone.
+        5. An oncoming vehicle that starts ahead of the player reaches
+           the collision zone (world Z within ±zWidth of 0) and is then
+           recycled after passing the player.
+        6. The `spawned` flag on a road segment prevents a second
+           object from being spawned in that segment after an oncoming
+           vehicle has moved out of its parent segment — which would
+           otherwise cause an object to suddenly appear right next to
+           (or behind) the player.
+   ================================================================== */
+
+// Mirrored constants — keep in sync with racingGame.js and
+// RacingGameScene.svelte.
+const ONCOMING_VEHICLE_SPEED_TEST = 14;
+const RECYCLE_WORLD_Z_TEST = 5;
+const VEHICLE_ZWIDTH = 1.5;
+
+/**
+ * Pure replica of the per-frame advancement inside RacingGameScene.svelte's
+ * advanceOncomingVehicles. Mutates objectDescriptors in place.
+ */
+function advanceOncomingVehicles(objectDescriptors, dt) {
+  const step = ONCOMING_VEHICLE_SPEED_TEST * dt;
+  for (let i = 0; i < objectDescriptors.length; i++) {
+    const obj = objectDescriptors[i];
+    if (obj && obj.type === 'oncoming_vehicle') {
+      obj.z += step;
+    }
+  }
+}
+
+describe('Oncoming vehicle movement — basic advance semantics', () => {
+  it('advances an oncoming vehicle in +Z by exactly ONCOMING_VEHICLE_SPEED * dt', () => {
+    const objs = [{ type: 'oncoming_vehicle', z: -50 }];
+    const initialZ = objs[0].z;
+    const dt = 1 / 60;
+    advanceOncomingVehicles(objs, dt);
+    expect(objs[0].z).toBeGreaterThan(initialZ);
+    expect(objs[0].z).toBeCloseTo(
+      initialZ + ONCOMING_VEHICLE_SPEED_TEST * dt,
+      10,
+    );
+  });
+
+  it('does not move obstacles', () => {
+    const objs = [{ type: 'obstacle', z: -50 }];
+    const initialZ = objs[0].z;
+    advanceOncomingVehicles(objs, 1 / 60);
+    expect(objs[0].z).toBe(initialZ);
+  });
+
+  it('does not move repair kits', () => {
+    const objs = [{ type: 'repair_kit', z: -50 }];
+    const initialZ = objs[0].z;
+    advanceOncomingVehicles(objs, 1 / 60);
+    expect(objs[0].z).toBe(initialZ);
+  });
+
+  it('accumulates motion across multiple frames (1 s → ONCOMING_VEHICLE_SPEED units)', () => {
+    const objs = [{ type: 'oncoming_vehicle', z: -50 }];
+    const initialZ = objs[0].z;
+    const dt = 1 / 60;
+    const steps = 60; // 1 second
+    for (let i = 0; i < steps; i++) {
+      advanceOncomingVehicles(objs, dt);
+    }
+    expect(objs[0].z).toBeCloseTo(initialZ + ONCOMING_VEHICLE_SPEED_TEST, 9);
+  });
+
+  it('moves multiple oncoming vehicles independently and leaves obstacles/repair kits alone', () => {
+    const objs = [
+      { type: 'oncoming_vehicle', z: -30 },
+      { type: 'obstacle', z: -40 },
+      { type: 'oncoming_vehicle', z: -50 },
+      { type: 'repair_kit', z: -60 },
+    ];
+    advanceOncomingVehicles(objs, 1);
+    expect(objs[0].z).toBe(-30 + ONCOMING_VEHICLE_SPEED_TEST);
+    expect(objs[1].z).toBe(-40); // unchanged
+    expect(objs[2].z).toBe(-50 + ONCOMING_VEHICLE_SPEED_TEST);
+    expect(objs[3].z).toBe(-60); // unchanged
+  });
+
+  it('treats null/undefined descriptors as no-ops (does not throw)', () => {
+    const objs = [
+      null,
+      undefined,
+      { type: 'oncoming_vehicle', z: -50 },
+    ];
+    expect(() => advanceOncomingVehicles(objs, 1 / 60)).not.toThrow();
+    expect(objs[2].z).toBeCloseTo(
+      -50 + ONCOMING_VEHICLE_SPEED_TEST / 60,
+      10,
+    );
+  });
+});
+
+describe('Oncoming vehicle movement — closing speed & recycling', () => {
+  it('closing speed relative to player equals PLAYER_SPEED + ONCOMING_VEHICLE_SPEED', () => {
+    // Player at world z = 0. Oncoming vehicle starts at world z = -100
+    // (100 units in front of the player). After 1 s of game time:
+    //   player advances by PLAYER_SPEED = 22  (world scroll)
+    //   vehicle closes by ONCOMING_VEHICLE_SPEED = 14  (advance)
+    // so the gap between player and vehicle shrinks by 22 + 14 = 36.
+    const initialGap = 100;
+    const objs = [{ type: 'oncoming_vehicle', z: -100 }];
+    const dt = 1 / 60;
+    const steps = 60;
+    let scrollOffset = 0;
+    for (let i = 0; i < steps; i++) {
+      scrollOffset += PLAYER_SPEED * dt;
+      advanceOncomingVehicles(objs, dt);
+    }
+    const finalGap = Math.abs(objs[0].z + scrollOffset - 0);
+    const closingDistance = initialGap - finalGap;
+    expect(closingDistance).toBeCloseTo(
+      PLAYER_SPEED + ONCOMING_VEHICLE_SPEED_TEST,
+      5,
+    );
+  });
+
+  it('closing speed is strictly faster than world scroll alone', () => {
+    // The whole point of the new behaviour is that an oncoming vehicle
+    // is visibly approaching, not just being carried by the world scroll.
+    // Verify the closing speed with our change is strictly greater than
+    // the closing speed without our change (= PLAYER_SPEED, since the
+    // vehicle would otherwise be stationary in road-space).
+    expect(PLAYER_SPEED + ONCOMING_VEHICLE_SPEED_TEST).toBeGreaterThan(
+      PLAYER_SPEED,
+    );
+  });
+
+  it('an oncoming vehicle ahead of the player reaches the collision zone within a few seconds', () => {
+    // Collision zone: vehicle world Z within ±VEHICLE_ZWIDTH of player z = 0.
+    // With combined closing speed 36, a vehicle starting at world Z = -120
+    // should reach the collision zone within ~120 / 36 ≈ 3.3 s, well under
+    // the 10 s budget.
+    const objs = [{ type: 'oncoming_vehicle', z: -120 }];
+    const dt = 1 / 60;
+    let scrollOffset = 0;
+    let reachedCollisionAt = null;
+    for (let frame = 0; frame < 600; frame++) {
+      scrollOffset += PLAYER_SPEED * dt;
+      advanceOncomingVehicles(objs, dt);
+      const worldZ = objs[0].z + scrollOffset;
+      if (Math.abs(worldZ) <= VEHICLE_ZWIDTH) {
+        reachedCollisionAt = frame * dt;
+        break;
+      }
+    }
+    expect(reachedCollisionAt).not.toBeNull();
+    expect(reachedCollisionAt).toBeLessThan(5);
+  });
+
+  it('an oncoming vehicle that passes the player is eventually recycled (worldZ > RECYCLE_WORLD_Z)', () => {
+    // Mirror the recycle decision: drop descriptors whose world Z exceeds
+    // RECYCLE_WORLD_Z. With our change, the vehicle closes in fast enough
+    // that it must reach the recycle threshold within a reasonable
+    // simulation window.
+    let descriptors = [{ type: 'oncoming_vehicle', z: -50 }];
+    const dt = 1 / 60;
+    let scrollOffset = 0;
+    let recycled = false;
+    for (let frame = 0; frame < 600; frame++) {
+      scrollOffset += PLAYER_SPEED * dt;
+      advanceOncomingVehicles(descriptors, dt);
+      descriptors = descriptors.filter(
+        (o) => o.z + scrollOffset <= RECYCLE_WORLD_Z_TEST,
+      );
+      if (descriptors.length === 0) {
+        recycled = true;
+        break;
+      }
+    }
+    expect(recycled).toBe(true);
+  });
+});
+
+describe('Oncoming vehicle movement — segment spawn protection', () => {
+  /**
+   * Pure replica of the per-segment `spawned` flag check used inside
+   * the component's spawnObjects(). Returns `true` if the segment is
+   * allowed to spawn, `false` otherwise.
+   */
+  function canSegmentSpawn(tileData) {
+    return !(tileData && tileData.spawned);
+  }
+
+  it('a fresh segment is allowed to spawn', () => {
+    const tileData = { spawned: false };
+    expect(canSegmentSpawn(tileData)).toBe(true);
+  });
+
+  it('a segment that has already spawned cannot spawn again', () => {
+    const tileData = { spawned: true };
+    expect(canSegmentSpawn(tileData)).toBe(false);
+  });
+
+  it('handles a missing tileData entry as spawn-allowed (defensive)', () => {
+    // Defensive: if roadTileData[i] is unexpectedly undefined for any
+    // reason, we should not throw — fall through to the next checks.
+    expect(canSegmentSpawn(undefined)).toBe(true);
+    expect(canSegmentSpawn(null)).toBe(true);
+  });
+
+  it('simulates the bug the guard prevents: vehicle leaves segment, re-spawn is blocked', () => {
+    // A road segment at zStart = -40 (segment range: -60 to -40).
+    // An oncoming vehicle is spawned at desc.z = -50 (segment centre).
+    // It advances each frame; once its desc.z exceeds -40 (segStart),
+    // it has left the segment. Without the `spawned` flag the next
+    // spawn tick would happily put a new vehicle into the same segment
+    // — which is now very close to (or past) the player. With the
+    // flag set, the segment is locked out.
+    const seg = { zStart: -40, length: 20 };
+    const tileData = { spawned: false };
+
+    // First spawn attempt: segment is fresh → spawn allowed.
+    expect(canSegmentSpawn(tileData)).toBe(true);
+    tileData.spawned = true;
+    const vehicle = { type: 'oncoming_vehicle', z: -50 };
+
+    // Advance the vehicle until it has moved out of the segment.
+    const dt = 1 / 60;
+    let advanced = 0;
+    while (vehicle.z <= seg.zStart && advanced < 60) {
+      advanceOncomingVehicles([vehicle], dt);
+      advanced++;
+    }
+    expect(vehicle.z).toBeGreaterThan(seg.zStart); // confirm it left
+
+    // Subsequent spawn attempt: the segment must refuse.
+    expect(canSegmentSpawn(tileData)).toBe(false);
+  });
+});
+

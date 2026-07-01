@@ -7,7 +7,12 @@
  *
  * All functions are pure (no DOM, no Three.js, no side effects) except the
  * sound functions which accept an AudioContext and produce sound.
+ *
+ * Road centre-line is generated using continuous Perlin noise (fBm) from
+ * noise.js, replacing the old per-segment random walk.
  */
+
+import { fbm1D } from './noise.js';
 
 /* ===================================================================
    Lane constants & coordinate mapping
@@ -65,40 +70,97 @@ export const VEHICLE_DAMAGE = 2;
 export const REPAIR_HEAL = 1;
 
 /* ===================================================================
+   Noise-based road parameters
+   =================================================================== */
+
+/**
+ * Noise frequency for lateral (curve) offset.
+ * Low frequency = long wavelength, giving gentle bends.
+ */
+export const CURVE_NOISE_FREQUENCY = 0.008;
+
+/**
+ * Noise frequency for vertical (height) offset.
+ */
+export const HEIGHT_NOISE_FREQUENCY = 0.006;
+
+/**
+ * Seed offset applied to the Z coordinate for height noise to decorrelate
+ * lateral and vertical variations.
+ */
+export const HEIGHT_NOISE_OFFSET = 1000;
+
+/**
+ * Number of fBm octaves for road noise.
+ * 2 octaves adds subtle secondary detail while keeping the shape gentle.
+ */
+export const NOISE_OCTAVES = 2;
+
+/* ===================================================================
    Road segment generation
    =================================================================== */
 
 /** Length of one road segment in world units (along Z axis). */
 export const SEGMENT_LENGTH = 20;
 
-/** Maximum lane curvature offset per segment in world units. */
+/**
+ * Maximum lateral offset amplitude for the road centre-line.
+ * The noise output is scaled by this value.
+ */
 export const MAX_CURVE_OFFSET = 2.5;
 
-/** Maximum height change per segment in world units. */
+/**
+ * Maximum vertical offset amplitude for the road centre-line.
+ * The noise output is scaled by this value.
+ */
 export const MAX_HEIGHT_DELTA = 1.5;
+
+/**
+ * Sample the noise-based lateral curve offset at a given road Z coordinate.
+ *
+ * @param {number} z - Road-space Z coordinate.
+ * @returns {number} Lateral offset in world units.
+ */
+export function sampleCurveOffset(z) {
+  return fbm1D(z * CURVE_NOISE_FREQUENCY, NOISE_OCTAVES) * MAX_CURVE_OFFSET;
+}
+
+/**
+ * Sample the noise-based vertical height offset at a given road Z coordinate.
+ *
+ * @param {number} z - Road-space Z coordinate.
+ * @returns {number} Height offset in world units.
+ */
+export function sampleHeightOffset(z) {
+  return fbm1D(z * HEIGHT_NOISE_FREQUENCY + HEIGHT_NOISE_OFFSET, NOISE_OCTAVES) * MAX_HEIGHT_DELTA;
+}
 
 /**
  * Generate a single road segment descriptor.
  *
  * Each segment contains:
  *  - `zStart`: world Z where the segment begins.
- *  - `curveOffset`: lateral offset (positive = right bend, negative = left).
- *  - `heightOffset`: vertical offset (upward change).
+ *  - `curveOffset`: noise-based lateral offset at the segment's start.
+ *  - `heightOffset`: noise-based vertical offset at the segment's start.
  *  - `length`: segment length along Z.
  *
+ * The offset values are computed from continuous Perlin noise so that
+ * adjacent segments blend seamlessly.
+ *
  * @param {number} zStart - Starting Z coordinate.
- * @param {object} [options] - Optional parameters to control randomness.
- * @param {number} [options.maxCurve] - Max absolute curve offset (default MAX_CURVE_OFFSET).
- * @param {number} [options.maxHeight] - Max absolute height delta (default MAX_HEIGHT_DELTA).
+ * @param {object} [options] - Optional parameters to scale noise amplitude.
+ * @param {number} [options.maxCurve] - Curve amplitude (default MAX_CURVE_OFFSET).
+ * @param {number} [options.maxHeight] - Height amplitude (default MAX_HEIGHT_DELTA).
  * @returns {object} Segment descriptor.
  */
 export function generateSegment(zStart, options = {}) {
   const maxCurve = options.maxCurve ?? MAX_CURVE_OFFSET;
   const maxHeight = options.maxHeight ?? MAX_HEIGHT_DELTA;
+  // Use noise sampled at the segment start, scaled by the amplitude options.
   return {
     zStart,
-    curveOffset: (Math.random() * 2 - 1) * maxCurve,
-    heightOffset: (Math.random() * 2 - 1) * maxHeight,
+    curveOffset: fbm1D(zStart * CURVE_NOISE_FREQUENCY, NOISE_OCTAVES) * maxCurve,
+    heightOffset: fbm1D(zStart * HEIGHT_NOISE_FREQUENCY + HEIGHT_NOISE_OFFSET, NOISE_OCTAVES) * maxHeight,
     length: SEGMENT_LENGTH,
   };
 }
@@ -124,39 +186,24 @@ export function generateSegments(fromZ, count, options = {}) {
 }
 
 /**
- * Compute the cumulative road offset (lateral & vertical) at a given Z
- * coordinate by interpolating across segment descriptors.
+ * Compute the continuous road offset (lateral & vertical) at any given Z
+ * coordinate using the Perlin noise-based road model.
  *
- * @param {Array<object>} segments - Ordered segments (first = closest to player).
+ * Unlike the old cumulative segment-interpolation approach, this function
+ * returns a value that varies smoothly and continuously for every Z,
+ * because it directly samples the underlying noise function.
+ *
+ * The `segments` parameter is retained for API compatibility (object
+ * generation, LOD, etc.) but the offset computation is purely noise-driven.
+ *
+ * @param {Array<object>} segments - Ordered segments (unused in noise mode).
  * @param {number} z - World Z coordinate (negative = ahead).
- * @returns {{ curveOffset: number, heightOffset: number }} Interpolated offsets.
+ * @returns {{ curveOffset: number, heightOffset: number }} Noise-based offsets.
  */
 export function getRoadOffsetAt(segments, z) {
-  if (!segments || segments.length === 0) {
-    return { curveOffset: 0, heightOffset: 0 };
-  }
-
-  let cumulativeCurve = 0;
-  let cumulativeHeight = 0;
-
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    const segEnd = seg.zStart - seg.length;
-    if (z <= seg.zStart && z >= segEnd) {
-      const t = (seg.zStart - z) / seg.length;
-      return {
-        curveOffset: cumulativeCurve + seg.curveOffset * t,
-        heightOffset: cumulativeHeight + seg.heightOffset * t,
-      };
-    }
-    cumulativeCurve += seg.curveOffset;
-    cumulativeHeight += seg.heightOffset;
-  }
-
-  // Beyond the last segment — return total cumulative offset
   return {
-    curveOffset: cumulativeCurve,
-    heightOffset: cumulativeHeight,
+    curveOffset: sampleCurveOffset(z),
+    heightOffset: sampleHeightOffset(z),
   };
 }
 

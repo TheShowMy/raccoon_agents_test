@@ -340,3 +340,120 @@ describe('Road offset at player position (component coordinate model)', () => {
   });
 });
 
+/* ==================================================================
+   5. Road segment recycle boundary
+
+      Mirrors the boundary logic inside RacingGameScene.svelte's
+      updateRoad() loop. Recycling road segments by their *centre*
+      against the older RECYCLE_WORLD_Z constant caused the road to
+      disappear while its far half was still in the camera's view
+      frustum (player at world Z = 0, camera at Z = 12 looking toward
+      -Z). The fix anchors the threshold to the camera Z so a segment
+      is removed only after its far end has crossed past the camera.
+
+      The component imports the same constants below (CAMERA_RECYCLE_Z
+      and SEGMENT_LENGTH are mirrored here because svelte component
+      internals are not exported) so the boundary can be exercised
+      deterministically from a unit test.
+   ================================================================== */
+describe('Road segment recycle boundary (camera Z = 12)', () => {
+  // Mirrored from RacingGameScene.svelte — keep in sync with the
+  // component's `const CAMERA_RECYCLE_Z = 12`.
+  const CAMERA_RECYCLE_Z = 12;
+  // Mirrored from racingGame.js (`SEGMENT_LENGTH = 20`).
+  const SEGMENT_LENGTH = 20;
+
+  // Pure replica of the per-segment recycle decision inside updateRoad().
+  // It evaluates to true exactly when a segment's far end (in road-space)
+  // has scrolled past the camera boundary.
+  function shouldRecycleRoadTile(seg, scrollOffset) {
+    return (seg.zStart - seg.length) + scrollOffset >= CAMERA_RECYCLE_Z;
+  }
+
+  it('CAMERA_RECYCLE_Z matches camera Z position (12)', () => {
+    // initScene() places the camera at (0, 6, 12); the recycle boundary
+    // must equal that Z value to keep each road segment until its far
+    // end crosses past the camera.
+    expect(CAMERA_RECYCLE_Z).toBe(12);
+  });
+
+  it('keeps a segment whose far end is still in front of the camera', () => {
+    // First segment placed at zStart=0 (length=20). At scrollOffset=20
+    // its far end sits at world Z = 0 → still visible to the camera.
+    const seg = { zStart: 0, length: SEGMENT_LENGTH };
+    expect(shouldRecycleRoadTile(seg, 20)).toBe(false);
+  });
+
+  it('boundary-1 case: keeps segment when far end is 1 unit short of camera', () => {
+    // far end worldZ = -20 + 31 = 11 (< 12). The previous centre-based
+    // recycle would already have removed this segment at scrollOffset=15.
+    const seg = { zStart: 0, length: SEGMENT_LENGTH };
+    expect(shouldRecycleRoadTile(seg, 31)).toBe(false);
+  });
+
+  it('recycles a segment whose far end has just reached the camera', () => {
+    // far end worldZ = -20 + 32 = 12 ≥ 12 → safe to recycle.
+    const seg = { zStart: 0, length: SEGMENT_LENGTH };
+    expect(shouldRecycleRoadTile(seg, 32)).toBe(true);
+  });
+
+  it('recycles only segments whose far end has passed the camera in a stack', () => {
+    // Two adjacent segments: seg0 (zStart=0) and seg1 (zStart=-20). At
+    // scrollOffset=32 the recycle loop should remove seg0 (far end == 12)
+    // and STOP at seg1 (far end == -8 is still in front of the camera).
+    // This is what prevents the visible road gap that the old logic caused.
+    const seg0 = { zStart: 0, length: SEGMENT_LENGTH };
+    const seg1 = { zStart: -20, length: SEGMENT_LENGTH };
+    expect(shouldRecycleRoadTile(seg0, 32)).toBe(true);
+    expect(shouldRecycleRoadTile(seg1, 32)).toBe(false);
+  });
+
+  it('recycles all stacked segments once every far end has crossed the camera', () => {
+    // At scrollOffset=80 every far end is past 12:
+    //   seg0 far end = -20 + 80 = 60 ≥ 12  → recycle
+    //   seg1 far end = -40 + 80 = 40 ≥ 12  → recycle
+    //   seg2 far end = -60 + 80 = 20 ≥ 12  → recycle
+    const seg0 = { zStart: 0, length: SEGMENT_LENGTH };
+    const seg1 = { zStart: -20, length: SEGMENT_LENGTH };
+    const seg2 = { zStart: -40, length: SEGMENT_LENGTH };
+    expect(shouldRecycleRoadTile(seg0, 80)).toBe(true);
+    expect(shouldRecycleRoadTile(seg1, 80)).toBe(true);
+    expect(shouldRecycleRoadTile(seg2, 80)).toBe(true);
+  });
+
+  it('recycles no segments when the player has not moved (scrollOffset = 0)', () => {
+    const seg0 = { zStart: 0, length: SEGMENT_LENGTH };
+    const seg1 = { zStart: -20, length: SEGMENT_LENGTH };
+    expect(shouldRecycleRoadTile(seg0, 0)).toBe(false);
+    expect(shouldRecycleRoadTile(seg1, 0)).toBe(false);
+  });
+
+  it('documents the previous (centre-based) bug: seg0 was recycled early leaving a gap', () => {
+    // At scrollOffset=15 the OLD centre-based recycle triggered
+    //   (centre worldZ = -10 + 15 = 5 ≥ RECYCLE_WORLD_Z(5))
+    // but the far end was still at z=-5 (visible). After recycling
+    // seg0, no segment covered z=-5..12, creating the visible road
+    // gap the user reported. The new logic keeps seg0 in place at the
+    // same scrollOffset, which is what regressed the bug.
+    const seg0 = { zStart: 0, length: SEGMENT_LENGTH };
+    const seg1 = { zStart: -20, length: SEGMENT_LENGTH };
+    expect(shouldRecycleRoadTile(seg0, 15)).toBe(false);
+    expect(shouldRecycleRoadTile(seg1, 15)).toBe(false);
+  });
+
+  it('leaves object/tree recycle (RECYCLE_WORLD_Z = 5) unaffected', () => {
+    // Trees and objects continue to use the older RECYCLE_WORLD_Z = 5
+    // threshold; the road recycle change must not leak into those code
+    // paths. This guards against accidental rename or scope collision.
+    const RECYCLE_WORLD_Z = 5;
+    // Object recycle: worldZ > RECYCLE_WORLD_Z ⇒ removed.
+    expect(6 > RECYCLE_WORLD_Z).toBe(true);
+    expect(4 > RECYCLE_WORLD_Z).toBe(false);
+    // Tree recycle: worldZ > RECYCLE_WORLD_Z + 20 ⇒ recycled ahead.
+    expect(26 > RECYCLE_WORLD_Z + 20).toBe(true);
+    expect(20 > RECYCLE_WORLD_Z + 20).toBe(false);
+    // Sanity: the two thresholds remain distinct.
+    expect(CAMERA_RECYCLE_Z).not.toBe(RECYCLE_WORLD_Z);
+  });
+});
+

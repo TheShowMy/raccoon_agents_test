@@ -137,6 +137,8 @@
 
   const ROAD_VISUAL_WIDTH = LANE_COUNT * LANE_WIDTH * 1.6;
   const ROAD_TILE_HEIGHT = 0.2;
+  /** Subdivisions per road segment for continuous noise-sampled geometry. */
+  const ROAD_SUBDIVISIONS = 6;
   const ROAD_COLOR = 0x8a9a8a;
   const ROAD_SHOULDER_COLOR = 0x6a7a6a;
   const LANE_LINE_COLOR = 0xd8e8d8;
@@ -282,7 +284,7 @@
 
     // Create visuals for each segment
     roadSegments.forEach((seg) => {
-      createRoadTileVisuals(seg);
+      createContinuousRoadSegment(seg);
     });
 
     // Roadside decoration trees
@@ -290,67 +292,138 @@
   }
 
   /**
-   * Create visual meshes for a single road segment.
-   * Meshes are positioned at the segment's road-space Z (midZ).
-   * Each frame they are repositioned to world Z = roadZ + scrollOffset.
+   * Create continuous smooth road geometry for a single road segment.
+   * Uses a custom BufferGeometry with vertices sampled from the Perlin noise
+   * centre‑line at multiple Z positions, ensuring seamless connection with
+   * adjacent segments (vertices at shared Z boundaries match exactly).
+   *
+   * Lane divider lines and road shoulders are also created as continuous
+   * strips using the same noise sampling.
    */
-  function createRoadTileVisuals(segment) {
-    const midZ = segment.zStart - segment.length / 2;
-    const offset = getRoadOffsetAt(roadSegments, midZ);
+  function createContinuousRoadSegment(segment) {
+    const zStart = segment.zStart;
+    const step = segment.length / ROAD_SUBDIVISIONS;
+    const rows = ROAD_SUBDIVISIONS + 1;
+    const halfW = ROAD_VISUAL_WIDTH / 2;
 
     let data = { segment, surface: null, lines: [], shoulders: [] };
 
-    // Road surface
-    const surfaceGeo = new THREE.BoxGeometry(
-      ROAD_VISUAL_WIDTH, ROAD_TILE_HEIGHT, SEGMENT_LENGTH * 1.05
-    );
+    // ---- Road surface ----
+    const surfacePositions = [];
+    const surfaceIndices = [];
+
+    for (let i = 0; i < rows; i++) {
+      const z = zStart - i * step;
+      const offset = getRoadOffsetAt(roadSegments, z);
+      surfacePositions.push(offset.curveOffset - halfW, offset.heightOffset, z);
+      surfacePositions.push(offset.curveOffset + halfW, offset.heightOffset, z);
+    }
+
+    for (let i = 0; i < ROAD_SUBDIVISIONS; i++) {
+      const a = i * 2;
+      const b = i * 2 + 1;
+      const c = (i + 1) * 2;
+      const d = (i + 1) * 2 + 1;
+      surfaceIndices.push(a, c, b, b, c, d);
+    }
+
+    const surfaceGeo = new THREE.BufferGeometry();
+    surfaceGeo.setAttribute('position', new THREE.Float32BufferAttribute(surfacePositions, 3));
+    surfaceGeo.setIndex(surfaceIndices);
+    surfaceGeo.computeVertexNormals();
+
     const surfaceMat = new THREE.MeshPhongMaterial({
       color: ROAD_COLOR,
       flatShading: true,
+      side: THREE.DoubleSide,
     });
     const surface = new THREE.Mesh(surfaceGeo, surfaceMat);
-    surface.position.set(
-      offset.curveOffset,
-      ROAD_Y + offset.heightOffset,
-      midZ
-    );
+    surface.position.set(0, ROAD_Y, 0);
     surface.receiveShadow = true;
     surface.castShadow = true;
     roadGroup.add(surface);
     data.surface = surface;
 
-    // Lane divider lines (2 dividers for 3 lanes)
-    const lineGeo = new THREE.BoxGeometry(0.15, 0.05, SEGMENT_LENGTH * 0.9);
+    // ---- Lane divider lines (2 dividers for 3 lanes) ----
     const lineMat = new THREE.MeshBasicMaterial({ color: LANE_LINE_COLOR });
+    const lineHalfW = 0.075;
+
     for (let li = 0; li < LANE_COUNT - 1; li++) {
-      const lineX = (li - (LANE_COUNT - 2) / 2) * LANE_WIDTH;
+      const lineCenterX = (li - (LANE_COUNT - 2) / 2) * LANE_WIDTH;
+      const linePositions = [];
+      const lineIndices = [];
+
+      for (let i = 0; i < rows; i++) {
+        const z = zStart - i * step;
+        const offset = getRoadOffsetAt(roadSegments, z);
+        const cx = offset.curveOffset;
+        const cy = offset.heightOffset;
+
+        linePositions.push(cx + lineCenterX - lineHalfW, cy + 0.12, z);
+        linePositions.push(cx + lineCenterX + lineHalfW, cy + 0.12, z);
+      }
+
+      for (let i = 0; i < ROAD_SUBDIVISIONS; i++) {
+        const a = i * 2;
+        const b = i * 2 + 1;
+        const c = (i + 1) * 2;
+        const d = (i + 1) * 2 + 1;
+        lineIndices.push(a, c, b, b, c, d);
+      }
+
+      const lineGeo = new THREE.BufferGeometry();
+      lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
+      lineGeo.setIndex(lineIndices);
+      lineGeo.computeVertexNormals();
+
       const lineMesh = new THREE.Mesh(lineGeo, lineMat);
-      lineMesh.position.set(
-        offset.curveOffset + lineX,
-        ROAD_Y + offset.heightOffset + 0.12,
-        midZ
-      );
+      lineMesh.position.set(0, ROAD_Y, 0);
       roadGroup.add(lineMesh);
       data.lines.push(lineMesh);
     }
 
-    // Road shoulders
+    // ---- Road shoulders ----
     const shoulderMat = new THREE.MeshBasicMaterial({
       color: ROAD_SHOULDER_COLOR,
       transparent: true,
       opacity: 0.5,
     });
-    const shoulderGeo = new THREE.BoxGeometry(0.6, 0.06, SEGMENT_LENGTH * 0.95);
+    const shoulderHalfW = 0.3;
+
     for (let si = 0; si < 2; si++) {
       const side = si === 0 ? -1 : 1;
-      const sMesh = new THREE.Mesh(shoulderGeo, shoulderMat);
-      sMesh.position.set(
-        offset.curveOffset + side * (ROAD_VISUAL_WIDTH / 2 - 0.3),
-        ROAD_Y + offset.heightOffset + 0.12,
-        midZ
-      );
-      roadGroup.add(sMesh);
-      data.shoulders.push(sMesh);
+      const shoulderPositions = [];
+      const shoulderIndices = [];
+
+      for (let i = 0; i < rows; i++) {
+        const z = zStart - i * step;
+        const offset = getRoadOffsetAt(roadSegments, z);
+        const cx = offset.curveOffset;
+        const cy = offset.heightOffset;
+
+        const innerEdge = side * halfW - side * shoulderHalfW;
+        const outerEdge = side * halfW + side * shoulderHalfW;
+        shoulderPositions.push(cx + innerEdge, cy + 0.12, z);
+        shoulderPositions.push(cx + outerEdge, cy + 0.12, z);
+      }
+
+      for (let i = 0; i < ROAD_SUBDIVISIONS; i++) {
+        const a = i * 2;
+        const b = i * 2 + 1;
+        const c = (i + 1) * 2;
+        const d = (i + 1) * 2 + 1;
+        shoulderIndices.push(a, c, b, b, c, d);
+      }
+
+      const shoulderGeo = new THREE.BufferGeometry();
+      shoulderGeo.setAttribute('position', new THREE.Float32BufferAttribute(shoulderPositions, 3));
+      shoulderGeo.setIndex(shoulderIndices);
+      shoulderGeo.computeVertexNormals();
+
+      const shoulderMesh = new THREE.Mesh(shoulderGeo, shoulderMat);
+      shoulderMesh.position.set(0, ROAD_Y, 0);
+      roadGroup.add(shoulderMesh);
+      data.shoulders.push(shoulderMesh);
     }
 
     roadTileData.push(data);
@@ -358,46 +431,23 @@
 
   /**
    * Reposition all road tile visuals based on current scrollOffset.
-   * Road tiles at roadZ have world Z = roadZ + scrollOffset.
-   * Their X/Y offsets from getRoadOffsetAt are recomputed using roadZ (road space).
+   * With continuous noise‑sampled geometry, vertex positions already encode
+   * the correct lateral and height offsets.  We only need to scroll the
+   * meshes along the Z axis.
    */
   function repositionRoadTiles() {
     for (const data of roadTileData) {
-      const seg = data.segment;
-      const midZ = seg.zStart - seg.length / 2;
-      const worldZ = midZ + scrollOffset;
-      const offset = getRoadOffsetAt(roadSegments, midZ);
-
-      // Surface
+      // With continuous noise‑based geometry, vertex positions are already at
+      // the correct local‑space curve/height offsets. Only scroll Z.
       if (data.surface) {
-        data.surface.position.set(
-          offset.curveOffset,
-          ROAD_Y + offset.heightOffset,
-          worldZ
-        );
+        data.surface.position.z = scrollOffset;
       }
-
-      // Lines
-      for (let li = 0; li < data.lines.length; li++) {
-        const lineX = (li - (LANE_COUNT - 2) / 2) * LANE_WIDTH;
-        data.lines[li].position.set(
-          offset.curveOffset + lineX,
-          ROAD_Y + offset.heightOffset + 0.12,
-          worldZ
-        );
+      for (const line of data.lines) {
+        line.position.z = scrollOffset;
       }
-
-      // Shoulders
-      for (let si = 0; si < data.shoulders.length; si++) {
-        const side = si === 0 ? -1 : 1;
-        data.shoulders[si].position.set(
-          offset.curveOffset + side * (ROAD_VISUAL_WIDTH / 2 - 0.3),
-          ROAD_Y + offset.heightOffset + 0.12,
-          worldZ
-        );
+      for (const s of data.shoulders) {
+        s.position.z = scrollOffset;
       }
-
-      // Roadside trees (they're children of roadGroup, processed separately)
     }
   }
 
@@ -491,7 +541,7 @@
 
       const newSeg = generateSegment(newRoadZ);
       roadSegments.push(newSeg);
-      createRoadTileVisuals(newSeg);
+      createContinuousRoadSegment(newSeg);
     }
 
     // -- Reposition all road tiles --
@@ -1018,7 +1068,7 @@
     // Re-initialise road and vehicle position
     roadSegments = generateSegments(0, SEGMENTS_AHEAD);
     roadSegments.forEach((seg) => {
-      createRoadTileVisuals(seg);
+      createContinuousRoadSegment(seg);
     });
     createRoadsideTrees();
 

@@ -143,6 +143,18 @@
   const ROAD_SHOULDER_COLOR = 0x6a7a6a;
   const LANE_LINE_COLOR = 0xd8e8d8;
 
+  // Vehicle transform smoothing factors.
+  // Fast convergence is safe because the Perlin noise road centreline
+  // is continuous and low-frequency (0.008 Hz, 2 octaves).
+  const VEHICLE_SMOOTH_X = 0.35;
+  const VEHICLE_SMOOTH_Y = 0.25;
+
+  // Camera following interpolation factor — gentle enough to glide
+  // smoothly into curves, fast enough to avoid perceptible lag.
+  const CAMERA_SMOOTH = 0.15;
+  // Fraction of the lane offset visible in the camera target position.
+  const CAMERA_LANE_FACTOR = 0.4;
+
   let frameCount = 0;
   const COLLISION_CHECK_MOD = 4;
 
@@ -1231,19 +1243,22 @@
   function updateVehicleTransform() {
     if (!vehicle) return;
 
-    // Road offset at player position (roadZ = 0 - scrollOffset... wait)
-    // The player's road position is the cumulative scroll offset.
-    // We want road offset at the world position z=0 (where player is).
-    // In road space, the player is at -scrollOffset.
-    // But getRoadOffsetAt expects road-space Z.
+    // Road offset at the player's road-space Z position.
+    // As scrollOffset increases (player moves forward), playerRoadZ
+    // decreases, sampling the noise function at progressively more
+    // negative Z — producing the illusion of forward travel along the
+    // continuous Perlin noise road.
     const playerRoadZ = -scrollOffset;
     const offset = getRoadOffsetAt(roadSegments, playerRoadZ);
 
     const targetX = offset.curveOffset + laneVisualX;
     const targetY = ROAD_Y + offset.heightOffset + playerY;
 
-    vehicle.position.x += (targetX - vehicle.position.x) * 0.15;
-    vehicle.position.y += (targetY - vehicle.position.y) * 0.15;
+    // Fast convergence on the smooth noise road centreline.
+    // The Perlin noise is low-frequency (0.008 Hz, 2 octaves) so
+    // curveOffset changes gradually — no jitter from direct tracking.
+    vehicle.position.x += (targetX - vehicle.position.x) * VEHICLE_SMOOTH_X;
+    vehicle.position.y += (targetY - vehicle.position.y) * VEHICLE_SMOOTH_Y;
     vehicle.position.z = 0;
 
     // Tilt during lane switch
@@ -1272,9 +1287,16 @@
     const lookRoadZ = -scrollOffset - 15;
     const lookOffset = getRoadOffsetAt(roadSegments, lookRoadZ);
 
-    const camX = vehicle.position.x * 0.6;
-    const camY = vehicle.position.y + 6;
-    camera.position.set(camX, camY, 12);
+    // Smoothly interpolate the camera toward the road-following position,
+    // rather than snapping instantaneously.  CAMERA_SMOOTH = 0.15 gives
+    // a ~0.3 s convergence — fast enough to avoid perceptible lag, slow
+    // enough to glide gently into curves.
+    const targetCamX = lookOffset.curveOffset + laneVisualX * CAMERA_LANE_FACTOR;
+    const targetCamY = ROAD_Y + lookOffset.heightOffset + 6;
+
+    camera.position.x += (targetCamX - camera.position.x) * CAMERA_SMOOTH;
+    camera.position.y += (targetCamY - camera.position.y) * CAMERA_SMOOTH;
+    camera.position.z = 12;
 
     const lookTarget = new THREE.Vector3(
       lookOffset.curveOffset,

@@ -363,42 +363,79 @@
     roadGroup.add(surface);
     data.surface = surface;
 
-    // ---- Lane divider lines (2 dividers for 3 lanes) ----
+    // ---- Lane divider lines (2 dividers for 3 lanes, drawn as dashes) ----
+    // Each divider is split into short mesh strips separated by gaps, so the
+    // three lane boundaries read as intermittent dashed lines rather than a
+    // continuous band. Road width, lane count and surface geometry are
+    // unchanged.
     const lineMat = new THREE.MeshBasicMaterial({ color: LANE_LINE_COLOR });
     const lineHalfW = 0.075;
+    // Dash pattern based on subdivision indices: every DASH_PATTERN_SUBDIVS
+    // subdivisions we draw DASH_LENGTH_SUBDIVS rows of stripe then leave the
+    // rest as a gap.  ROAD_SUBDIVISIONS (6) is a multiple of 3, so each
+    // segment cleanly contains two full dashes and segments tile seamlessly.
+    const DASH_PATTERN_SUBDIVS = 3;
+    const DASH_LENGTH_SUBDIVS = 2;
 
     for (let li = 0; li < LANE_COUNT - 1; li++) {
       const lineCenterX = (li - (LANE_COUNT - 2) / 2) * LANE_WIDTH;
-      const linePositions = [];
-      const lineIndices = [];
+      let dashPositions = [];
+      let dashIndices = [];
+
+      const flushDash = () => {
+        // Skip building a mesh when the buffered strip has no triangles.
+        // This happens at the trailing edge of every segment because
+        // rows = ROAD_SUBDIVISIONS + 1 = 7 leaves the final dash row with
+        // no following row to pair into a quad within the same segment.
+        // Without this guard we'd allocate a degenerate 2-vertex / 0-index
+        // mesh for every lane of every segment.
+        if (dashIndices.length === 0) {
+          dashPositions = [];
+          dashIndices = [];
+          return;
+        }
+        const lineGeo = new THREE.BufferGeometry();
+        lineGeo.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute(dashPositions, 3),
+        );
+        lineGeo.setIndex(dashIndices);
+        lineGeo.computeVertexNormals();
+
+        const lineMesh = new THREE.Mesh(lineGeo, lineMat);
+        lineMesh.position.set(0, ROAD_Y, 0);
+        roadGroup.add(lineMesh);
+        data.lines.push(lineMesh);
+        dashPositions = [];
+        dashIndices = [];
+      };
 
       for (let i = 0; i < rows; i++) {
         const z = zStart - i * step;
         const offset = getRoadOffsetAt(roadSegments, z);
         const cx = offset.curveOffset;
         const cy = offset.heightOffset;
+        const inDash = (i % DASH_PATTERN_SUBDIVS) < DASH_LENGTH_SUBDIVS;
 
-        linePositions.push(cx + lineCenterX - lineHalfW, cy + 0.12, z);
-        linePositions.push(cx + lineCenterX + lineHalfW, cy + 0.12, z);
+        if (inDash) {
+          const v0 = dashPositions.length / 3;
+          dashPositions.push(cx + lineCenterX - lineHalfW, cy + 0.12, z);
+          dashPositions.push(cx + lineCenterX + lineHalfW, cy + 0.12, z);
+          // Only emit quad indices once we have a previous row to pair with.
+          if (v0 >= 2) {
+            const a = v0 - 2;
+            const b = v0 - 1;
+            const c = v0;
+            const d = v0 + 1;
+            dashIndices.push(a, c, b, b, c, d);
+          }
+        } else {
+          flushDash();
+        }
       }
 
-      for (let i = 0; i < ROAD_SUBDIVISIONS; i++) {
-        const a = i * 2;
-        const b = i * 2 + 1;
-        const c = (i + 1) * 2;
-        const d = (i + 1) * 2 + 1;
-        lineIndices.push(a, c, b, b, c, d);
-      }
-
-      const lineGeo = new THREE.BufferGeometry();
-      lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
-      lineGeo.setIndex(lineIndices);
-      lineGeo.computeVertexNormals();
-
-      const lineMesh = new THREE.Mesh(lineGeo, lineMat);
-      lineMesh.position.set(0, ROAD_Y, 0);
-      roadGroup.add(lineMesh);
-      data.lines.push(lineMesh);
+      // Flush any trailing dash that reaches the end of the segment.
+      flushDash();
     }
 
     // ---- Road shoulders ----

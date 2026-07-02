@@ -368,11 +368,13 @@
     // can sit on at a constant Y instead of inheriting the road's noise-
     // driven heightOffset (which would make them float in dips and sink on
     // hilltops). The plane is added to its own group so it doesn't get
-    // recycled by the road tile system; the group's Z position tracks
-    // scrollOffset each frame so the grass always extends under whatever
-    // section of road the player is on.
+    // recycled by the road tile system. The grass plane is anchored at
+    // world Z=0 (under the player position) and does NOT scroll with
+    // scrollOffset; its length (GRASS_LENGTH=4000) is sufficient to
+    // cover from the player position to well past the fog far plane
+    // (≈200 units ahead) regardless of how far the player has travelled.
     grassGroup = new THREE.Group();
-    grassGroup.position.z = scrollOffset;
+    grassGroup.position.z = 0;
     scene.add(grassGroup);
 
     // Capture the geometry and material at module level so onDestroy can
@@ -619,10 +621,12 @@
       }
     }
 
-    // Scroll the grass plane with the world so trees continue to sit on
-    // grass regardless of how far the player has travelled.
+    // Anchor the grass plane at world Z=0 so it always covers the
+    // player position. The grass plane is not scrolled with the world —
+    // it is fixed at Z=0 regardless of scrollOffset; its length
+    // (GRASS_LENGTH=4000) is sufficient to cover the visible range.
     if (grassGroup) {
-      grassGroup.position.z = scrollOffset;
+      grassGroup.position.z = 0;
     }
   }
 

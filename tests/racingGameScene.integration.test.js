@@ -575,9 +575,10 @@ describe('Tree anchoring onto grass plane (no floating)', () => {
 /* ==================================================================
    8. Grass plane scroll behaviour
 
-      Mirrors the additional branch added to repositionRoadTiles() to
-      track the grassGroup.position.z with scrollOffset so the plane
-      always sits under the visible section of road.
+      The grass plane is anchored at world Z=0 and does NOT scroll with
+      scrollOffset. Its length (GRASS_LENGTH=4000) is sufficient to cover
+      from the player position to past the fog far plane (≈200 units
+      ahead) regardless of how far the player has travelled.
    ================================================================== */
 describe('Grass plane scroll behaviour', () => {
   // State container mimicking the module-level grassGroup in the
@@ -587,33 +588,33 @@ describe('Grass plane scroll behaviour', () => {
   /** Replica of the grass-position update inside repositionRoadTiles(). */
   function scrollGrass(scrollOffset) {
     if (grassState) {
-      grassState.position.z = scrollOffset;
+      // Anchor the grass plane at world Z=0 regardless of scrollOffset.
+      grassState.position.z = 0;
     }
   }
 
-  it('grass plane Z starts at scrollOffset 0', () => {
+  it('grass plane Z starts at 0', () => {
     grassState.position.z = 0;
     expect(grassState.position.z).toBe(0);
   });
 
-  it('grass plane Z tracks scrollOffset exactly (no smoothing, no drift)', () => {
+  it('grass plane Z stays at 0 regardless of scrollOffset (anchored, not scrolled)', () => {
     grassState.position.z = 0;
-    for (const so of [0, 1, 22, 100, 500.5, 1000, -10]) {
+    for (const so of [0, 1, 22, 100, 500.5, 1000, 5000, 10000, -10, 99999]) {
       scrollGrass(so);
-      expect(grassState.position.z).toBe(so);
+      expect(grassState.position.z).toBe(0);
     }
   });
 
-  it('grass plane has large enough span to stay under visible road for typical play', () => {
-    // GRASS_LENGTH should be much larger than the typical play-time
-    // scroll distance, so the plane always covers from the camera
-    // back to where the player will reach. The mirrored constant
-    // here is 4000; even at PLAYER_SPEED = 22, that is ≈ 3 minutes
-    // of straight-line travel before the plane would scroll past.
+  it('grass plane has large enough span to cover player position to fog far plane', () => {
+    // GRASS_LENGTH=4000 is sufficient: it only needs to exceed
+    // 2 × 200 (fog far plane + small margin) = 400 to continuously
+    // cover from the player position (world Z=0) to past the fog
+    // far plane regardless of scrollOffset.
     const GRASS_LENGTH = 4000;
-    const PLAYER_SPEED = 22;
-    const halfLife = (GRASS_LENGTH / 2) / PLAYER_SPEED; // seconds
-    expect(halfLife).toBeGreaterThan(60); // > 1 minute of unconstrained play
+    const fogFarPlane = 200;
+    expect(GRASS_LENGTH).toBeGreaterThan(2 * fogFarPlane);
+    expect(GRASS_LENGTH).toBeGreaterThan(400);
   });
 });
 

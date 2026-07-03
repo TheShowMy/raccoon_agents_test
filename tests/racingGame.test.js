@@ -48,6 +48,23 @@ import {
   playCollisionSound,
   playPickupSound,
   playGameOverSound,
+  DIFFICULTY_DISTANCE_PER_LEVEL,
+  DIFFICULTY_TIME_PER_LEVEL,
+  DIFFICULTY_MAX_LEVEL,
+  ENEMY_SPEED_PER_LEVEL,
+  ENEMY_SPEED_MAX_MULTIPLIER,
+  SPAWN_DENSITY_PER_LEVEL,
+  SPAWN_DENSITY_MAX_MULTIPLIER,
+  MAX_OBJECTS_BASE,
+  MAX_OBJECTS_PER_LEVEL_STEP,
+  MAX_OBJECTS_CAP,
+  SPAWN_COOLDOWN_BASE,
+  SPAWN_COOLDOWN_STEP,
+  SPAWN_COOLDOWN_MIN,
+  SPAWN_CHANCE_BASE,
+  SPAWN_CHANCE_STEP,
+  SPAWN_CHANCE_MAX,
+  computeDifficulty,
 } from '../src/lib/utils/racingGame.js';
 
 /* ===================================================================
@@ -1199,5 +1216,470 @@ describe('sound functions', () => {
       // 4 notes = 4 oscillators created
       expect(mockCtx.createOscillator).toHaveBeenCalledTimes(4);
     });
+  });
+});
+
+/* ===================================================================
+   Dynamic difficulty — constants
+   =================================================================== */
+describe('difficulty constants', () => {
+  it('DIFFICULTY_DISTANCE_PER_LEVEL > 0 and finite', () => {
+    expect(typeof DIFFICULTY_DISTANCE_PER_LEVEL).toBe('number');
+    expect(Number.isFinite(DIFFICULTY_DISTANCE_PER_LEVEL)).toBe(true);
+    expect(DIFFICULTY_DISTANCE_PER_LEVEL).toBeGreaterThan(0);
+  });
+
+  it('DIFFICULTY_TIME_PER_LEVEL > 0 and finite', () => {
+    expect(DIFFICULTY_TIME_PER_LEVEL).toBeGreaterThan(0);
+    expect(Number.isFinite(DIFFICULTY_TIME_PER_LEVEL)).toBe(true);
+  });
+
+  it('DIFFICULTY_MAX_LEVEL is a positive integer', () => {
+    expect(Number.isInteger(DIFFICULTY_MAX_LEVEL)).toBe(true);
+    expect(DIFFICULTY_MAX_LEVEL).toBeGreaterThan(0);
+  });
+
+  it('ENEMY_SPEED_MAX_MULTIPLIER is the closed-form cap', () => {
+    // The export must equal 1 + MAX_LEVEL * PER_LEVEL so the
+    // `min(cap, 1 + level*step)` expression in computeDifficulty
+    // is internally consistent. Pinning the closed form here
+    // catches a future edit that bumps either constant without
+    // updating the other.
+    expect(ENEMY_SPEED_MAX_MULTIPLIER).toBe(
+      1 + DIFFICULTY_MAX_LEVEL * ENEMY_SPEED_PER_LEVEL,
+    );
+    expect(ENEMY_SPEED_MAX_MULTIPLIER).toBeGreaterThan(1);
+  });
+
+  it('SPAWN_DENSITY_MAX_MULTIPLIER is the closed-form cap', () => {
+    expect(SPAWN_DENSITY_MAX_MULTIPLIER).toBe(
+      1 + DIFFICULTY_MAX_LEVEL * SPAWN_DENSITY_PER_LEVEL,
+    );
+    expect(SPAWN_DENSITY_MAX_MULTIPLIER).toBeGreaterThan(1);
+  });
+
+  it('MAX_OBJECTS_BASE / MAX_OBJECTS_CAP are in [1, 3]', () => {
+    // The per-segment count should be at least 1 (so the loop
+    // can produce objects) and at most 3 (matching the existing
+    // `Math.min(maxObjects, 3)` cap inside
+    // generateObjectsForSegment).
+    expect(MAX_OBJECTS_BASE).toBeGreaterThanOrEqual(1);
+    expect(MAX_OBJECTS_BASE).toBeLessThanOrEqual(MAX_OBJECTS_CAP);
+    expect(MAX_OBJECTS_CAP).toBe(3);
+  });
+
+  it('MAX_OBJECTS_PER_LEVEL_STEP is a positive fraction', () => {
+    // The step must be in (0, 1) so the floor() in
+    // computeDifficulty never jumps by more than 1 per level.
+    expect(MAX_OBJECTS_PER_LEVEL_STEP).toBeGreaterThan(0);
+    expect(MAX_OBJECTS_PER_LEVEL_STEP).toBeLessThan(1);
+  });
+
+  it('SPAWN_COOLDOWN_MIN ≤ SPAWN_COOLDOWN_BASE (cooldown never grows with level)', () => {
+    expect(SPAWN_COOLDOWN_MIN).toBeLessThanOrEqual(SPAWN_COOLDOWN_BASE);
+    expect(SPAWN_COOLDOWN_BASE).toBeGreaterThan(0);
+    expect(SPAWN_COOLDOWN_MIN).toBeGreaterThan(0);
+  });
+
+  it('SPAWN_CHANCE_BASE ≤ SPAWN_CHANCE_MAX, both in [0, 1]', () => {
+    expect(SPAWN_CHANCE_BASE).toBeGreaterThanOrEqual(0);
+    expect(SPAWN_CHANCE_BASE).toBeLessThanOrEqual(1);
+    expect(SPAWN_CHANCE_MAX).toBeGreaterThanOrEqual(SPAWN_CHANCE_BASE);
+    expect(SPAWN_CHANCE_MAX).toBeLessThanOrEqual(1);
+  });
+});
+
+/* ===================================================================
+   Dynamic difficulty — computeDifficulty
+   =================================================================== */
+describe('computeDifficulty', () => {
+  it('returns a level-0 baseline at game start (distance=0, time=0)', () => {
+    const d = computeDifficulty({ distance: 0, runningTime: 0 });
+    expect(d.level).toBe(0);
+    expect(d.enemySpeedMultiplier).toBe(1);
+    expect(d.spawnDensityMultiplier).toBe(1);
+    expect(d.maxObjectsPerSegment).toBe(MAX_OBJECTS_BASE);
+    expect(d.spawnCooldownSeconds).toBeCloseTo(SPAWN_COOLDOWN_BASE, 5);
+    expect(d.spawnChance).toBeCloseTo(SPAWN_CHANCE_BASE, 5);
+  });
+
+  it('treats a missing argument bag as distance=0, time=0', () => {
+    const d = computeDifficulty();
+    expect(d.level).toBe(0);
+    expect(d.enemySpeedMultiplier).toBe(1);
+    expect(d.maxObjectsPerSegment).toBe(MAX_OBJECTS_BASE);
+  });
+
+  it('treats undefined distance / runningTime as 0', () => {
+    const a = computeDifficulty({ distance: undefined, runningTime: undefined });
+    const b = computeDifficulty({});
+    expect(a.level).toBe(b.level);
+    expect(a.enemySpeedMultiplier).toBe(b.enemySpeedMultiplier);
+  });
+
+  it('sanitises negative distance and time to 0 (no negative level)', () => {
+    const d = computeDifficulty({ distance: -50, runningTime: -10 });
+    expect(d.level).toBe(0);
+    expect(d.rawProgress).toBe(0);
+    expect(d.enemySpeedMultiplier).toBe(1);
+  });
+
+  it('sanitises NaN / Infinity inputs to 0', () => {
+    const a = computeDifficulty({ distance: NaN, runningTime: 100 });
+    const b = computeDifficulty({ distance: 100, runningTime: NaN });
+    const c = computeDifficulty({ distance: Infinity, runningTime: 0 });
+    const d = computeDifficulty({ distance: -Infinity, runningTime: 0 });
+    // NaN and Infinity inputs must not produce NaN outputs.
+    expect(Number.isFinite(a.level)).toBe(true);
+    expect(Number.isFinite(b.level)).toBe(true);
+    expect(Number.isFinite(c.level)).toBe(true);
+    expect(Number.isFinite(d.level)).toBe(true);
+    // None of the dangerous inputs can pump the level above the
+    // cap; NaN and Infinity must be treated as 0.
+    expect(c.level).toBe(0);
+    expect(d.level).toBe(0);
+  });
+
+  it('sanitises non-number inputs (strings, null, objects) to 0', () => {
+    const a = computeDifficulty({ distance: '50', runningTime: 0 });
+    const b = computeDifficulty({ distance: null, runningTime: 30 });
+    const c = computeDifficulty({ distance: 0, runningTime: {} });
+    expect(a.level).toBe(0);
+    expect(b.level).toBe(1); // runningTime=30 is fine; distance=null → 0
+    expect(c.level).toBe(0);
+  });
+
+  it('level rises by 1 per DIFFICULTY_DISTANCE_PER_LEVEL units of distance', () => {
+    // Exactly one level: raw = 1.0 → floor = 1.
+    const d1 = computeDifficulty({
+      distance: DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    expect(d1.level).toBe(1);
+    // Two levels: raw = 2.0 → floor = 2.
+    const d2 = computeDifficulty({
+      distance: 2 * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    expect(d2.level).toBe(2);
+    // Just below the next level: raw = 1.999 → floor = 1.
+    const d3 = computeDifficulty({
+      distance: 2 * DIFFICULTY_DISTANCE_PER_LEVEL - 0.001,
+      runningTime: 0,
+    });
+    expect(d3.level).toBe(1);
+  });
+
+  it('level rises by 1 per DIFFICULTY_TIME_PER_LEVEL seconds of running time', () => {
+    const d = computeDifficulty({ distance: 0, runningTime: DIFFICULTY_TIME_PER_LEVEL });
+    expect(d.level).toBe(1);
+    const d2 = computeDifficulty({ distance: 0, runningTime: 2.5 * DIFFICULTY_TIME_PER_LEVEL });
+    expect(d2.level).toBe(2);
+  });
+
+  it('level clamps to DIFFICULTY_MAX_LEVEL beyond the cap', () => {
+    const huge = computeDifficulty({ distance: 1e6, runningTime: 1e6 });
+    expect(huge.level).toBe(DIFFICULTY_MAX_LEVEL);
+    // And the integer level never goes above the cap for any
+    // mix of inputs in the valid range.
+    for (const distance of [0, 100, 1000, 5000, 50000]) {
+      for (const runningTime of [0, 60, 600, 3600]) {
+        const d = computeDifficulty({ distance, runningTime });
+        expect(d.level).toBeLessThanOrEqual(DIFFICULTY_MAX_LEVEL);
+        expect(d.level).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  it('enemySpeedMultiplier is non-decreasing with level', () => {
+    let prev = -Infinity;
+    for (let lvl = 0; lvl <= DIFFICULTY_MAX_LEVEL + 2; lvl++) {
+      // Use both inputs together so the level actually equals
+      // `lvl` up to the cap and saturates at the cap beyond.
+      const d = computeDifficulty({
+        distance: lvl * DIFFICULTY_DISTANCE_PER_LEVEL,
+        runningTime: lvl * DIFFICULTY_TIME_PER_LEVEL,
+      });
+      expect(d.enemySpeedMultiplier).toBeGreaterThanOrEqual(prev);
+      expect(d.enemySpeedMultiplier).toBeGreaterThanOrEqual(1);
+      prev = d.enemySpeedMultiplier;
+    }
+  });
+
+  it('enemySpeedMultiplier is capped at ENEMY_SPEED_MAX_MULTIPLIER', () => {
+    const d = computeDifficulty({
+      distance: DIFFICULTY_MAX_LEVEL * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    expect(d.enemySpeedMultiplier).toBeCloseTo(ENEMY_SPEED_MAX_MULTIPLIER, 5);
+    // Anything past the cap must not push the multiplier past the
+    // cap either (closed form is the same).
+    const dBeyond = computeDifficulty({
+      distance: 1000 * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    expect(dBeyond.enemySpeedMultiplier).toBeCloseTo(ENEMY_SPEED_MAX_MULTIPLIER, 5);
+  });
+
+  it('enemySpeedMultiplier equals 1 + level * ENEMY_SPEED_PER_LEVEL when below the cap', () => {
+    for (let lvl = 0; lvl < DIFFICULTY_MAX_LEVEL; lvl++) {
+      const d = computeDifficulty({
+        distance: lvl * DIFFICULTY_DISTANCE_PER_LEVEL,
+        runningTime: 0,
+      });
+      expect(d.level).toBe(lvl);
+      expect(d.enemySpeedMultiplier).toBeCloseTo(
+        1 + lvl * ENEMY_SPEED_PER_LEVEL,
+        10,
+      );
+    }
+  });
+
+  it('maxObjectsPerSegment starts at MAX_OBJECTS_BASE and rises to MAX_OBJECTS_CAP', () => {
+    // Level 0..3 → 1 object.
+    for (let lvl = 0; lvl < 4; lvl++) {
+      const d = computeDifficulty({
+        distance: lvl * DIFFICULTY_DISTANCE_PER_LEVEL,
+        runningTime: 0,
+      });
+      expect(d.maxObjectsPerSegment).toBe(1);
+    }
+    // Level 4..7 → 2 objects.
+    for (let lvl = 4; lvl < 8; lvl++) {
+      const d = computeDifficulty({
+        distance: lvl * DIFFICULTY_DISTANCE_PER_LEVEL,
+        runningTime: 0,
+      });
+      expect(d.maxObjectsPerSegment).toBe(2);
+    }
+    // Level 8..10 → 3 objects (cap).
+    for (let lvl = 8; lvl <= DIFFICULTY_MAX_LEVEL; lvl++) {
+      const d = computeDifficulty({
+        distance: lvl * DIFFICULTY_DISTANCE_PER_LEVEL,
+        runningTime: 0,
+      });
+      expect(d.maxObjectsPerSegment).toBe(MAX_OBJECTS_CAP);
+    }
+  });
+
+  it('maxObjectsPerSegment never exceeds MAX_OBJECTS_CAP', () => {
+    // Try inputs that are way past the cap on both axes.
+    const d = computeDifficulty({ distance: 1e9, runningTime: 1e9 });
+    expect(d.maxObjectsPerSegment).toBeLessThanOrEqual(MAX_OBJECTS_CAP);
+  });
+
+  it('maxObjectsPerSegment grows by at most 1 per level step', () => {
+    // Walk the level ladder; the per-level delta must be ≤ 1 so
+    // the spawn loop never suddenly asks generateObjectsForSegment
+    // for an unreasonable number of objects.
+    let prev = computeDifficulty({ distance: 0, runningTime: 0 }).maxObjectsPerSegment;
+    for (let lvl = 0; lvl <= DIFFICULTY_MAX_LEVEL; lvl++) {
+      const d = computeDifficulty({
+        distance: lvl * DIFFICULTY_DISTANCE_PER_LEVEL,
+        runningTime: 0,
+      });
+      expect(d.maxObjectsPerSegment - prev).toBeLessThanOrEqual(1);
+      prev = d.maxObjectsPerSegment;
+    }
+  });
+
+  it('spawnCooldownSeconds shrinks with level and floors at SPAWN_COOLDOWN_MIN', () => {
+    // Level 0: base cooldown.
+    const d0 = computeDifficulty({ distance: 0, runningTime: 0 });
+    expect(d0.spawnCooldownSeconds).toBeCloseTo(SPAWN_COOLDOWN_BASE, 5);
+    // At cap: the linear shrink would be 0.25 - 10*0.018 = 0.07,
+    // which is below SPAWN_COOLDOWN_MIN=0.08 → must clamp.
+    const dMax = computeDifficulty({
+      distance: DIFFICULTY_MAX_LEVEL * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    expect(dMax.spawnCooldownSeconds).toBeCloseTo(SPAWN_COOLDOWN_MIN, 5);
+  });
+
+  it('spawnCooldownSeconds is strictly non-increasing in level', () => {
+    let prev = Infinity;
+    for (let lvl = 0; lvl <= DIFFICULTY_MAX_LEVEL + 3; lvl++) {
+      const d = computeDifficulty({
+        distance: lvl * DIFFICULTY_DISTANCE_PER_LEVEL,
+        runningTime: 0,
+      });
+      expect(d.spawnCooldownSeconds).toBeLessThanOrEqual(prev + 1e-9);
+      expect(d.spawnCooldownSeconds).toBeGreaterThanOrEqual(SPAWN_COOLDOWN_MIN - 1e-9);
+      prev = d.spawnCooldownSeconds;
+    }
+  });
+
+  it('spawnChance grows with level and caps at SPAWN_CHANCE_MAX', () => {
+    // Level 0: base chance.
+    const d0 = computeDifficulty({ distance: 0, runningTime: 0 });
+    expect(d0.spawnChance).toBeCloseTo(SPAWN_CHANCE_BASE, 5);
+    // At cap: linear rise 0.3 + 10*0.06 = 0.9, below the cap of 0.95.
+    const dMax = computeDifficulty({
+      distance: DIFFICULTY_MAX_LEVEL * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    expect(dMax.spawnChance).toBeCloseTo(SPAWN_CHANCE_BASE + DIFFICULTY_MAX_LEVEL * SPAWN_CHANCE_STEP, 5);
+    expect(dMax.spawnChance).toBeLessThanOrEqual(SPAWN_CHANCE_MAX);
+  });
+
+  it('spawnChance is strictly non-decreasing in level', () => {
+    let prev = -Infinity;
+    for (let lvl = 0; lvl <= DIFFICULTY_MAX_LEVEL + 3; lvl++) {
+      const d = computeDifficulty({
+        distance: lvl * DIFFICULTY_DISTANCE_PER_LEVEL,
+        runningTime: 0,
+      });
+      expect(d.spawnChance).toBeGreaterThanOrEqual(prev - 1e-9);
+      expect(d.spawnChance).toBeGreaterThanOrEqual(SPAWN_CHANCE_BASE - 1e-9);
+      expect(d.spawnChance).toBeLessThanOrEqual(SPAWN_CHANCE_MAX + 1e-9);
+      prev = d.spawnChance;
+    }
+  });
+
+  it('rawProgress reflects the unfloored / uncapped combined distance + time progress', () => {
+    const d = computeDifficulty({
+      distance: 1.5 * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0.5 * DIFFICULTY_TIME_PER_LEVEL,
+    });
+    // raw = 1.5 + 0.5 = 2.0
+    expect(d.rawProgress).toBeCloseTo(2.0, 10);
+    expect(d.level).toBe(2);
+  });
+
+  it('rawProgress continues to grow past the cap (only the level is clamped)', () => {
+    const d = computeDifficulty({
+      distance: 100 * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 100 * DIFFICULTY_TIME_PER_LEVEL,
+    });
+    // Level saturates at DIFFICULTY_MAX_LEVEL, raw keeps climbing.
+    expect(d.level).toBe(DIFFICULTY_MAX_LEVEL);
+    expect(d.rawProgress).toBe(200);
+  });
+
+  it('distance and time both feed the curve additively (no single axis dominates)', () => {
+    // distance = DIST/2 + 0 time  ⇒  raw = 0.5  ⇒  level 0.
+    const a = computeDifficulty({
+      distance: 0.5 * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    expect(a.level).toBe(0);
+    // runningTime = TIME/2 + 0 distance  ⇒  raw = 0.5  ⇒  level 0.
+    const b = computeDifficulty({
+      distance: 0,
+      runningTime: 0.5 * DIFFICULTY_TIME_PER_LEVEL,
+    });
+    expect(b.level).toBe(0);
+    // Both at half: raw = 0.5 + 0.5 = 1.0  ⇒  level 1. This
+    // confirms neither axis is ignored when computing the raw
+    // progress.
+    const c = computeDifficulty({
+      distance: 0.5 * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0.5 * DIFFICULTY_TIME_PER_LEVEL,
+    });
+    expect(c.level).toBe(1);
+  });
+
+  it('every numeric field in the snapshot is finite (no NaN/Infinity leaks)', () => {
+    // Exhaustive sweep including hostile inputs.
+    const cases = [
+      { distance: 0, runningTime: 0 },
+      { distance: 100, runningTime: 60 },
+      { distance: 5000, runningTime: 600 },
+      { distance: 1e9, runningTime: 1e9 },
+      { distance: -1, runningTime: -1 },
+      { distance: NaN, runningTime: NaN },
+      { distance: Infinity, runningTime: -Infinity },
+      {},
+      { distance: undefined, runningTime: undefined },
+    ];
+    for (const params of cases) {
+      const d = computeDifficulty(params);
+      for (const key of [
+        'level',
+        'rawProgress',
+        'enemySpeedMultiplier',
+        'spawnDensityMultiplier',
+        'maxObjectsPerSegment',
+        'spawnCooldownSeconds',
+        'spawnChance',
+      ]) {
+        expect(Number.isFinite(d[key])).toBe(true);
+      }
+    }
+  });
+
+  it('snapshot fields stay within their documented ranges', () => {
+    const cases = [
+      { distance: 0, runningTime: 0 },
+      { distance: 100, runningTime: 60 },
+      { distance: 5000, runningTime: 600 },
+      { distance: 1e9, runningTime: 1e9 },
+    ];
+    for (const params of cases) {
+      const d = computeDifficulty(params);
+      expect(d.level).toBeGreaterThanOrEqual(0);
+      expect(d.level).toBeLessThanOrEqual(DIFFICULTY_MAX_LEVEL);
+      expect(d.enemySpeedMultiplier).toBeGreaterThanOrEqual(1);
+      expect(d.enemySpeedMultiplier).toBeLessThanOrEqual(ENEMY_SPEED_MAX_MULTIPLIER);
+      expect(d.spawnDensityMultiplier).toBeGreaterThanOrEqual(1);
+      expect(d.spawnDensityMultiplier).toBeLessThanOrEqual(SPAWN_DENSITY_MAX_MULTIPLIER);
+      expect(d.maxObjectsPerSegment).toBeGreaterThanOrEqual(MAX_OBJECTS_BASE);
+      expect(d.maxObjectsPerSegment).toBeLessThanOrEqual(MAX_OBJECTS_CAP);
+      expect(d.spawnCooldownSeconds).toBeGreaterThanOrEqual(SPAWN_COOLDOWN_MIN);
+      expect(d.spawnCooldownSeconds).toBeLessThanOrEqual(SPAWN_COOLDOWN_BASE);
+      expect(d.spawnChance).toBeGreaterThanOrEqual(SPAWN_CHANCE_BASE);
+      expect(d.spawnChance).toBeLessThanOrEqual(SPAWN_CHANCE_MAX);
+    }
+  });
+
+  it('matches the level-0 baseline exactly (legacy behaviour preserved)', () => {
+    // The previous spawn loop used a hard-coded 0.3 spawn chance
+    // and 0.25 s cooldown. Lock in that the new function returns
+    // these exact values at level 0, so a regression that
+    // accidentally changed the constants is caught here.
+    const d = computeDifficulty({ distance: 0, runningTime: 0 });
+    expect(d.spawnChance).toBeCloseTo(0.3, 10);
+    expect(d.spawnCooldownSeconds).toBeCloseTo(0.25, 10);
+    expect(d.maxObjectsPerSegment).toBe(1);
+    expect(d.enemySpeedMultiplier).toBe(1);
+  });
+
+  it('step from level N to N+1 strictly increases difficulty across every axis', () => {
+    // The curve is supposed to be monotone-increasing in level
+    // on every output field except spawnCooldownSeconds (which
+    // shrinks as the game speeds up). Verify the level-step
+    // direction is consistent across all fields.
+    const a = computeDifficulty({
+      distance: 1 * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    const b = computeDifficulty({
+      distance: 2 * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    expect(b.level).toBe(a.level + 1);
+    expect(b.enemySpeedMultiplier).toBeGreaterThan(a.enemySpeedMultiplier);
+    expect(b.spawnDensityMultiplier).toBeGreaterThanOrEqual(a.spawnDensityMultiplier);
+    expect(b.maxObjectsPerSegment).toBeGreaterThanOrEqual(a.maxObjectsPerSegment);
+    expect(b.spawnCooldownSeconds).toBeLessThanOrEqual(a.spawnCooldownSeconds);
+    expect(b.spawnChance).toBeGreaterThanOrEqual(a.spawnChance);
+  });
+
+  it('time-only progression still climbs the curve (slow player is not stuck at level 0)', () => {
+    // After 5 minutes (300 s) of play with no distance gain, the
+    // player should be at level 300 / 30 = 10 (the cap).
+    const d = computeDifficulty({ distance: 0, runningTime: 300 });
+    expect(d.level).toBe(DIFFICULTY_MAX_LEVEL);
+    expect(d.enemySpeedMultiplier).toBeCloseTo(ENEMY_SPEED_MAX_MULTIPLIER, 5);
+  });
+
+  it('distance-only progression still climbs the curve (fast player is not stuck at level 0)', () => {
+    // After 2000 m of travel (no time) the player should be at
+    // the cap.
+    const d = computeDifficulty({
+      distance: DIFFICULTY_MAX_LEVEL * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    expect(d.level).toBe(DIFFICULTY_MAX_LEVEL);
   });
 });

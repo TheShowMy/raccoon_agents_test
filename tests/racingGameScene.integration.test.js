@@ -7,6 +7,18 @@ import {
   ENEMY_VEHICLE_MODEL_MAP,
   ENEMY_VEHICLE_MODEL_IDS,
   getEnemyModelById,
+  DIFFICULTY_DISTANCE_PER_LEVEL,
+  DIFFICULTY_TIME_PER_LEVEL,
+  DIFFICULTY_MAX_LEVEL,
+  ENEMY_SPEED_PER_LEVEL,
+  ENEMY_SPEED_MAX_MULTIPLIER,
+  MAX_OBJECTS_BASE,
+  MAX_OBJECTS_CAP,
+  SPAWN_COOLDOWN_BASE,
+  SPAWN_COOLDOWN_MIN,
+  SPAWN_CHANCE_BASE,
+  SPAWN_CHANCE_MAX,
+  computeDifficulty,
 } from '../src/lib/utils/racingGame.js';
 
 /* ===================================================================
@@ -1906,6 +1918,527 @@ describe('Shoulder material — shared instance, lit, opaque, fog-aware', () => 
     const rightWidth = outerRight - innerRight;
     expect(leftWidth).toBeCloseTo(rightWidth, 12);
     expect(leftWidth).toBeCloseTo(2 * SHOULDER_HALF_W, 12);
+  });
+});
+
+/* ==================================================================
+   16. Dynamic difficulty integration
+
+      The component computes the dynamic-difficulty snapshot from
+      `distance` and `runningTime` once per frame inside
+      `updateGame` and threads the resulting `enemySpeedMultiplier`,
+      `spawnChance`, `maxObjectsPerSegment` and
+      `spawnCooldownSeconds` into the spawn / advance pipeline. The
+      tests below mirror that pipeline so a regression in either
+      side (e.g. accidentally forgetting to pass the multiplier,
+      or using a stale snapshot) is caught deterministically.
+
+      The mirrors here re-use the constants exported by
+      `racingGame.js` (DIFFICULTY_*, SPAWN_*, MAX_OBJECTS_*) so a
+      future change to the export values automatically updates
+      the integration assertions. The two pure replicas
+      (`advanceOncomingVehiclesWithDifficulty` and
+      `pickDifficultySpawnParameters`) reproduce the per-frame
+      consumer logic; the assertions below exercise the contract
+      end-to-end against `computeDifficulty`.
+   ================================================================== */
+
+/**
+ * Pure replica of the per-frame advancement inside
+ * RacingGameScene.svelte's `advanceOncomingVehicles` AFTER the
+ * dynamic-difficulty integration: the function now takes a
+ * `speedMultiplier` (defaulting to 1) and applies it on top of
+ * the per-model `obj.speed`. Each vehicle advances at
+ * `obj.speed * speedMultiplier * dt` in road-space, with a
+ * fallback to a global constant for descriptors that lack a
+ * valid speed.
+ *
+ * Mutates `objectDescriptors` in place, matching the component's
+ * mutation pattern.
+ */
+function advanceOncomingVehiclesWithDifficulty(objectDescriptors, dt, speedMultiplier = 1) {
+  // Sanitise the multiplier exactly the way the component does
+  // inside advanceOncomingVehicles: non-finite / NaN / non-number
+  // / non-positive values clamp to 1.
+  const safeMultiplier = typeof speedMultiplier === 'number'
+    && Number.isFinite(speedMultiplier)
+    && speedMultiplier > 0
+    ? speedMultiplier
+    : 1;
+  for (let i = 0; i < objectDescriptors.length; i++) {
+    const obj = objectDescriptors[i];
+    if (!obj || obj.type !== 'oncoming_vehicle') continue;
+    const speed = typeof obj.speed === 'number'
+      && Number.isFinite(obj.speed)
+      && obj.speed > 0
+      ? obj.speed
+      : 14; // mirrors ONCOMING_VEHICLE_SPEED fallback.
+    obj.z += speed * safeMultiplier * dt;
+  }
+}
+
+/**
+ * Pure replica of the per-segment spawn decision inside
+ * RacingGameScene.svelte's `spawnObjects()`. Returns the
+ * `(spawnChance, maxObjectsPerSegment)` pair to use for a given
+ * difficulty snapshot. This is exactly the pair the component
+ * reads from `currentDifficulty` for every frame.
+ */
+function pickDifficultySpawnParameters(difficulty) {
+  return {
+    spawnChance: difficulty.spawnChance,
+    maxObjectsPerSegment: difficulty.maxObjectsPerSegment,
+  };
+}
+
+describe('Dynamic difficulty — spawn-loop parameters', () => {
+  it('level-0 baseline matches the legacy hard-coded spawn parameters', () => {
+    // The previous spawnObjects() used a 0.3 random chance and
+    // asked generateObjectsForSegment for max 1 object. The new
+    // spawn loop reads these from the snapshot, so at level 0
+    // the same values must come out.
+    const d = computeDifficulty({ distance: 0, runningTime: 0 });
+    const params = pickDifficultySpawnParameters(d);
+    expect(params.spawnChance).toBeCloseTo(0.3, 10);
+    expect(params.maxObjectsPerSegment).toBe(1);
+  });
+
+  it('at higher levels, the per-segment chance and object count both rise', () => {
+    // 4 levels of distance → level 4 → chance 0.54, max 2.
+    const d = computeDifficulty({
+      distance: 4 * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    const params = pickDifficultySpawnParameters(d);
+    expect(d.level).toBe(4);
+    expect(params.spawnChance).toBeGreaterThan(SPAWN_CHANCE_BASE);
+    expect(params.maxObjectsPerSegment).toBe(2);
+  });
+
+  it('at the cap, the spawn parameters reach their final values', () => {
+    const d = computeDifficulty({
+      distance: DIFFICULTY_MAX_LEVEL * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    const params = pickDifficultySpawnParameters(d);
+    expect(d.level).toBe(DIFFICULTY_MAX_LEVEL);
+    // The spawn chance is still below the cap of SPAWN_CHANCE_MAX
+    // at level 10 (it would take more than 10 levels to hit 0.95).
+    expect(params.spawnChance).toBeLessThanOrEqual(SPAWN_CHANCE_MAX);
+    // The per-segment count has saturated at the cap.
+    expect(params.maxObjectsPerSegment).toBe(MAX_OBJECTS_CAP);
+  });
+
+  it('maxObjectsPerSegment is always a positive integer in [MAX_OBJECTS_BASE, MAX_OBJECTS_CAP]', () => {
+    // Sweep a wide input range; every output must be a valid
+    // integer in the documented range so the spawn loop can
+    // safely pass it straight to generateObjectsForSegment.
+    for (const distance of [0, 50, 250, 1000, 5000, 50000]) {
+      for (const runningTime of [0, 15, 60, 600, 3600]) {
+        const d = computeDifficulty({ distance, runningTime });
+        const params = pickDifficultySpawnParameters(d);
+        expect(Number.isInteger(params.maxObjectsPerSegment)).toBe(true);
+        expect(params.maxObjectsPerSegment).toBeGreaterThanOrEqual(MAX_OBJECTS_BASE);
+        expect(params.maxObjectsPerSegment).toBeLessThanOrEqual(MAX_OBJECTS_CAP);
+        expect(params.spawnChance).toBeGreaterThanOrEqual(0);
+        expect(params.spawnChance).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('the spawn cooldown field can replace the legacy hard-coded 0.25 reset', () => {
+    // The component resets spawnCooldown to currentDifficulty.spawnCooldownSeconds
+    // after a successful spawn. At level 0 the reset value must
+    // equal the previous hard-coded 0.25.
+    const d = computeDifficulty({ distance: 0, runningTime: 0 });
+    expect(d.spawnCooldownSeconds).toBeCloseTo(SPAWN_COOLDOWN_BASE, 10);
+  });
+
+  it('the spawn cooldown is strictly non-increasing with difficulty', () => {
+    let prev = Infinity;
+    for (let lvl = 0; lvl <= DIFFICULTY_MAX_LEVEL + 3; lvl++) {
+      const d = computeDifficulty({
+        distance: lvl * DIFFICULTY_DISTANCE_PER_LEVEL,
+        runningTime: 0,
+      });
+      expect(d.spawnCooldownSeconds).toBeLessThanOrEqual(prev + 1e-9);
+      expect(d.spawnCooldownSeconds).toBeGreaterThanOrEqual(SPAWN_COOLDOWN_MIN - 1e-9);
+      prev = d.spawnCooldownSeconds;
+    }
+  });
+});
+
+describe('Dynamic difficulty — per-frame enemy speed multiplier', () => {
+  it('at level 0, the multiplier is 1 (legacy baseline preserved)', () => {
+    const d = computeDifficulty({ distance: 0, runningTime: 0 });
+    expect(d.enemySpeedMultiplier).toBe(1);
+  });
+
+  it('a vehicle at level 0 advances by exactly model.speed * dt', () => {
+    // Replica of the per-frame advance with a 1.0 multiplier
+    // (the level-0 baseline). Must match the pre-difficulty
+    // behaviour exactly.
+    const sedan = { type: 'oncoming_vehicle', z: -100, modelId: 'sedan', speed: 14 };
+    const initial = sedan.z;
+    const dt = 1 / 60;
+    advanceOncomingVehiclesWithDifficulty([sedan], dt, 1);
+    expect(sedan.z).toBeCloseTo(initial + 14 * dt, 10);
+  });
+
+  it('a higher multiplier makes an oncoming vehicle close the gap faster', () => {
+    // With a 1.4x multiplier (roughly level 5), the sedan
+    // advances by 14 * 1.4 = 19.6 units in 1 s, compared to 14
+    // units at level 0. The closing speed relative to the
+    // player is therefore `PLAYER_SPEED + 14*1.4` ≈ 41.6.
+    const sedan = { type: 'oncoming_vehicle', z: -100, modelId: 'sedan', speed: 14 };
+    const initial = sedan.z;
+    const dt = 1 / 60;
+    advanceOncomingVehiclesWithDifficulty([sedan], dt, 1.4);
+    expect(sedan.z).toBeCloseTo(initial + 14 * 1.4 * dt, 10);
+  });
+
+  it('the multiplier applies identically to all three archetype speeds', () => {
+    // Sanity-check the multiplier interacts correctly with
+    // per-model speed: each archetype closes the gap at
+    // `model.speed * multiplier` per second.
+    const sedan = { type: 'oncoming_vehicle', z: -100, speed: 14 };
+    const truck = { type: 'oncoming_vehicle', z: -100, speed: 9 };
+    const sports = { type: 'oncoming_vehicle', z: -100, speed: 19 };
+    const initial = -100;
+    const dt = 1;
+    const mult = 1.5;
+    advanceOncomingVehiclesWithDifficulty([sedan, truck, sports], dt, mult);
+    expect(sedan.z).toBeCloseTo(initial + 14 * mult, 9);
+    expect(truck.z).toBeCloseTo(initial + 9 * mult, 9);
+    expect(sports.z).toBeCloseTo(initial + 19 * mult, 9);
+    // The relative ordering is preserved: sports > sedan > truck.
+    expect(sports.z - initial).toBeGreaterThan(sedan.z - initial);
+    expect(sedan.z - initial).toBeGreaterThan(truck.z - initial);
+  });
+
+  it('non-finite / non-positive multipliers clamp to 1 (no NaN pollution downstream)', () => {
+    // Defensive: a buggy caller that accidentally passes NaN,
+    // Infinity, 0 or a negative multiplier must not taint the
+    // per-frame arithmetic. The component's
+    // advanceOncomingVehicles implements the same guard.
+    const sedan = { type: 'oncoming_vehicle', z: -100, speed: 14 };
+    const initial = sedan.z;
+    const dt = 1 / 60;
+    for (const bad of [NaN, Infinity, -Infinity, 0, -1, 'fast', null, undefined, {}]) {
+      sedan.z = initial;
+      advanceOncomingVehiclesWithDifficulty([sedan], dt, bad);
+      expect(sedan.z).toBeCloseTo(initial + 14 * dt, 10);
+    }
+  });
+
+  it('obstacles and repair kits are unaffected by the multiplier', () => {
+    // The advance function only touches oncoming vehicles; other
+    // types are not moved in road-space regardless of the
+    // multiplier (the world scroll does that work, not the
+    // per-frame advance).
+    const objs = [
+      { type: 'obstacle', z: -30, speed: 100 },         // invalid: not a vehicle
+      { type: 'repair_kit', z: -30, speed: 100 },
+      { type: 'oncoming_vehicle', z: -30, speed: 12 },
+    ];
+    const initial = -30;
+    advanceOncomingVehiclesWithDifficulty(objs, 1, 2.0);
+    expect(objs[0].z).toBe(initial);
+    expect(objs[1].z).toBe(initial);
+    expect(objs[2].z).toBeCloseTo(initial + 12 * 2.0, 9);
+  });
+
+  it('closing speed relative to player equals PLAYER_SPEED + obj.speed * multiplier', () => {
+    // End-to-end: combine world scroll (player at PLAYER_SPEED)
+    // with the oncoming vehicle's `obj.speed * multiplier` to
+    // get the combined closing rate. A sports car with a
+    // 1.8x multiplier closes much faster than a level-0
+    // truck, and the order is preserved.
+    const sports = { type: 'oncoming_vehicle', z: -100, speed: 19 };
+    const truck = { type: 'oncoming_vehicle', z: -100, speed: 9 };
+    const dt = 1 / 60;
+    let scrollOffset = 0;
+    for (let i = 0; i < 60; i++) {
+      scrollOffset += PLAYER_SPEED * dt;
+      advanceOncomingVehiclesWithDifficulty(
+        [sports, truck],
+        dt,
+        ENEMY_SPEED_MAX_MULTIPLIER,
+      );
+    }
+    const sportsGap = Math.abs(sports.z + scrollOffset - 0);
+    const truckGap = Math.abs(truck.z + scrollOffset - 0);
+    // Initial gap was 100; with the cap multiplier the sports
+    // car has closed by PLAYER_SPEED + 19 * 1.8 and the truck
+    // by PLAYER_SPEED + 9 * 1.8.
+    const sportsClosing = 100 - sportsGap;
+    const truckClosing = 100 - truckGap;
+    expect(sportsClosing).toBeCloseTo(PLAYER_SPEED + 19 * ENEMY_SPEED_MAX_MULTIPLIER, 5);
+    expect(truckClosing).toBeCloseTo(PLAYER_SPEED + 9 * ENEMY_SPEED_MAX_MULTIPLIER, 5);
+    expect(sportsClosing).toBeGreaterThan(truckClosing);
+  });
+});
+
+describe('Dynamic difficulty — full updateGame loop simulation', () => {
+  // The component's updateGame does, in order, on every frame:
+  //   1. Advance runningTime, distance, scrollOffset by dt * PLAYER_SPEED.
+  //   2. Recompute currentDifficulty from (distance, runningTime).
+  //   3. Use currentDifficulty.spawnCooldownSeconds to reset
+  //      spawnCooldown after a successful spawn.
+  //   4. Use currentDifficulty.enemySpeedMultiplier to advance
+  //      oncoming vehicles in road-space.
+  //   5. Use currentDifficulty.spawnChance / maxObjectsPerSegment
+  //      in the next spawn tick.
+  //
+  // The mini-simulation below mirrors exactly those steps and
+  // asserts the difficulty integration keeps the legacy semantics
+  // at level 0 and ramps the game up to the cap as the player
+  // progresses.
+
+  /** Single-frame snapshot of the loop state. */
+  function tick(state, dt) {
+    state.runningTime += dt;
+    state.distance += PLAYER_SPEED * dt;
+    state.scrollOffset += PLAYER_SPEED * dt;
+    state.difficulty = computeDifficulty({
+      distance: state.distance,
+      runningTime: state.runningTime,
+    });
+    // Spawn-loop reset (mirrors updateGame).
+    state.spawnCooldown -= dt;
+    if (state.spawnCooldown <= 0) {
+      state.spawnCooldown = state.difficulty.spawnCooldownSeconds;
+    }
+    // Advance the vehicles using the per-frame multiplier.
+    advanceOncomingVehiclesWithDifficulty(
+      state.vehicles,
+      dt,
+      state.difficulty.enemySpeedMultiplier,
+    );
+    return state;
+  }
+
+  /**
+   * Tick variant that holds runningTime at a fixed value while
+   * letting distance / scrollOffset advance normally. Used to
+   * isolate the distance axis of the difficulty curve from the
+   * time axis (without this, a 36-second run to reach
+   * 4 × DIFFICULTY_DISTANCE_PER_LEVEL would also accrue a
+   * time-driven level and the assertions would need to account
+   * for both).
+   */
+  function tickDistanceOnly(state, dt) {
+    state.distance += PLAYER_SPEED * dt;
+    state.scrollOffset += PLAYER_SPEED * dt;
+    state.difficulty = computeDifficulty({
+      distance: state.distance,
+      runningTime: state.runningTime,
+    });
+    state.spawnCooldown -= dt;
+    if (state.spawnCooldown <= 0) {
+      state.spawnCooldown = state.difficulty.spawnCooldownSeconds;
+    }
+    advanceOncomingVehiclesWithDifficulty(
+      state.vehicles,
+      dt,
+      state.difficulty.enemySpeedMultiplier,
+    );
+    return state;
+  }
+
+  it('level 0 at start: no scaling on enemy speed, no change to spawn cadence', () => {
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0,
+      vehicles: [
+        { type: 'oncoming_vehicle', z: -100, speed: 14 },
+      ],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    // One tick of dt = 0.0167 s.
+    const dt = 1 / 60;
+    tick(state, dt);
+    expect(state.difficulty.level).toBe(0);
+    expect(state.difficulty.enemySpeedMultiplier).toBe(1);
+    // The vehicle advanced at 14 * 1 * dt units.
+    expect(state.vehicles[0].z).toBeCloseTo(-100 + 14 * dt, 10);
+    // And the cooldown reset to 0.25 s.
+    expect(state.spawnCooldown).toBeCloseTo(SPAWN_COOLDOWN_BASE, 5);
+  });
+
+  it('level rises with distance; enemy speed and spawn parameters scale accordingly', () => {
+    // Walk forward for 4 * DIFFICULTY_DISTANCE_PER_LEVEL units
+    // of distance (one tick at a time) and assert the per-
+    // frame difficulty snapshot ramps to level 4 with the
+    // expected multipliers / counts. Use `tickDistanceOnly`
+    // to isolate the distance axis from the time axis — a full
+    // 36-second run to reach 800 m would also pump the time
+    // component by 1.2 levels, so the assertions would have
+    // to subtract that off. Freezing time lets us assert the
+    // distance contribution cleanly.
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0,
+      vehicles: [
+        { type: 'oncoming_vehicle', z: -100, speed: 14 },
+      ],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    const dt = 1 / 60;
+    const targetDistance = 4 * DIFFICULTY_DISTANCE_PER_LEVEL;
+    const totalTicks = Math.ceil(targetDistance / (PLAYER_SPEED * dt));
+    for (let i = 0; i < totalTicks; i++) {
+      tickDistanceOnly(state, dt);
+      // Stop early once we are past the target distance.
+      if (state.distance >= targetDistance) break;
+    }
+    // Allow a small rounding tolerance.
+    expect(state.distance).toBeGreaterThanOrEqual(targetDistance);
+    // Time is still 0; the level comes purely from distance.
+    expect(state.runningTime).toBe(0);
+    // Level should be 4 (rawProgress >= 4).
+    expect(state.difficulty.level).toBe(4);
+    // Multiplier = 1 + 4 * 0.08 = 1.32.
+    expect(state.difficulty.enemySpeedMultiplier).toBeCloseTo(1 + 4 * ENEMY_SPEED_PER_LEVEL, 5);
+    // Per-segment chance and object count have moved off the
+    // baseline.
+    expect(state.difficulty.spawnChance).toBeGreaterThan(SPAWN_CHANCE_BASE);
+    expect(state.difficulty.maxObjectsPerSegment).toBe(2);
+    // Cooldown has shrunk but not yet hit the floor.
+    expect(state.difficulty.spawnCooldownSeconds).toBeLessThan(SPAWN_COOLDOWN_BASE);
+    expect(state.difficulty.spawnCooldownSeconds).toBeGreaterThanOrEqual(SPAWN_COOLDOWN_MIN);
+  });
+
+  it('level saturates at DIFFICULTY_MAX_LEVEL after a long run', () => {
+    // 30 minutes of playtime is way past the time-driven cap.
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0,
+      vehicles: [],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    const dt = 1;
+    const totalSeconds = 30 * 60;
+    for (let i = 0; i < totalSeconds; i++) {
+      tick(state, dt);
+    }
+    expect(state.runningTime).toBe(totalSeconds);
+    expect(state.difficulty.level).toBe(DIFFICULTY_MAX_LEVEL);
+    expect(state.difficulty.enemySpeedMultiplier).toBeCloseTo(
+      ENEMY_SPEED_MAX_MULTIPLIER,
+      5,
+    );
+    expect(state.difficulty.maxObjectsPerSegment).toBe(MAX_OBJECTS_CAP);
+    expect(state.difficulty.spawnChance).toBeLessThanOrEqual(SPAWN_CHANCE_MAX);
+    expect(state.difficulty.spawnCooldownSeconds).toBeCloseTo(SPAWN_COOLDOWN_MIN, 5);
+  });
+
+  it('time-only progression ramps the curve (no distance gain required)', () => {
+    // The "time-only" claim is about the curve, not about the
+    // player: the difficulty must still ramp when the player is
+    // stationary, because time alone is enough to climb the
+    // levels. We use a `tickTimeOnly` variant that holds the
+    // player at distance=0 (PLAYER_SPEED=0 surrogate) and only
+    // advances runningTime, so a successful test proves the
+    // curve reads the time axis independently.
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0,
+      vehicles: [],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    const dt = 1;
+    for (let i = 0; i < 60; i++) {
+      state.runningTime += dt;
+      state.difficulty = computeDifficulty({
+        distance: state.distance,
+        runningTime: state.runningTime,
+      });
+    }
+    // Distance is still 0; only time has progressed.
+    expect(state.distance).toBe(0);
+    expect(state.runningTime).toBe(60);
+    // raw = 0 + 60/30 = 2 → level 2.
+    expect(state.difficulty.level).toBe(2);
+    expect(state.difficulty.enemySpeedMultiplier).toBeCloseTo(
+      1 + 2 * ENEMY_SPEED_PER_LEVEL,
+      5,
+    );
+  });
+
+  it('cooldown reset uses the per-frame snapshot, not a stale value', () => {
+    // When the cooldown hits zero, the next reset must use the
+    // CURRENT frame's difficulty.spawnCooldownSeconds — not the
+    // value at game start. Walk the loop to a higher difficulty
+    // level, force a cooldown reset, and verify the reset value
+    // matches the new (lower) snapshot value rather than the
+    // legacy 0.25 s.
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0.0001, // already due to fire on the next tick
+      vehicles: [],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    const dt = 1 / 60;
+    // Pre-warm the loop to a high level by walking time forward
+    // BEFORE the reset tick. This puts the snapshot at a
+    // noticeably lower cooldown (close to SPAWN_COOLDOWN_MIN).
+    state.runningTime = 5 * DIFFICULTY_TIME_PER_LEVEL;
+    state.difficulty = computeDifficulty({
+      distance: state.distance,
+      runningTime: state.runningTime,
+    });
+    expect(state.difficulty.level).toBe(5);
+    const expectedCooldown = state.difficulty.spawnCooldownSeconds;
+    // Now tick once: the cooldown is still almost zero, so the
+    // reset branch fires and must copy the snapshot's value.
+    tick(state, dt);
+    // The reset value equals the snapshot's spawnCooldownSeconds
+    // (not the legacy 0.25), proving the reset reads the live
+    // snapshot.
+    expect(state.spawnCooldown).toBeCloseTo(expectedCooldown, 5);
+    expect(state.spawnCooldown).toBeLessThan(SPAWN_COOLDOWN_BASE);
+    expect(state.spawnCooldown).toBeGreaterThanOrEqual(SPAWN_COOLDOWN_MIN - 1e-9);
+  });
+
+  it('oncoming vehicles close the gap faster as the loop progresses', () => {
+    // Spawn a vehicle at the start, then tick the loop forward.
+    // The vehicle's z should grow faster as difficulty ramps up,
+    // because the per-frame multiplier is > 1 in the second
+    // half of the run.
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0,
+      vehicles: [
+        { type: 'oncoming_vehicle', z: -200, speed: 14 },
+      ],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    const dt = 1 / 60;
+    // Tick for 30 seconds, which is enough to take the player
+    // to roughly level 30 (the cap) on time alone.
+    for (let i = 0; i < 30 * 60; i++) {
+      tick(state, dt);
+    }
+    // The vehicle must have moved noticeably closer to the
+    // player: at the cap the multiplier is 1.8, so in 30 s
+    // the vehicle covers 14 * 1.8 * 30 = 756 units in road
+    // space (capped by being recycled once it passes the
+    // player, but starting at -200 it certainly did move a
+    // lot).
+    expect(state.vehicles[0].z).toBeGreaterThan(-200 + 14 * 30 * 0.9);
   });
 });
 

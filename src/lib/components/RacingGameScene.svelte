@@ -16,6 +16,7 @@
     startEngineHum, stopEngineHum,
     playLaneSwitchSound, playJumpSound, playCollisionSound,
     playPickupSound, playGameOverSound,
+    computeDifficulty,
   } from '../utils/racingGame.js';
 
   /* ===================================================================
@@ -1233,8 +1234,34 @@
      =================================================================== */
   let spawnCooldown = 0;
 
+  // Dynamic-difficulty snapshot. Recomputed every frame inside
+  // `updateGame` from the freshly-updated `distance` and
+  // `runningTime` and consumed by `spawnObjects` (for the per-
+  // segment spawn chance and the per-segment max object count)
+  // and by `advanceOncomingVehicles` (for the enemy speed
+  // multiplier). Stored at module scope so the spawn / advance
+  // functions can read it without having to thread the same
+  // snapshot object through every call site. Initialised to a
+  // level-0 snapshot (distance=0, runningTime=0) so the very
+  // first frame — which `updateGame` enters with a 0-deltaTime
+  // `runningTime` advance but a still-0 `distance` — sees
+  // baseline difficulty, matching the previous hard-coded
+  // behaviour exactly.
+  let currentDifficulty = computeDifficulty({ distance: 0, runningTime: 0 });
+
   function spawnObjects() {
     if (!roadSegments.length) return;
+
+    // Pull the per-frame difficulty parameters out of the
+    // snapshot so the rest of the function reads a single,
+    // consistent set of values for this frame. Reading from the
+    // module-level `currentDifficulty` rather than from
+    // `distance` / `runningTime` directly keeps the contract
+    // "difficulty is computed once per frame" honest: even if
+    // some future refactor mutates `distance` during the spawn
+    // loop, the snapshot is the source of truth.
+    const spawnChance = currentDifficulty.spawnChance;
+    const maxObjectsPerSegment = currentDifficulty.maxObjectsPerSegment;
 
     // Only spawn on segments that are approaching the player
     for (let i = 0; i < roadSegments.length; i++) {
@@ -1269,10 +1296,12 @@
       );
       if (hasObjects) continue;
 
-      // Random spawn chance
-      if (Math.random() > 0.3) continue;
+      // Per-segment spawn chance, ramped by the dynamic-difficulty
+      // snapshot. At level 0 the chance equals the prior hard-coded
+      // 0.3; at higher levels it climbs toward SPAWN_CHANCE_MAX.
+      if (Math.random() > spawnChance) continue;
 
-      const objects = generateObjectsForSegment(seg, 1);
+      const objects = generateObjectsForSegment(seg, maxObjectsPerSegment);
       objectDescriptors.push(...objects);
       if (tileData) tileData.spawned = true;
     }
@@ -1313,15 +1342,36 @@
    * any hand-crafted / legacy descriptor and keeping the per-frame
    * arithmetic a single `+=` per vehicle.
    *
+   * The `speedMultiplier` parameter carries the per-frame dynamic-
+   * difficulty multiplier (see {@link computeDifficulty} /
+   * `currentDifficulty.enemySpeedMultiplier`). Applying the
+   * multiplier at advance time — rather than at spawn time —
+   * means every active vehicle in the scene feels the current
+   * difficulty, so the curve is smooth even when no new vehicles
+   * are spawning. A multiplier of `1` (the default) is a no-op,
+   * preserving the previous behaviour for any caller that does
+   * not pass an explicit multiplier.
+   *
    * Mutating obj.z (rather than a separate "vehicle-local Z" field)
    * keeps the downstream world-Z calculation `obj.z + scrollOffset`
    * unchanged, so visual repositioning, recycling and collision
    * detection all keep working with their existing arithmetic — the
    * oncoming vehicle simply closes the gap faster than a stationary
-   * prop would (at PLAYER_SPEED + obj.speed instead of just
-   * PLAYER_SPEED), with `obj.speed` now varying per model.
+   * prop would (at PLAYER_SPEED + obj.speed*speedMultiplier instead
+   * of just PLAYER_SPEED), with `obj.speed` now varying per model
+   * and `speedMultiplier` now varying per frame.
    */
-  function advanceOncomingVehicles(dt) {
+  function advanceOncomingVehicles(dt, speedMultiplier = 1) {
+    // Sanitise the multiplier the same way `computeDifficulty` does
+    // on its output: non-finite, NaN, negative or non-number values
+    // are clamped to 1 (no scaling). This keeps a buggy caller from
+    // silently breaking the per-frame arithmetic the way a NaN
+    // multiplier would taint every obj.z downstream.
+    const safeMultiplier = typeof speedMultiplier === 'number'
+      && Number.isFinite(speedMultiplier)
+      && speedMultiplier > 0
+      ? speedMultiplier
+      : 1;
     for (let i = 0; i < objectDescriptors.length; i++) {
       const obj = objectDescriptors[i];
       if (!obj || obj.type !== OBJECT_TYPES.ONCOMING_VEHICLE) continue;
@@ -1338,7 +1388,7 @@
         && obj.speed > 0
         ? obj.speed
         : ONCOMING_VEHICLE_SPEED;
-      obj.z += speed * dt;
+      obj.z += speed * safeMultiplier * dt;
     }
   }
 
@@ -1361,6 +1411,18 @@
     displayHealth = health;
     displayScore = calculateScore(distance, 1);
 
+    // -- Dynamic difficulty --
+    // Recompute the per-frame difficulty snapshot from the freshly-
+    // updated distance + running time so every downstream consumer
+    // (spawn cooldown reset, spawn chance, per-segment object cap,
+    // enemy speed multiplier) reads a single, consistent set of
+    // values for this frame. Updating the snapshot BEFORE the
+    // spawn / advance calls below is what makes the difficulty
+    // integration a single source of truth: a future refactor that
+    // re-orders updateGame cannot accidentally feed the new spawn
+    // loop the previous frame's snapshot.
+    currentDifficulty = computeDifficulty({ distance, runningTime });
+
     // -- Lane switching --
     handleLaneSwitch(dt);
 
@@ -1371,14 +1433,23 @@
     spawnCooldown -= dt;
     if (spawnCooldown <= 0) {
       spawnObjects();
-      spawnCooldown = 0.25;
+      // The reset value is sourced from the dynamic-difficulty
+      // snapshot rather than the previous hard-coded 0.25: at
+      // higher difficulty the spawn loop ticks faster (down to
+      // SPAWN_COOLDOWN_MIN), at level 0 it matches the legacy
+      // 0.25 s cadence exactly.
+      spawnCooldown = currentDifficulty.spawnCooldownSeconds;
     }
     // Oncoming vehicles actively drive toward the player in addition to
     // the world scroll. Mutate obj.z here (rather than later in the
     // updateObjectVisuals step) so the same value is consumed by
     // recycleWorldObjects, updateObjectVisuals and handleCollisions —
     // keeping a single source of truth for each object's road-space Z.
-    advanceOncomingVehicles(dt);
+    // The current frame's enemy-speed multiplier comes from
+    // `currentDifficulty.enemySpeedMultiplier` (≥ 1) so all active
+    // vehicles feel the difficulty ramp in real time, not just the
+    // vehicles spawned this frame.
+    advanceOncomingVehicles(dt, currentDifficulty.enemySpeedMultiplier);
     recycleWorldObjects();
 
     // -- Update road --
@@ -1455,6 +1526,10 @@
     runningTime = 0;
     frameCount = 0;
     spawnCooldown = 0;
+    // Reset the dynamic-difficulty snapshot to a level-0 baseline
+    // so the new run starts at the legacy "easy" pacing rather
+    // than inheriting a level-N snapshot from the previous run.
+    currentDifficulty = computeDifficulty({ distance: 0, runningTime: 0 });
 
     // Reset player
     currentLane = 0;

@@ -10,6 +10,7 @@
     OBJECT_TYPES,
     generateObjectsForSegment,
     ONCOMING_VEHICLE_SPEED,
+    ENEMY_VEHICLE_MODEL_MAP, getEnemyModelById,
     ROAD_Y, JUMP_IMMUNITY_HEIGHT, checkCollision, applyCollision,
     calculateScore,
     startEngineHum, stopEngineHum,
@@ -900,50 +901,130 @@
         break;
       }
       case OBJECT_TYPES.ONCOMING_VEHICLE: {
+        // Look up the model config so the geometry / colour / wheel
+        // count / roof / spoiler all match the descriptor's `modelId`.
+        // When the descriptor has no `modelId` (defensive fallback for
+        // descriptors created outside `generateObjectsForSegment`) we
+        // use the first model from the table so the visual is still a
+        // valid oncoming vehicle, not an empty / misaligned mesh.
+        const model = getEnemyModelById(desc.modelId)
+          || ENEMY_VEHICLE_MODEL_MAP[Object.keys(ENEMY_VEHICLE_MODEL_MAP)[0]];
+        const bodyDims = model.body;
+        const cabinDims = model.cabin;
+        const bodyColor = model.color;
+        // Darken the body for the emissive channel so the colour reads
+        // strongly as primary body paint (not as glow).
+        const emissiveColor = bodyColor & 0xfefefe;
+        const wheelCount = model.wheelCount;
+        const headlightCount = model.headlightCount;
+        const hasRoof = model.hasRoof;
+        const hasSpoiler = model.hasSpoiler;
+
         const group = new THREE.Group();
         const bodyMat = new THREE.MeshPhongMaterial({
-          color: 0xdd3333,
-          emissive: 0x661111,
+          color: bodyColor,
+          emissive: emissiveColor,
           emissiveIntensity: 0.15,
           shininess: 30,
         });
         const body = new THREE.Mesh(
-          new THREE.BoxGeometry(1.2, 0.5, 2.0),
+          new THREE.BoxGeometry(bodyDims.width, bodyDims.height, bodyDims.length),
           bodyMat
         );
-        body.position.y = 0.4;
+        body.position.y = bodyDims.height / 2;
         body.castShadow = true;
         group.add(body);
 
-        const cabinMat = new THREE.MeshPhongMaterial({
-          color: 0xcc2222,
-          transparent: true,
-          opacity: 0.8,
-        });
-        const cabin = new THREE.Mesh(
-          new THREE.BoxGeometry(1.0, 0.35, 1.2),
-          cabinMat
-        );
-        cabin.position.set(0, 0.7, 0);
-        group.add(cabin);
-
-        const wheelMat = new THREE.MeshPhongMaterial({ color: 0x222222 });
-        const wheelGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.12, 6);
-        const wp = [[-0.5, 0.15, -0.7], [0.5, 0.15, -0.7], [-0.5, 0.15, 0.7], [0.5, 0.15, 0.7]];
-        for (const p of wp) {
-          const w = new THREE.Mesh(wheelGeo, wheelMat);
-          w.rotation.x = Math.PI / 2;
-          w.position.set(p[0], p[1], p[2]);
-          group.add(w);
+        // Cabin: only rendered for models with an enclosed roof. The
+        // truck model is open-top (hasRoof=false) so it shows just the
+        // body. The cabin sits centred above the body with its base
+        // at y = bodyDims.height so the top of the body and the bottom
+        // of the cabin are flush.
+        if (hasRoof) {
+          const cabinMat = new THREE.MeshPhongMaterial({
+            color: bodyColor,
+            emissive: emissiveColor,
+            emissiveIntensity: 0.1,
+            transparent: true,
+            opacity: 0.8,
+          });
+          const cabin = new THREE.Mesh(
+            new THREE.BoxGeometry(cabinDims.width, cabinDims.height, cabinDims.length),
+            cabinMat
+          );
+          cabin.position.set(0, bodyDims.height + cabinDims.height / 2, 0);
+          group.add(cabin);
         }
 
-        const hlMat = new THREE.MeshBasicMaterial({ color: 0xffff88 });
-        for (let hx = -0.35; hx <= 0.35; hx += 0.7) {
-          const hl = new THREE.Mesh(
-            new THREE.SphereGeometry(0.06, 6, 6),
-            hlMat
+        // Spoiler: only the sports car carries one. Mounted at the
+        // rear (positive Z in the vehicle's local space; remember the
+        // group is rotated 180° at the end so the vehicle's "front"
+        // is the player's facing direction).
+        if (hasSpoiler) {
+          const spoilerMat = new THREE.MeshPhongMaterial({ color: bodyColor });
+          const spoilerWing = new THREE.Mesh(
+            new THREE.BoxGeometry(bodyDims.width * 0.9, 0.05, 0.2),
+            spoilerMat
           );
-          hl.position.set(hx, 0.3, -1.05);
+          // Sit the wing just above the body so it reads as a
+          // rear-mounted spoiler rather than floating in space.
+          spoilerWing.position.set(
+            0,
+            bodyDims.height + 0.18,
+            bodyDims.length / 2 - 0.15,
+          );
+          // Two thin struts to support the wing.
+          const strutGeo = new THREE.BoxGeometry(0.05, 0.18, 0.05);
+          for (const sx of [-bodyDims.width * 0.3, bodyDims.width * 0.3]) {
+            const strut = new THREE.Mesh(strutGeo, spoilerMat);
+            strut.position.set(
+              sx,
+              bodyDims.height + 0.09,
+              bodyDims.length / 2 - 0.15,
+            );
+            group.add(strut);
+          }
+          group.add(spoilerWing);
+        }
+
+        // Wheels: distribute `wheelCount` wheels evenly along the
+        // body length. For 4 wheels the layout matches the original
+        // (4 corners); 6 wheels (truck) adds a middle axle.
+        const wheelMat = new THREE.MeshPhongMaterial({ color: 0x222222 });
+        const wheelGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.12, 6);
+        // 4 → 2 axles (front, back); 6 → 3 axles (front, mid, back).
+        const axles = wheelCount / 2;
+        const lengthSpan = bodyDims.length * 0.7;
+        for (let a = 0; a < axles; a++) {
+          // Distribute axles symmetrically around the body centre.
+          const z = (a / Math.max(axles - 1, 1) - 0.5) * lengthSpan;
+          for (const sx of [-bodyDims.width / 2 + 0.1, bodyDims.width / 2 - 0.1]) {
+            const w = new THREE.Mesh(wheelGeo, wheelMat);
+            w.rotation.x = Math.PI / 2;
+            w.position.set(sx, 0.15, z);
+            group.add(w);
+          }
+        }
+
+        // Headlights: a row of small spheres mounted on the front
+        // face of the body. The front of the vehicle is at
+        // z = -bodyDims.length / 2 in the group's local space (the
+        // group is rotated 180° below, so this becomes the player's
+        // direction).
+        const hlMat = new THREE.MeshBasicMaterial({ color: 0xffff88 });
+        const frontZ = -bodyDims.length / 2 - 0.05;
+        for (let h = 0; h < headlightCount; h++) {
+          // Centre the headlight row on the body and space them
+          // across the available width.
+          const t = headlightCount === 1
+            ? 0
+            : (h / (headlightCount - 1)) - 0.5;
+          const hx = t * (bodyDims.width * 0.6);
+          const hl = new THREE.Mesh(
+            new THREE.SphereGeometry(0.08, 6, 6),
+            hlMat,
+          );
+          hl.position.set(hx, 0.3, frontZ);
           group.add(hl);
         }
 
@@ -1135,21 +1216,43 @@
    * so this function only touches objects whose type is
    * OBJECT_TYPES.ONCOMING_VEHICLE.
    *
+   * Each vehicle advances at its OWN per-model `obj.speed` (set on
+   * the descriptor by `generateObjectsForSegment` from the model
+   * table) rather than the global `ONCOMING_VEHICLE_SPEED` constant.
+   * This lets fast models close in faster than slow ones, so the
+   * visual / audio / collision pacing actually varies per vehicle.
+   * Vehicles whose descriptor carries no usable `speed` (e.g. a
+   * descriptor built outside `generateObjectsForSegment`) fall back
+   * to `ONCOMING_VEHICLE_SPEED`, preserving the prior behaviour for
+   * any hand-crafted / legacy descriptor and keeping the per-frame
+   * arithmetic a single `+=` per vehicle.
+   *
    * Mutating obj.z (rather than a separate "vehicle-local Z" field)
    * keeps the downstream world-Z calculation `obj.z + scrollOffset`
    * unchanged, so visual repositioning, recycling and collision
    * detection all keep working with their existing arithmetic — the
    * oncoming vehicle simply closes the gap faster than a stationary
-   * prop would (at PLAYER_SPEED + ONCOMING_VEHICLE_SPEED instead of
-   * just PLAYER_SPEED).
+   * prop would (at PLAYER_SPEED + obj.speed instead of just
+   * PLAYER_SPEED), with `obj.speed` now varying per model.
    */
   function advanceOncomingVehicles(dt) {
-    const step = ONCOMING_VEHICLE_SPEED * dt;
     for (let i = 0; i < objectDescriptors.length; i++) {
       const obj = objectDescriptors[i];
-      if (obj && obj.type === OBJECT_TYPES.ONCOMING_VEHICLE) {
-        obj.z += step;
-      }
+      if (!obj || obj.type !== OBJECT_TYPES.ONCOMING_VEHICLE) continue;
+      // Per-model speed takes precedence; the global constant is the
+      // defensive fallback for descriptors that lack a valid speed.
+      // The validity check mirrors the contract on `createObject` /
+      // the model table: must be a finite, strictly positive number.
+      // Infinity / NaN / 0 / negative would all silently break the
+      // per-frame `obj.z += speed * dt` (Infinity blows up the road
+      // position; NaN taints the position and breaks collision /
+      // recycling downstream).
+      const speed = typeof obj.speed === 'number'
+        && Number.isFinite(obj.speed)
+        && obj.speed > 0
+        ? obj.speed
+        : ONCOMING_VEHICLE_SPEED;
+      obj.z += speed * dt;
     }
   }
 

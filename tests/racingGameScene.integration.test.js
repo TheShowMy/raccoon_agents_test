@@ -3,6 +3,10 @@ import {
   getRoadOffsetAt,
   sampleCurveOffset,
   sampleHeightOffset,
+  ENEMY_VEHICLE_MODELS,
+  ENEMY_VEHICLE_MODEL_MAP,
+  ENEMY_VEHICLE_MODEL_IDS,
+  getEnemyModelById,
 } from '../src/lib/utils/racingGame.js';
 
 /* ===================================================================
@@ -1312,6 +1316,302 @@ describe('Oncoming vehicle movement — segment spawn protection', () => {
 
     // Subsequent spawn attempt: the segment must refuse.
     expect(canSegmentSpawn(tileData)).toBe(false);
+  });
+});
+
+/* ==================================================================
+   12. Per-model oncoming-vehicle speed (multi-model movement)
+
+      The advance function inside RacingGameScene.svelte now reads
+      `obj.speed` (the per-model approach speed that
+      `generateObjectsForSegment` stamps on the descriptor) instead
+      of the global `ONCOMING_VEHICLE_SPEED` constant. This makes
+      closing speed vary per archetype:
+
+        - 轿车 (sedan)  speed=14
+        - 卡车 (truck)  speed=9   (slow / heavy)
+        - 跑车 (sports) speed=19  (fast)
+
+      For descriptors that lack a usable `speed` (defensive fallback)
+      the implementation falls back to `ONCOMING_VEHICLE_SPEED` so
+      hand-crafted / legacy descriptors still move.
+
+      The pure mirror below reproduces the new logic. It exists
+      separately from the global-constant mirror used by the prior
+      tests so the contract is exercised on its own (and the
+      global-constant contract remains pinned by the older tests).
+   ================================================================== */
+
+// Mirrored constants — keep in sync with racingGame.js. The fallback
+// speed is the legacy global constant.
+const ONCOMING_VEHICLE_SPEED_FALLBACK = 14;
+const FALLBACK_RECYCLE_WORLD_Z = 5;
+const FALLBACK_VEHICLE_ZWIDTH = 1.5;
+
+/**
+ * Pure replica of the per-frame advancement inside RacingGameScene.svelte's
+ * advanceOncomingVehicles AFTER the per-model-speed change. Each vehicle
+ * advances at its OWN `obj.speed` (a positive, finite number) with a
+ * fallback to the global constant for descriptors that don't carry one.
+ * Mutates objectDescriptors in place.
+ */
+function advanceOncomingVehiclesByModel(objectDescriptors, dt) {
+  for (let i = 0; i < objectDescriptors.length; i++) {
+    const obj = objectDescriptors[i];
+    if (!obj || obj.type !== 'oncoming_vehicle') continue;
+    const speed = typeof obj.speed === 'number'
+      && Number.isFinite(obj.speed)
+      && obj.speed > 0
+      ? obj.speed
+      : ONCOMING_VEHICLE_SPEED_FALLBACK;
+    obj.z += speed * dt;
+  }
+}
+
+describe('Per-model oncoming-vehicle speed — read from obj.speed', () => {
+  it('a sedan (speed=14) advances by 14 * dt in one frame', () => {
+    const sedan = { type: 'oncoming_vehicle', z: -100, modelId: 'sedan', speed: 14 };
+    const initial = sedan.z;
+    advanceOncomingVehiclesByModel([sedan], 1 / 60);
+    expect(sedan.z).toBeCloseTo(initial + 14 * (1 / 60), 10);
+  });
+
+  it('a truck (speed=9) advances slower than a sedan (speed=14)', () => {
+    const truck = { type: 'oncoming_vehicle', z: -100, modelId: 'truck', speed: 9 };
+    const sedan = { type: 'oncoming_vehicle', z: -100, modelId: 'sedan', speed: 14 };
+    const initial = -100;
+    const dt = 1;
+    advanceOncomingVehiclesByModel([truck, sedan], dt);
+    // The truck must close 9 units in 1 s, the sedan 14.
+    expect(truck.z).toBeCloseTo(initial + 9, 9);
+    expect(sedan.z).toBeCloseTo(initial + 14, 9);
+    expect(sedan.z - truck.z).toBeCloseTo(5, 9);
+  });
+
+  it('a sports car (speed=19) advances faster than a sedan (speed=14)', () => {
+    const sports = { type: 'oncoming_vehicle', z: -100, modelId: 'sports', speed: 19 };
+    const sedan = { type: 'oncoming_vehicle', z: -100, modelId: 'sedan', speed: 14 };
+    advanceOncomingVehiclesByModel([sports, sedan], 1);
+    expect(sports.z).toBeCloseTo(-100 + 19, 9);
+    expect(sedan.z).toBeCloseTo(-100 + 14, 9);
+    expect(sports.z - sedan.z).toBeCloseTo(5, 9);
+  });
+
+  it('vehicles with different model speeds remain independent across multiple frames', () => {
+    const truck = { type: 'oncoming_vehicle', z: -50, speed: 9 };
+    const sedan = { type: 'oncoming_vehicle', z: -50, speed: 14 };
+    const sports = { type: 'oncoming_vehicle', z: -50, speed: 19 };
+    const initial = -50;
+    const dt = 1 / 60;
+    for (let i = 0; i < 60; i++) {
+      advanceOncomingVehiclesByModel([truck, sedan, sports], dt);
+    }
+    // Each vehicle has closed by exactly its own per-model speed after 1 s.
+    expect(truck.z).toBeCloseTo(initial + 9, 9);
+    expect(sedan.z).toBeCloseTo(initial + 14, 9);
+    expect(sports.z).toBeCloseTo(initial + 19, 9);
+  });
+
+  it('falls back to the global constant when obj.speed is missing / null', () => {
+    const legacy = { type: 'oncoming_vehicle', z: -50 }; // no speed field
+    const explicitNull = { type: 'oncoming_vehicle', z: -50, speed: null };
+    const initial = -50;
+    const dt = 1 / 60;
+    advanceOncomingVehiclesByModel([legacy, explicitNull], dt);
+    expect(legacy.z).toBeCloseTo(
+      initial + ONCOMING_VEHICLE_SPEED_FALLBACK * dt,
+      10,
+    );
+    expect(explicitNull.z).toBeCloseTo(
+      initial + ONCOMING_VEHICLE_SPEED_FALLBACK * dt,
+      10,
+    );
+  });
+
+  it('falls back to the global constant when obj.speed is non-positive or non-finite', () => {
+    const cases = [
+      { type: 'oncoming_vehicle', z: -50, speed: 0 },
+      { type: 'oncoming_vehicle', z: -50, speed: -5 },
+      { type: 'oncoming_vehicle', z: -50, speed: NaN },
+      { type: 'oncoming_vehicle', z: -50, speed: Infinity },
+      { type: 'oncoming_vehicle', z: -50, speed: 'fast' },
+    ];
+    const initial = -50;
+    const dt = 1 / 60;
+    advanceOncomingVehiclesByModel(cases, dt);
+    for (const obj of cases) {
+      expect(obj.z).toBeCloseTo(
+        initial + ONCOMING_VEHICLE_SPEED_FALLBACK * dt,
+        10,
+      );
+    }
+  });
+
+  it('does not move obstacles or repair kits regardless of their speed field', () => {
+    const objs = [
+      { type: 'obstacle', z: -30, speed: 100 }, // invalid: not a vehicle
+      { type: 'repair_kit', z: -30, speed: 100 },
+      { type: 'oncoming_vehicle', z: -30, speed: 12 },
+    ];
+    const initial = -30;
+    advanceOncomingVehiclesByModel(objs, 1);
+    expect(objs[0].z).toBe(initial);
+    expect(objs[1].z).toBe(initial);
+    expect(objs[2].z).toBeCloseTo(initial + 12, 9);
+  });
+
+  it('closing speed relative to player equals PLAYER_SPEED + obj.speed (per model)', () => {
+    // A sports car closes the gap to the player faster than a truck.
+    // Verify the formula `closing = PLAYER_SPEED + obj.speed` per model.
+    const sports = { type: 'oncoming_vehicle', z: -100, speed: 19 };
+    const truck = { type: 'oncoming_vehicle', z: -100, speed: 9 };
+    const dt = 1 / 60;
+    let scrollOffset = 0;
+    for (let i = 0; i < 60; i++) {
+      scrollOffset += PLAYER_SPEED * dt;
+      advanceOncomingVehiclesByModel([sports, truck], dt);
+    }
+    const sportsGap = Math.abs(sports.z + scrollOffset - 0);
+    const truckGap = Math.abs(truck.z + scrollOffset - 0);
+    // Initial gap was 100; the sports car has closed by PLAYER_SPEED + 19
+    // and the truck by PLAYER_SPEED + 9.
+    const sportsClosing = 100 - sportsGap;
+    const truckClosing = 100 - truckGap;
+    expect(sportsClosing).toBeCloseTo(PLAYER_SPEED + 19, 5);
+    expect(truckClosing).toBeCloseTo(PLAYER_SPEED + 9, 5);
+    expect(sportsClosing).toBeGreaterThan(truckClosing);
+  });
+});
+
+/* ==================================================================
+   13. Per-model oncoming-vehicle visual differentiation
+
+      The component's `createObjectVisual` switches on `desc.modelId`
+      in its ONCOMING_VEHICLE branch and renders geometry / colour /
+      roof / spoiler / wheel count / headlight count that match the
+      model config table. The pure mirror below records, for a given
+      descriptor, the visual choices the component would make (body
+      dimensions, colour, roof, spoiler, wheel count, headlight
+      count). The tests verify the choices differ across the three
+      archetypes — i.e. the contract "different models look different
+      at a glance" is upheld.
+   ================================================================== */
+
+/**
+ * Pure replica of the per-model visual selection inside
+ * RacingGameScene.svelte's `createObjectVisual` ONCOMING_VEHICLE
+ * branch. Returns a snapshot of the choices the component would
+ * make for the given descriptor.
+ */
+function pickOncomingVisual(desc) {
+  const model = getEnemyModelById(desc.modelId)
+    || ENEMY_VEHICLE_MODEL_MAP[ENEMY_VEHICLE_MODEL_IDS[0]];
+  return {
+    bodyWidth: model.body.width,
+    bodyHeight: model.body.height,
+    bodyLength: model.body.length,
+    cabinWidth: model.cabin.width,
+    cabinHeight: model.cabin.height,
+    cabinLength: model.cabin.length,
+    color: model.color,
+    hasRoof: model.hasRoof,
+    hasSpoiler: model.hasSpoiler,
+    wheelCount: model.wheelCount,
+    headlightCount: model.headlightCount,
+    speed: model.speed,
+  };
+}
+
+describe('Per-model oncoming-vehicle visual differentiation', () => {
+  it('renders the sedan with blue body, an enclosed roof, no spoiler, 4 wheels', () => {
+    const v = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sedan' });
+    expect(v.color).toBe(0x4488ff);
+    expect(v.hasRoof).toBe(true);
+    expect(v.hasSpoiler).toBe(false);
+    expect(v.wheelCount).toBe(4);
+    expect(v.headlightCount).toBe(2);
+    // The sedan has a medium body size and a sizeable cabin.
+    expect(v.bodyWidth).toBe(1.2);
+    expect(v.bodyLength).toBe(2.0);
+    expect(v.cabinLength).toBeGreaterThan(0);
+  });
+
+  it('renders the truck with a red-orange body, NO roof, NO spoiler, 6 wheels', () => {
+    const v = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'truck' });
+    expect(v.color).toBe(0xcc4422);
+    expect(v.hasRoof).toBe(false);
+    expect(v.hasSpoiler).toBe(false);
+    expect(v.wheelCount).toBe(6);
+    expect(v.headlightCount).toBe(2);
+    // The truck is the longest / tallest body in the set.
+    expect(v.bodyLength).toBe(2.6);
+    expect(v.bodyHeight).toBe(0.7);
+  });
+
+  it('renders the sports car with a yellow body, an enclosed roof, A spoiler, 4 wheels', () => {
+    const v = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sports' });
+    expect(v.color).toBe(0xffcc00);
+    expect(v.hasRoof).toBe(true);
+    expect(v.hasSpoiler).toBe(true);
+    expect(v.wheelCount).toBe(4);
+    expect(v.headlightCount).toBe(2);
+    // The sports car is the smallest body in the set.
+    expect(v.bodyLength).toBe(1.8);
+    expect(v.bodyHeight).toBe(0.35);
+  });
+
+  it('all three archetype visuals differ on at least one dimension (body, roof, spoiler, wheels)', () => {
+    const sedan = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sedan' });
+    const truck = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'truck' });
+    const sports = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sports' });
+    // Distinct colours.
+    expect(new Set([sedan.color, truck.color, sports.color]).size).toBe(3);
+    // Distinct body sizes — every body dimension differs across the set.
+    expect(new Set([sedan.bodyLength, truck.bodyLength, sports.bodyLength]).size).toBe(3);
+    // Roof flag: only sedan + sports have one.
+    expect(sedan.hasRoof).toBe(true);
+    expect(truck.hasRoof).toBe(false);
+    expect(sports.hasRoof).toBe(true);
+    // Spoiler flag: only the sports car has one.
+    expect(sedan.hasSpoiler).toBe(false);
+    expect(truck.hasSpoiler).toBe(false);
+    expect(sports.hasSpoiler).toBe(true);
+    // Wheel count: truck is the only 6-wheeler.
+    expect(sedan.wheelCount).toBe(4);
+    expect(truck.wheelCount).toBe(6);
+    expect(sports.wheelCount).toBe(4);
+  });
+
+  it('an unknown / missing modelId falls back to a valid first-model visual', () => {
+    // Defensive: descriptors built outside generateObjectsForSegment
+    // might lack a modelId. The component must still produce a valid
+    // visual, not throw.
+    const noId = pickOncomingVisual({ type: 'oncoming_vehicle' });
+    const unknownId = pickOncomingVisual({
+      type: 'oncoming_vehicle',
+      modelId: 'does-not-exist',
+    });
+    const firstModel = ENEMY_VEHICLE_MODELS[0];
+    expect(noId.color).toBe(firstModel.color);
+    expect(noId.bodyLength).toBe(firstModel.body.length);
+    expect(unknownId.color).toBe(firstModel.color);
+    expect(unknownId.bodyLength).toBe(firstModel.body.length);
+  });
+
+  it('per-model speed field is read from the model config (not the global constant)', () => {
+    // The closing speed depends on `model.speed`; verifying the
+    // visual picker surfaces the model speed locks the contract that
+    // the visual and the movement stay in sync (same model id → same
+    // speed).
+    const sedan = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sedan' });
+    const truck = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'truck' });
+    const sports = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sports' });
+    expect(sedan.speed).toBe(14);
+    expect(truck.speed).toBe(9);
+    expect(sports.speed).toBe(19);
+    // And they are distinct (otherwise per-model differentiation
+    // would not actually vary closing speed).
+    expect(new Set([sedan.speed, truck.speed, sports.speed]).size).toBe(3);
   });
 });
 

@@ -10,11 +10,13 @@
     OBJECT_TYPES,
     generateObjectsForSegment,
     ONCOMING_VEHICLE_SPEED,
+    ENEMY_VEHICLE_MODEL_MAP, getEnemyModelById,
     ROAD_Y, JUMP_IMMUNITY_HEIGHT, checkCollision, applyCollision,
     calculateScore,
     startEngineHum, stopEngineHum,
     playLaneSwitchSound, playJumpSound, playCollisionSound,
     playPickupSound, playGameOverSound,
+    computeDifficulty,
   } from '../utils/racingGame.js';
 
   /* ===================================================================
@@ -58,6 +60,17 @@
 
   /** @type {THREE.Material|null} */
   let grassMaterial = null;
+
+  /**
+   * Shared road-shoulder material. All shoulder meshes (left and
+   * right side, across every road segment) reference this single
+   * instance so they pick up identical lighting and fog response.
+   * Keeping it at module scope also lets `onDestroy` release the GPU
+   * resource exactly once, even though the material is referenced
+   * by many meshes.
+   *
+   * @type {THREE.Material|null} */
+  let shoulderMaterial = null;
 
   /** @type {ResizeObserver|null} */
   let resizeObserver = null;
@@ -181,7 +194,16 @@
   // anchored to a stable, non-jittery ground plane.
   const GRASS_Y = ROAD_Y - MAX_HEIGHT_DELTA - 0.2;
   const GRASS_COLOR = 0x4a7a3a;
-  const GRASS_WIDTH = 400;
+  // Grass plane width must comfortably exceed the camera's horizontal
+  // field of view at the fog far plane, otherwise the plane's edge
+  // is visible as a hard colour boundary inside the fog band. With
+  // the camera at z=12 and the fog far plane at z≈-238 (250 units
+  // away in the -Z direction), the visible horizontal half-width at
+  // the far plane is ≈ 250·tan(45.5°) ≈ 255 units (assuming a 16:9
+  // aspect and ~91° horizontal FOV). GRASS_WIDTH=600 (±300) gives a
+  // generous margin so the plane edge always sits well outside the
+  // visible frustum, and therefore never produces a visible band.
+  const GRASS_WIDTH = 600;
   const GRASS_LENGTH = 4000;
 
   // Vehicle transform smoothing factors.
@@ -248,8 +270,20 @@
     const h = rect.height || 500;
 
     scene = new THREE.Scene();
+    // Background and fog use the SAME colour so the horizon line
+    // dissolves smoothly: at the fog far plane every fog-responsive
+    // material converges to exactly the background colour, leaving
+    // no visible band where the world meets the sky.
     scene.background = new THREE.Color(0x87CEEB);
-    scene.fog = new THREE.Fog(0x87CEEB, 80, 200);
+    // Fog range is intentionally wider than the original (80, 200) so
+    // the transition from "no fog" to "fully fog colour" happens over
+    // a longer Z span. The near edge (60) starts fading just past the
+    // close-to-player road tiles; the far edge (250) sits a little
+    // inside the camera's 300-unit far plane so the road and grass
+    // are guaranteed to be fully fog colour (and therefore equal to
+    // the sky) before the far plane clips them. This kills the hard
+    // "sky / ground" colour band the user reported.
+    scene.fog = new THREE.Fog(0x87CEEB, 60, 250);
 
     camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 300);
     camera.position.set(0, 6, 12);
@@ -385,6 +419,15 @@
     grassMaterial = new THREE.MeshPhongMaterial({
       color: GRASS_COLOR,
       flatShading: true,
+      // Explicitly enable fog response. MeshPhongMaterial defaults to
+      // fog:true in Three.js, but stating it makes the contract
+      // auditable and protects the material from accidentally being
+      // switched off by a future refactor that flattens the options
+      // object. With fog enabled, the grass colour is interpolated
+      // toward the sky colour (0x87CEEB) as the grass recedes into
+      // the distance, so the grass-to-sky transition is smooth
+      // rather than a hard line at the fog far plane.
+      fog: true,
     });
     grassGeometry = new THREE.PlaneGeometry(GRASS_WIDTH, GRASS_LENGTH);
     const grass = new THREE.Mesh(grassGeometry, grassMaterial);
@@ -470,6 +513,11 @@
       color: ROAD_COLOR,
       flatShading: true,
       side: THREE.DoubleSide,
+      // Explicitly enable fog so the road surface blends into the
+      // sky colour (0x87CEEB) at the far end of the visible range,
+      // matching the grass and shoulders. This is what removes the
+      // hard "road meets sky" colour band the user reported.
+      fog: true,
     });
     const surface = new THREE.Mesh(surfaceGeo, surfaceMat);
     surface.position.set(0, ROAD_Y, 0);
@@ -483,7 +531,7 @@
     // three lane boundaries read as intermittent dashed lines rather than a
     // continuous band. Road width, lane count and surface geometry are
     // unchanged.
-    const lineMat = new THREE.MeshBasicMaterial({ color: LANE_LINE_COLOR });
+    const lineMat = new THREE.MeshBasicMaterial({ color: LANE_LINE_COLOR, fog: true });
     const lineHalfW = 0.075;
     // Dash pattern based on subdivision indices: every DASH_PATTERN_SUBDIVS
     // subdivisions we draw DASH_LENGTH_SUBDIVS rows of stripe then leave the
@@ -554,11 +602,43 @@
     }
 
     // ---- Road shoulders ----
-    const shoulderMat = new THREE.MeshBasicMaterial({
-      color: ROAD_SHOULDER_COLOR,
-      transparent: true,
-      opacity: 0.5,
-    });
+    // The shoulder material is built ONCE and shared by every
+    // shoulder mesh (both sides of every road segment). The previous
+    // implementation created a fresh `MeshBasicMaterial` inside this
+    // function for each segment, so each tile had its own material
+    // instance, and that material was a flat, unlit, semi-transparent
+    // colour — meaning:
+    //   * the shoulder never reacted to the scene lights, so it read
+    //     as a uniformly coloured band sitting on top of the
+    //     (correctly lit) grass, creating a visible "shoulder-vs-
+    //     grass" style gap on both sides of the road;
+    //   * the `transparent: true, opacity: 0.5` made the shoulder
+    //     blend with whatever was behind it, which broke the fog
+    //     transition at the far end of the road and made the two
+    //     sides look different depending on the noise-driven road
+    //     curve.
+    // The shared `MeshLambertMaterial` below fixes both issues:
+    //   * it responds to the same ambient / hemisphere / directional
+    //     lights as the grass, so the shoulder and the grass on
+    //     either side receive identical illumination at the same
+    //     world position — the left and right shoulders therefore
+    //     pick up the same shading pattern as their neighbouring
+    //     grass, and the two sides look identical to each other;
+    //   * it is opaque (no `transparent` flag), so the fog
+    //     interpolates its colour directly toward the sky colour at
+    //     the far plane, matching the road surface and grass for a
+    //     smooth horizon transition.
+    // Both sides of every segment reference the same `shoulderMaterial`
+    // instance (set up in `createRoadSystem()`), so a state change on
+    // the material — colour, fog flag, etc. — automatically applies
+    // uniformly to every shoulder mesh in the scene.
+    if (!shoulderMaterial) {
+      shoulderMaterial = new THREE.MeshLambertMaterial({
+        color: ROAD_SHOULDER_COLOR,
+        fog: true,
+      });
+    }
+    const shoulderMat = shoulderMaterial;
     const shoulderHalfW = 0.3;
 
     for (let si = 0; si < 2; si++) {
@@ -760,22 +840,30 @@
   }
 
   function removeTileVisuals(data) {
-    const removeMesh = (mesh) => {
+    // `skipMaterialDispose` is true for shoulder meshes because the
+    // shoulder material is shared across every segment (and both
+    // sides) of the road — disposing it on the first segment recycle
+    // would leave every other shoulder mesh with a dangling GPU
+    // reference. The shared material is released exactly once in
+    // `onDestroy`, matching the lifecycle of `grassMaterial`.
+    const removeMesh = (mesh, skipMaterialDispose = false) => {
       if (!mesh) return;
       roadGroup.remove(mesh);
       if (mesh.isMesh || mesh.isPoints) {
         mesh.geometry.dispose();
-        if (Array.isArray(mesh.material)) {
-          mesh.material.forEach((m) => m.dispose());
-        } else if (mesh.material) {
-          mesh.material.dispose();
+        if (!skipMaterialDispose) {
+          if (Array.isArray(mesh.material)) {
+            mesh.material.forEach((m) => m.dispose());
+          } else if (mesh.material) {
+            mesh.material.dispose();
+          }
         }
       }
     };
 
     if (data.surface) removeMesh(data.surface);
     for (const line of data.lines) removeMesh(line);
-    for (const s of data.shoulders) removeMesh(s);
+    for (const s of data.shoulders) removeMesh(s, true);
   }
 
   /* ===================================================================
@@ -900,50 +988,130 @@
         break;
       }
       case OBJECT_TYPES.ONCOMING_VEHICLE: {
+        // Look up the model config so the geometry / colour / wheel
+        // count / roof / spoiler all match the descriptor's `modelId`.
+        // When the descriptor has no `modelId` (defensive fallback for
+        // descriptors created outside `generateObjectsForSegment`) we
+        // use the first model from the table so the visual is still a
+        // valid oncoming vehicle, not an empty / misaligned mesh.
+        const model = getEnemyModelById(desc.modelId)
+          || ENEMY_VEHICLE_MODEL_MAP[Object.keys(ENEMY_VEHICLE_MODEL_MAP)[0]];
+        const bodyDims = model.body;
+        const cabinDims = model.cabin;
+        const bodyColor = model.color;
+        // Darken the body for the emissive channel so the colour reads
+        // strongly as primary body paint (not as glow).
+        const emissiveColor = bodyColor & 0xfefefe;
+        const wheelCount = model.wheelCount;
+        const headlightCount = model.headlightCount;
+        const hasRoof = model.hasRoof;
+        const hasSpoiler = model.hasSpoiler;
+
         const group = new THREE.Group();
         const bodyMat = new THREE.MeshPhongMaterial({
-          color: 0xdd3333,
-          emissive: 0x661111,
+          color: bodyColor,
+          emissive: emissiveColor,
           emissiveIntensity: 0.15,
           shininess: 30,
         });
         const body = new THREE.Mesh(
-          new THREE.BoxGeometry(1.2, 0.5, 2.0),
+          new THREE.BoxGeometry(bodyDims.width, bodyDims.height, bodyDims.length),
           bodyMat
         );
-        body.position.y = 0.4;
+        body.position.y = bodyDims.height / 2;
         body.castShadow = true;
         group.add(body);
 
-        const cabinMat = new THREE.MeshPhongMaterial({
-          color: 0xcc2222,
-          transparent: true,
-          opacity: 0.8,
-        });
-        const cabin = new THREE.Mesh(
-          new THREE.BoxGeometry(1.0, 0.35, 1.2),
-          cabinMat
-        );
-        cabin.position.set(0, 0.7, 0);
-        group.add(cabin);
-
-        const wheelMat = new THREE.MeshPhongMaterial({ color: 0x222222 });
-        const wheelGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.12, 6);
-        const wp = [[-0.5, 0.15, -0.7], [0.5, 0.15, -0.7], [-0.5, 0.15, 0.7], [0.5, 0.15, 0.7]];
-        for (const p of wp) {
-          const w = new THREE.Mesh(wheelGeo, wheelMat);
-          w.rotation.x = Math.PI / 2;
-          w.position.set(p[0], p[1], p[2]);
-          group.add(w);
+        // Cabin: only rendered for models with an enclosed roof. The
+        // truck model is open-top (hasRoof=false) so it shows just the
+        // body. The cabin sits centred above the body with its base
+        // at y = bodyDims.height so the top of the body and the bottom
+        // of the cabin are flush.
+        if (hasRoof) {
+          const cabinMat = new THREE.MeshPhongMaterial({
+            color: bodyColor,
+            emissive: emissiveColor,
+            emissiveIntensity: 0.1,
+            transparent: true,
+            opacity: 0.8,
+          });
+          const cabin = new THREE.Mesh(
+            new THREE.BoxGeometry(cabinDims.width, cabinDims.height, cabinDims.length),
+            cabinMat
+          );
+          cabin.position.set(0, bodyDims.height + cabinDims.height / 2, 0);
+          group.add(cabin);
         }
 
-        const hlMat = new THREE.MeshBasicMaterial({ color: 0xffff88 });
-        for (let hx = -0.35; hx <= 0.35; hx += 0.7) {
-          const hl = new THREE.Mesh(
-            new THREE.SphereGeometry(0.06, 6, 6),
-            hlMat
+        // Spoiler: only the sports car carries one. Mounted at the
+        // rear (positive Z in the vehicle's local space; remember the
+        // group is rotated 180° at the end so the vehicle's "front"
+        // is the player's facing direction).
+        if (hasSpoiler) {
+          const spoilerMat = new THREE.MeshPhongMaterial({ color: bodyColor });
+          const spoilerWing = new THREE.Mesh(
+            new THREE.BoxGeometry(bodyDims.width * 0.9, 0.05, 0.2),
+            spoilerMat
           );
-          hl.position.set(hx, 0.3, -1.05);
+          // Sit the wing just above the body so it reads as a
+          // rear-mounted spoiler rather than floating in space.
+          spoilerWing.position.set(
+            0,
+            bodyDims.height + 0.18,
+            bodyDims.length / 2 - 0.15,
+          );
+          // Two thin struts to support the wing.
+          const strutGeo = new THREE.BoxGeometry(0.05, 0.18, 0.05);
+          for (const sx of [-bodyDims.width * 0.3, bodyDims.width * 0.3]) {
+            const strut = new THREE.Mesh(strutGeo, spoilerMat);
+            strut.position.set(
+              sx,
+              bodyDims.height + 0.09,
+              bodyDims.length / 2 - 0.15,
+            );
+            group.add(strut);
+          }
+          group.add(spoilerWing);
+        }
+
+        // Wheels: distribute `wheelCount` wheels evenly along the
+        // body length. For 4 wheels the layout matches the original
+        // (4 corners); 6 wheels (truck) adds a middle axle.
+        const wheelMat = new THREE.MeshPhongMaterial({ color: 0x222222 });
+        const wheelGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.12, 6);
+        // 4 → 2 axles (front, back); 6 → 3 axles (front, mid, back).
+        const axles = wheelCount / 2;
+        const lengthSpan = bodyDims.length * 0.7;
+        for (let a = 0; a < axles; a++) {
+          // Distribute axles symmetrically around the body centre.
+          const z = (a / Math.max(axles - 1, 1) - 0.5) * lengthSpan;
+          for (const sx of [-bodyDims.width / 2 + 0.1, bodyDims.width / 2 - 0.1]) {
+            const w = new THREE.Mesh(wheelGeo, wheelMat);
+            w.rotation.x = Math.PI / 2;
+            w.position.set(sx, 0.15, z);
+            group.add(w);
+          }
+        }
+
+        // Headlights: a row of small spheres mounted on the front
+        // face of the body. The front of the vehicle is at
+        // z = -bodyDims.length / 2 in the group's local space (the
+        // group is rotated 180° below, so this becomes the player's
+        // direction).
+        const hlMat = new THREE.MeshBasicMaterial({ color: 0xffff88 });
+        const frontZ = -bodyDims.length / 2 - 0.05;
+        for (let h = 0; h < headlightCount; h++) {
+          // Centre the headlight row on the body and space them
+          // across the available width.
+          const t = headlightCount === 1
+            ? 0
+            : (h / (headlightCount - 1)) - 0.5;
+          const hx = t * (bodyDims.width * 0.6);
+          const hl = new THREE.Mesh(
+            new THREE.SphereGeometry(0.08, 6, 6),
+            hlMat,
+          );
+          hl.position.set(hx, 0.3, frontZ);
           group.add(hl);
         }
 
@@ -1066,8 +1234,34 @@
      =================================================================== */
   let spawnCooldown = 0;
 
+  // Dynamic-difficulty snapshot. Recomputed every frame inside
+  // `updateGame` from the freshly-updated `distance` and
+  // `runningTime` and consumed by `spawnObjects` (for the per-
+  // segment spawn chance and the per-segment max object count)
+  // and by `advanceOncomingVehicles` (for the enemy speed
+  // multiplier). Stored at module scope so the spawn / advance
+  // functions can read it without having to thread the same
+  // snapshot object through every call site. Initialised to a
+  // level-0 snapshot (distance=0, runningTime=0) so the very
+  // first frame — which `updateGame` enters with a 0-deltaTime
+  // `runningTime` advance but a still-0 `distance` — sees
+  // baseline difficulty, matching the previous hard-coded
+  // behaviour exactly.
+  let currentDifficulty = computeDifficulty({ distance: 0, runningTime: 0 });
+
   function spawnObjects() {
     if (!roadSegments.length) return;
+
+    // Pull the per-frame difficulty parameters out of the
+    // snapshot so the rest of the function reads a single,
+    // consistent set of values for this frame. Reading from the
+    // module-level `currentDifficulty` rather than from
+    // `distance` / `runningTime` directly keeps the contract
+    // "difficulty is computed once per frame" honest: even if
+    // some future refactor mutates `distance` during the spawn
+    // loop, the snapshot is the source of truth.
+    const spawnChance = currentDifficulty.spawnChance;
+    const maxObjectsPerSegment = currentDifficulty.maxObjectsPerSegment;
 
     // Only spawn on segments that are approaching the player
     for (let i = 0; i < roadSegments.length; i++) {
@@ -1102,10 +1296,12 @@
       );
       if (hasObjects) continue;
 
-      // Random spawn chance
-      if (Math.random() > 0.3) continue;
+      // Per-segment spawn chance, ramped by the dynamic-difficulty
+      // snapshot. At level 0 the chance equals the prior hard-coded
+      // 0.3; at higher levels it climbs toward SPAWN_CHANCE_MAX.
+      if (Math.random() > spawnChance) continue;
 
-      const objects = generateObjectsForSegment(seg, 1);
+      const objects = generateObjectsForSegment(seg, maxObjectsPerSegment);
       objectDescriptors.push(...objects);
       if (tileData) tileData.spawned = true;
     }
@@ -1135,21 +1331,64 @@
    * so this function only touches objects whose type is
    * OBJECT_TYPES.ONCOMING_VEHICLE.
    *
+   * Each vehicle advances at its OWN per-model `obj.speed` (set on
+   * the descriptor by `generateObjectsForSegment` from the model
+   * table) rather than the global `ONCOMING_VEHICLE_SPEED` constant.
+   * This lets fast models close in faster than slow ones, so the
+   * visual / audio / collision pacing actually varies per vehicle.
+   * Vehicles whose descriptor carries no usable `speed` (e.g. a
+   * descriptor built outside `generateObjectsForSegment`) fall back
+   * to `ONCOMING_VEHICLE_SPEED`, preserving the prior behaviour for
+   * any hand-crafted / legacy descriptor and keeping the per-frame
+   * arithmetic a single `+=` per vehicle.
+   *
+   * The `speedMultiplier` parameter carries the per-frame dynamic-
+   * difficulty multiplier (see {@link computeDifficulty} /
+   * `currentDifficulty.enemySpeedMultiplier`). Applying the
+   * multiplier at advance time — rather than at spawn time —
+   * means every active vehicle in the scene feels the current
+   * difficulty, so the curve is smooth even when no new vehicles
+   * are spawning. A multiplier of `1` (the default) is a no-op,
+   * preserving the previous behaviour for any caller that does
+   * not pass an explicit multiplier.
+   *
    * Mutating obj.z (rather than a separate "vehicle-local Z" field)
    * keeps the downstream world-Z calculation `obj.z + scrollOffset`
    * unchanged, so visual repositioning, recycling and collision
    * detection all keep working with their existing arithmetic — the
    * oncoming vehicle simply closes the gap faster than a stationary
-   * prop would (at PLAYER_SPEED + ONCOMING_VEHICLE_SPEED instead of
-   * just PLAYER_SPEED).
+   * prop would (at PLAYER_SPEED + obj.speed*speedMultiplier instead
+   * of just PLAYER_SPEED), with `obj.speed` now varying per model
+   * and `speedMultiplier` now varying per frame.
    */
-  function advanceOncomingVehicles(dt) {
-    const step = ONCOMING_VEHICLE_SPEED * dt;
+  function advanceOncomingVehicles(dt, speedMultiplier = 1) {
+    // Sanitise the multiplier the same way `computeDifficulty` does
+    // on its output: non-finite, NaN, negative or non-number values
+    // are clamped to 1 (no scaling). This keeps a buggy caller from
+    // silently breaking the per-frame arithmetic the way a NaN
+    // multiplier would taint every obj.z downstream.
+    const safeMultiplier = typeof speedMultiplier === 'number'
+      && Number.isFinite(speedMultiplier)
+      && speedMultiplier > 0
+      ? speedMultiplier
+      : 1;
     for (let i = 0; i < objectDescriptors.length; i++) {
       const obj = objectDescriptors[i];
-      if (obj && obj.type === OBJECT_TYPES.ONCOMING_VEHICLE) {
-        obj.z += step;
-      }
+      if (!obj || obj.type !== OBJECT_TYPES.ONCOMING_VEHICLE) continue;
+      // Per-model speed takes precedence; the global constant is the
+      // defensive fallback for descriptors that lack a valid speed.
+      // The validity check mirrors the contract on `createObject` /
+      // the model table: must be a finite, strictly positive number.
+      // Infinity / NaN / 0 / negative would all silently break the
+      // per-frame `obj.z += speed * dt` (Infinity blows up the road
+      // position; NaN taints the position and breaks collision /
+      // recycling downstream).
+      const speed = typeof obj.speed === 'number'
+        && Number.isFinite(obj.speed)
+        && obj.speed > 0
+        ? obj.speed
+        : ONCOMING_VEHICLE_SPEED;
+      obj.z += speed * safeMultiplier * dt;
     }
   }
 
@@ -1172,6 +1411,18 @@
     displayHealth = health;
     displayScore = calculateScore(distance, 1);
 
+    // -- Dynamic difficulty --
+    // Recompute the per-frame difficulty snapshot from the freshly-
+    // updated distance + running time so every downstream consumer
+    // (spawn cooldown reset, spawn chance, per-segment object cap,
+    // enemy speed multiplier) reads a single, consistent set of
+    // values for this frame. Updating the snapshot BEFORE the
+    // spawn / advance calls below is what makes the difficulty
+    // integration a single source of truth: a future refactor that
+    // re-orders updateGame cannot accidentally feed the new spawn
+    // loop the previous frame's snapshot.
+    currentDifficulty = computeDifficulty({ distance, runningTime });
+
     // -- Lane switching --
     handleLaneSwitch(dt);
 
@@ -1182,14 +1433,23 @@
     spawnCooldown -= dt;
     if (spawnCooldown <= 0) {
       spawnObjects();
-      spawnCooldown = 0.25;
+      // The reset value is sourced from the dynamic-difficulty
+      // snapshot rather than the previous hard-coded 0.25: at
+      // higher difficulty the spawn loop ticks faster (down to
+      // SPAWN_COOLDOWN_MIN), at level 0 it matches the legacy
+      // 0.25 s cadence exactly.
+      spawnCooldown = currentDifficulty.spawnCooldownSeconds;
     }
     // Oncoming vehicles actively drive toward the player in addition to
     // the world scroll. Mutate obj.z here (rather than later in the
     // updateObjectVisuals step) so the same value is consumed by
     // recycleWorldObjects, updateObjectVisuals and handleCollisions —
     // keeping a single source of truth for each object's road-space Z.
-    advanceOncomingVehicles(dt);
+    // The current frame's enemy-speed multiplier comes from
+    // `currentDifficulty.enemySpeedMultiplier` (≥ 1) so all active
+    // vehicles feel the difficulty ramp in real time, not just the
+    // vehicles spawned this frame.
+    advanceOncomingVehicles(dt, currentDifficulty.enemySpeedMultiplier);
     recycleWorldObjects();
 
     // -- Update road --
@@ -1266,6 +1526,10 @@
     runningTime = 0;
     frameCount = 0;
     spawnCooldown = 0;
+    // Reset the dynamic-difficulty snapshot to a level-0 baseline
+    // so the new run starts at the legacy "easy" pacing rather
+    // than inheriting a level-N snapshot from the previous run.
+    currentDifficulty = computeDifficulty({ distance: 0, runningTime: 0 });
 
     // Reset player
     currentLane = 0;
@@ -1293,10 +1557,23 @@
       const child = roadGroup.children[0];
       if (child.isMesh) {
         try { child.geometry.dispose(); } catch {}
-        if (Array.isArray(child.material)) {
-          child.material.forEach((m) => { try { m.dispose(); } catch {} });
-        } else if (child.material) {
-          try { child.material.dispose(); } catch {}
+        // The shoulder material is shared across every shoulder mesh,
+        // so we must NOT dispose it here — that would leave the
+        // about-to-be-created shoulders on the new road referencing a
+        // disposed GPU resource. The shared material is kept alive
+        // across restarts; it is only released in `onDestroy`. The
+        // surface and line materials are per-segment instances and
+        // are safe to dispose normally.
+        const isSharedShoulder = shoulderMaterial
+          && (child.material === shoulderMaterial
+            || (Array.isArray(child.material)
+              && child.material.indexOf(shoulderMaterial) !== -1));
+        if (!isSharedShoulder) {
+          if (Array.isArray(child.material)) {
+            child.material.forEach((m) => { try { m.dispose(); } catch {} });
+          } else if (child.material) {
+            try { child.material.dispose(); } catch {}
+          }
         }
       }
       roadGroup.remove(child);
@@ -1846,6 +2123,15 @@
       try { grassMaterial.dispose(); } catch {}
       grassMaterial = null;
     }
+    // Dispose the shared shoulder material exactly once. The
+    // per-segment recycle path (`removeTileVisuals`) deliberately
+    // skips material disposal for shoulder meshes because every
+    // shoulder mesh shares this single instance — releasing it here
+    // (in step with `grassMaterial`) keeps the lifecycle balanced.
+    if (shoulderMaterial) {
+      try { shoulderMaterial.dispose(); } catch {}
+      shoulderMaterial = null;
+    }
 
     if (renderer) {
       renderer.dispose();
@@ -1868,6 +2154,7 @@
     grassGroup = null;
     grassGeometry = null;
     grassMaterial = null;
+    shoulderMaterial = null;
     roadSegments = [];
     roadTileData = [];
     objectDescriptors = [];

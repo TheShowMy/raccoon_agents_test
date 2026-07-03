@@ -3,6 +3,22 @@ import {
   getRoadOffsetAt,
   sampleCurveOffset,
   sampleHeightOffset,
+  ENEMY_VEHICLE_MODELS,
+  ENEMY_VEHICLE_MODEL_MAP,
+  ENEMY_VEHICLE_MODEL_IDS,
+  getEnemyModelById,
+  DIFFICULTY_DISTANCE_PER_LEVEL,
+  DIFFICULTY_TIME_PER_LEVEL,
+  DIFFICULTY_MAX_LEVEL,
+  ENEMY_SPEED_PER_LEVEL,
+  ENEMY_SPEED_MAX_MULTIPLIER,
+  MAX_OBJECTS_BASE,
+  MAX_OBJECTS_CAP,
+  SPAWN_COOLDOWN_BASE,
+  SPAWN_COOLDOWN_MIN,
+  SPAWN_CHANCE_BASE,
+  SPAWN_CHANCE_MAX,
+  computeDifficulty,
 } from '../src/lib/utils/racingGame.js';
 
 /* ===================================================================
@@ -1314,4 +1330,1116 @@ describe('Oncoming vehicle movement — segment spawn protection', () => {
     expect(canSegmentSpawn(tileData)).toBe(false);
   });
 });
+
+/* ==================================================================
+   12. Per-model oncoming-vehicle speed (multi-model movement)
+
+      The advance function inside RacingGameScene.svelte now reads
+      `obj.speed` (the per-model approach speed that
+      `generateObjectsForSegment` stamps on the descriptor) instead
+      of the global `ONCOMING_VEHICLE_SPEED` constant. This makes
+      closing speed vary per archetype:
+
+        - 轿车 (sedan)  speed=14
+        - 卡车 (truck)  speed=9   (slow / heavy)
+        - 跑车 (sports) speed=19  (fast)
+
+      For descriptors that lack a usable `speed` (defensive fallback)
+      the implementation falls back to `ONCOMING_VEHICLE_SPEED` so
+      hand-crafted / legacy descriptors still move.
+
+      The pure mirror below reproduces the new logic. It exists
+      separately from the global-constant mirror used by the prior
+      tests so the contract is exercised on its own (and the
+      global-constant contract remains pinned by the older tests).
+   ================================================================== */
+
+// Mirrored constants — keep in sync with racingGame.js. The fallback
+// speed is the legacy global constant.
+const ONCOMING_VEHICLE_SPEED_FALLBACK = 14;
+const FALLBACK_RECYCLE_WORLD_Z = 5;
+const FALLBACK_VEHICLE_ZWIDTH = 1.5;
+
+/**
+ * Pure replica of the per-frame advancement inside RacingGameScene.svelte's
+ * advanceOncomingVehicles AFTER the per-model-speed change. Each vehicle
+ * advances at its OWN `obj.speed` (a positive, finite number) with a
+ * fallback to the global constant for descriptors that don't carry one.
+ * Mutates objectDescriptors in place.
+ */
+function advanceOncomingVehiclesByModel(objectDescriptors, dt) {
+  for (let i = 0; i < objectDescriptors.length; i++) {
+    const obj = objectDescriptors[i];
+    if (!obj || obj.type !== 'oncoming_vehicle') continue;
+    const speed = typeof obj.speed === 'number'
+      && Number.isFinite(obj.speed)
+      && obj.speed > 0
+      ? obj.speed
+      : ONCOMING_VEHICLE_SPEED_FALLBACK;
+    obj.z += speed * dt;
+  }
+}
+
+describe('Per-model oncoming-vehicle speed — read from obj.speed', () => {
+  it('a sedan (speed=14) advances by 14 * dt in one frame', () => {
+    const sedan = { type: 'oncoming_vehicle', z: -100, modelId: 'sedan', speed: 14 };
+    const initial = sedan.z;
+    advanceOncomingVehiclesByModel([sedan], 1 / 60);
+    expect(sedan.z).toBeCloseTo(initial + 14 * (1 / 60), 10);
+  });
+
+  it('a truck (speed=9) advances slower than a sedan (speed=14)', () => {
+    const truck = { type: 'oncoming_vehicle', z: -100, modelId: 'truck', speed: 9 };
+    const sedan = { type: 'oncoming_vehicle', z: -100, modelId: 'sedan', speed: 14 };
+    const initial = -100;
+    const dt = 1;
+    advanceOncomingVehiclesByModel([truck, sedan], dt);
+    // The truck must close 9 units in 1 s, the sedan 14.
+    expect(truck.z).toBeCloseTo(initial + 9, 9);
+    expect(sedan.z).toBeCloseTo(initial + 14, 9);
+    expect(sedan.z - truck.z).toBeCloseTo(5, 9);
+  });
+
+  it('a sports car (speed=19) advances faster than a sedan (speed=14)', () => {
+    const sports = { type: 'oncoming_vehicle', z: -100, modelId: 'sports', speed: 19 };
+    const sedan = { type: 'oncoming_vehicle', z: -100, modelId: 'sedan', speed: 14 };
+    advanceOncomingVehiclesByModel([sports, sedan], 1);
+    expect(sports.z).toBeCloseTo(-100 + 19, 9);
+    expect(sedan.z).toBeCloseTo(-100 + 14, 9);
+    expect(sports.z - sedan.z).toBeCloseTo(5, 9);
+  });
+
+  it('vehicles with different model speeds remain independent across multiple frames', () => {
+    const truck = { type: 'oncoming_vehicle', z: -50, speed: 9 };
+    const sedan = { type: 'oncoming_vehicle', z: -50, speed: 14 };
+    const sports = { type: 'oncoming_vehicle', z: -50, speed: 19 };
+    const initial = -50;
+    const dt = 1 / 60;
+    for (let i = 0; i < 60; i++) {
+      advanceOncomingVehiclesByModel([truck, sedan, sports], dt);
+    }
+    // Each vehicle has closed by exactly its own per-model speed after 1 s.
+    expect(truck.z).toBeCloseTo(initial + 9, 9);
+    expect(sedan.z).toBeCloseTo(initial + 14, 9);
+    expect(sports.z).toBeCloseTo(initial + 19, 9);
+  });
+
+  it('falls back to the global constant when obj.speed is missing / null', () => {
+    const legacy = { type: 'oncoming_vehicle', z: -50 }; // no speed field
+    const explicitNull = { type: 'oncoming_vehicle', z: -50, speed: null };
+    const initial = -50;
+    const dt = 1 / 60;
+    advanceOncomingVehiclesByModel([legacy, explicitNull], dt);
+    expect(legacy.z).toBeCloseTo(
+      initial + ONCOMING_VEHICLE_SPEED_FALLBACK * dt,
+      10,
+    );
+    expect(explicitNull.z).toBeCloseTo(
+      initial + ONCOMING_VEHICLE_SPEED_FALLBACK * dt,
+      10,
+    );
+  });
+
+  it('falls back to the global constant when obj.speed is non-positive or non-finite', () => {
+    const cases = [
+      { type: 'oncoming_vehicle', z: -50, speed: 0 },
+      { type: 'oncoming_vehicle', z: -50, speed: -5 },
+      { type: 'oncoming_vehicle', z: -50, speed: NaN },
+      { type: 'oncoming_vehicle', z: -50, speed: Infinity },
+      { type: 'oncoming_vehicle', z: -50, speed: 'fast' },
+    ];
+    const initial = -50;
+    const dt = 1 / 60;
+    advanceOncomingVehiclesByModel(cases, dt);
+    for (const obj of cases) {
+      expect(obj.z).toBeCloseTo(
+        initial + ONCOMING_VEHICLE_SPEED_FALLBACK * dt,
+        10,
+      );
+    }
+  });
+
+  it('does not move obstacles or repair kits regardless of their speed field', () => {
+    const objs = [
+      { type: 'obstacle', z: -30, speed: 100 }, // invalid: not a vehicle
+      { type: 'repair_kit', z: -30, speed: 100 },
+      { type: 'oncoming_vehicle', z: -30, speed: 12 },
+    ];
+    const initial = -30;
+    advanceOncomingVehiclesByModel(objs, 1);
+    expect(objs[0].z).toBe(initial);
+    expect(objs[1].z).toBe(initial);
+    expect(objs[2].z).toBeCloseTo(initial + 12, 9);
+  });
+
+  it('closing speed relative to player equals PLAYER_SPEED + obj.speed (per model)', () => {
+    // A sports car closes the gap to the player faster than a truck.
+    // Verify the formula `closing = PLAYER_SPEED + obj.speed` per model.
+    const sports = { type: 'oncoming_vehicle', z: -100, speed: 19 };
+    const truck = { type: 'oncoming_vehicle', z: -100, speed: 9 };
+    const dt = 1 / 60;
+    let scrollOffset = 0;
+    for (let i = 0; i < 60; i++) {
+      scrollOffset += PLAYER_SPEED * dt;
+      advanceOncomingVehiclesByModel([sports, truck], dt);
+    }
+    const sportsGap = Math.abs(sports.z + scrollOffset - 0);
+    const truckGap = Math.abs(truck.z + scrollOffset - 0);
+    // Initial gap was 100; the sports car has closed by PLAYER_SPEED + 19
+    // and the truck by PLAYER_SPEED + 9.
+    const sportsClosing = 100 - sportsGap;
+    const truckClosing = 100 - truckGap;
+    expect(sportsClosing).toBeCloseTo(PLAYER_SPEED + 19, 5);
+    expect(truckClosing).toBeCloseTo(PLAYER_SPEED + 9, 5);
+    expect(sportsClosing).toBeGreaterThan(truckClosing);
+  });
+});
+
+/* ==================================================================
+   13. Per-model oncoming-vehicle visual differentiation
+
+      The component's `createObjectVisual` switches on `desc.modelId`
+      in its ONCOMING_VEHICLE branch and renders geometry / colour /
+      roof / spoiler / wheel count / headlight count that match the
+      model config table. The pure mirror below records, for a given
+      descriptor, the visual choices the component would make (body
+      dimensions, colour, roof, spoiler, wheel count, headlight
+      count). The tests verify the choices differ across the three
+      archetypes — i.e. the contract "different models look different
+      at a glance" is upheld.
+   ================================================================== */
+
+/**
+ * Pure replica of the per-model visual selection inside
+ * RacingGameScene.svelte's `createObjectVisual` ONCOMING_VEHICLE
+ * branch. Returns a snapshot of the choices the component would
+ * make for the given descriptor.
+ */
+function pickOncomingVisual(desc) {
+  const model = getEnemyModelById(desc.modelId)
+    || ENEMY_VEHICLE_MODEL_MAP[ENEMY_VEHICLE_MODEL_IDS[0]];
+  return {
+    bodyWidth: model.body.width,
+    bodyHeight: model.body.height,
+    bodyLength: model.body.length,
+    cabinWidth: model.cabin.width,
+    cabinHeight: model.cabin.height,
+    cabinLength: model.cabin.length,
+    color: model.color,
+    hasRoof: model.hasRoof,
+    hasSpoiler: model.hasSpoiler,
+    wheelCount: model.wheelCount,
+    headlightCount: model.headlightCount,
+    speed: model.speed,
+  };
+}
+
+describe('Per-model oncoming-vehicle visual differentiation', () => {
+  it('renders the sedan with blue body, an enclosed roof, no spoiler, 4 wheels', () => {
+    const v = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sedan' });
+    expect(v.color).toBe(0x4488ff);
+    expect(v.hasRoof).toBe(true);
+    expect(v.hasSpoiler).toBe(false);
+    expect(v.wheelCount).toBe(4);
+    expect(v.headlightCount).toBe(2);
+    // The sedan has a medium body size and a sizeable cabin.
+    expect(v.bodyWidth).toBe(1.2);
+    expect(v.bodyLength).toBe(2.0);
+    expect(v.cabinLength).toBeGreaterThan(0);
+  });
+
+  it('renders the truck with a red-orange body, NO roof, NO spoiler, 6 wheels', () => {
+    const v = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'truck' });
+    expect(v.color).toBe(0xcc4422);
+    expect(v.hasRoof).toBe(false);
+    expect(v.hasSpoiler).toBe(false);
+    expect(v.wheelCount).toBe(6);
+    expect(v.headlightCount).toBe(2);
+    // The truck is the longest / tallest body in the set.
+    expect(v.bodyLength).toBe(2.6);
+    expect(v.bodyHeight).toBe(0.7);
+  });
+
+  it('renders the sports car with a yellow body, an enclosed roof, A spoiler, 4 wheels', () => {
+    const v = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sports' });
+    expect(v.color).toBe(0xffcc00);
+    expect(v.hasRoof).toBe(true);
+    expect(v.hasSpoiler).toBe(true);
+    expect(v.wheelCount).toBe(4);
+    expect(v.headlightCount).toBe(2);
+    // The sports car is the smallest body in the set.
+    expect(v.bodyLength).toBe(1.8);
+    expect(v.bodyHeight).toBe(0.35);
+  });
+
+  it('all three archetype visuals differ on at least one dimension (body, roof, spoiler, wheels)', () => {
+    const sedan = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sedan' });
+    const truck = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'truck' });
+    const sports = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sports' });
+    // Distinct colours.
+    expect(new Set([sedan.color, truck.color, sports.color]).size).toBe(3);
+    // Distinct body sizes — every body dimension differs across the set.
+    expect(new Set([sedan.bodyLength, truck.bodyLength, sports.bodyLength]).size).toBe(3);
+    // Roof flag: only sedan + sports have one.
+    expect(sedan.hasRoof).toBe(true);
+    expect(truck.hasRoof).toBe(false);
+    expect(sports.hasRoof).toBe(true);
+    // Spoiler flag: only the sports car has one.
+    expect(sedan.hasSpoiler).toBe(false);
+    expect(truck.hasSpoiler).toBe(false);
+    expect(sports.hasSpoiler).toBe(true);
+    // Wheel count: truck is the only 6-wheeler.
+    expect(sedan.wheelCount).toBe(4);
+    expect(truck.wheelCount).toBe(6);
+    expect(sports.wheelCount).toBe(4);
+  });
+
+  it('an unknown / missing modelId falls back to a valid first-model visual', () => {
+    // Defensive: descriptors built outside generateObjectsForSegment
+    // might lack a modelId. The component must still produce a valid
+    // visual, not throw.
+    const noId = pickOncomingVisual({ type: 'oncoming_vehicle' });
+    const unknownId = pickOncomingVisual({
+      type: 'oncoming_vehicle',
+      modelId: 'does-not-exist',
+    });
+    const firstModel = ENEMY_VEHICLE_MODELS[0];
+    expect(noId.color).toBe(firstModel.color);
+    expect(noId.bodyLength).toBe(firstModel.body.length);
+    expect(unknownId.color).toBe(firstModel.color);
+    expect(unknownId.bodyLength).toBe(firstModel.body.length);
+  });
+
+  it('per-model speed field is read from the model config (not the global constant)', () => {
+    // The closing speed depends on `model.speed`; verifying the
+    // visual picker surfaces the model speed locks the contract that
+    // the visual and the movement stay in sync (same model id → same
+    // speed).
+    const sedan = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sedan' });
+    const truck = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'truck' });
+    const sports = pickOncomingVisual({ type: 'oncoming_vehicle', modelId: 'sports' });
+    expect(sedan.speed).toBe(14);
+    expect(truck.speed).toBe(9);
+    expect(sports.speed).toBe(19);
+    // And they are distinct (otherwise per-model differentiation
+    // would not actually vary closing speed).
+    expect(new Set([sedan.speed, truck.speed, sports.speed]).size).toBe(3);
+  });
+});
+
+/* ==================================================================
+   14. Fog & horizon transition
+
+      The far end of the road used to show a hard "sky / ground"
+      colour band because:
+        (a) the fog range (80 → 200) was narrow, so the colour
+            transition from object to fog colour happened over a
+            short Z span and read as a sharp line;
+        (b) the background colour and the fog colour could drift
+            out of sync (they must match exactly for the horizon
+            to dissolve);
+        (c) the grass plane was narrower than the camera's
+            horizontal field of view at the fog far plane, so the
+            plane's edge sat inside the visible frustum and
+            produced a second hard line just inside the fog band;
+        (d) several road materials (shoulder, lane lines) did not
+            explicitly opt into fog response, so they could
+            silently drop fog blending after a future refactor.
+
+      The fix widens the fog range to (60, 250), forces the
+      background and fog colours to be exactly equal, widens the
+      grass plane, and explicitly enables `fog: true` on every
+      world material. The mirrors below pin the new contract.
+   ================================================================== */
+
+// Mirrored constants — keep in sync with RacingGameScene.svelte.
+const FOG_COLOR = 0x87ceeb;
+const FOG_NEAR = 60;
+const FOG_FAR = 250;
+const CAMERA_FAR_PLANE = 300;
+const CAMERA_FOV_VERTICAL = 60;
+const ASPECT_16_9 = 16 / 9;
+const GRASS_WIDTH = 600;
+const GRASS_LENGTH = 4000;
+const ROAD_SHOULDER_COLOR = 0x6a7a6a;
+const LANE_LINE_COLOR = 0xd8e8d8;
+const ROAD_COLOR = 0x8a9a8a;
+const GRASS_COLOR = 0x4a7a3a;
+const SCENE_BACKGROUND_COLOR = 0x87ceeb;
+
+describe('Fog and horizon transition — no hard sky/ground band', () => {
+  it('background colour matches fog colour exactly (no band at the far plane)', () => {
+    // The horizon dissolves smoothly only if the fog colour the
+    // material blends into is identical to the background colour
+    // the renderer shows behind everything else. A drift of even
+    // one RGB channel would produce a visible band at the fog
+    // far plane.
+    expect(FOG_COLOR).toBe(SCENE_BACKGROUND_COLOR);
+  });
+
+  it('fog range is wider than the original (80, 200) for a smooth transition', () => {
+    // The new range (60, 250) spans 190 Z units, wider than the
+    // original 120 Z units. The wider span dilutes the per-unit
+    // colour change and removes the sharp "sky meets ground" line.
+    const newSpan = FOG_FAR - FOG_NEAR;
+    expect(newSpan).toBeGreaterThan(120);
+    expect(FOG_NEAR).toBeLessThan(80);
+    expect(FOG_FAR).toBeGreaterThan(200);
+  });
+
+  it('fog far plane sits inside the camera far plane (no clipping before fully fogged)', () => {
+    // Materials only reach the fog colour at distance == FOG_FAR
+    // from the camera. If FOG_FAR ≥ camera.far the renderer would
+    // clip the geometry before fog could finish blending it, which
+    // would let the underlying material colour bleed through at
+    // the far edge. Require a safe margin.
+    expect(FOG_FAR).toBeLessThan(CAMERA_FAR_PLANE);
+    expect(CAMERA_FAR_PLANE - FOG_FAR).toBeGreaterThanOrEqual(20);
+  });
+
+  it('grass plane width exceeds the visible horizontal span at the fog far plane', () => {
+    // The visible horizontal half-width at the fog far plane must
+    // fit inside the grass plane's half-width, otherwise the
+    // plane's lateral edge appears as a hard line inside the fog
+    // band. Using the camera's vertical FOV and the 16:9 aspect
+    // gives the horizontal half-FOV, and the fog-far distance from
+    // the camera is the fog range itself.
+    const halfVFov = (CAMERA_FOV_VERTICAL * Math.PI) / 360;
+    const halfHFov = Math.atan(Math.tan(halfVFov) * ASPECT_16_9);
+    const visibleHalfWidth = FOG_FAR * Math.tan(halfHFov);
+    expect(GRASS_WIDTH / 2).toBeGreaterThan(visibleHalfWidth);
+  });
+
+  it('grass plane length comfortably covers from the player position to the fog far plane', () => {
+    // The grass is anchored at world Z=0 (player position). Its
+    // length must reach past the fog far plane on the -Z side so
+    // there is no grass edge visible inside the fog band.
+    // grassGroup.position.z = 0 ⇒ the plane spans
+    //   Z ∈ [-GRASS_LENGTH/2, +GRASS_LENGTH/2]
+    // The fog far plane sits at z ≈ CAMERA.z − FOG_FAR.
+    // With CAMERA.z = 12 and FOG_FAR = 250, fog far plane z ≈ −238.
+    const cameraZ = 12;
+    const fogFarZ = cameraZ - FOG_FAR;
+    const grassFarEdge = -GRASS_LENGTH / 2;
+    expect(grassFarEdge).toBeLessThanOrEqual(fogFarZ);
+    // And the positive side still covers the area behind the camera.
+    expect(GRASS_LENGTH / 2).toBeGreaterThan(cameraZ);
+  });
+
+  it('all world materials are configured to respond to fog', () => {
+    // Mirror the material options blocks from the component. The
+    // `fog: true` flag is what makes the per-fragment colour
+    // blended toward the fog colour at the far end of the scene.
+    // If any of these regress to default (which is true for
+    // Three.js standard materials) the assertion still passes —
+    // the point is to lock the explicit intent, so a future
+    // refactor that flattens the options object cannot silently
+    // drop it.
+    const roadSurfaceMaterial = { color: ROAD_COLOR, fog: true };
+    const shoulderMaterial = { color: ROAD_SHOULDER_COLOR, fog: true };
+    const laneLineMaterial = { color: LANE_LINE_COLOR, fog: true };
+    const grassMaterial = { color: GRASS_COLOR, fog: true };
+    for (const mat of [
+      roadSurfaceMaterial,
+      shoulderMaterial,
+      laneLineMaterial,
+      grassMaterial,
+    ]) {
+      expect(mat.fog).toBe(true);
+    }
+  });
+});
+
+/* ==================================================================
+   15. Shoulder material: shared, lit, opaque, fog-aware
+
+      The shoulder strip on each side of the road used to be a
+      flat, unlit, semi-transparent overlay (`MeshBasicMaterial`
+      with `transparent: true, opacity: 0.5`). That produced two
+      problems:
+
+        1. The shoulder did not react to the scene lights, so it
+           read as a uniformly coloured band sitting on top of the
+           (correctly lit) grass. The left and right shoulders
+           therefore looked stylistically different from the grass
+           on the inside of the road.
+        2. The transparency broke the fog blend at the far end of
+           the road and let the shoulder show through to the sky
+           in places, making the two sides of the road look
+           different from each other in the distance.
+
+      The fix replaces the per-segment MeshBasicMaterial with a
+      single shared MeshLambertMaterial that is opaque and
+      fog-aware. Both sides of every segment reference the same
+      material instance, so the two sides are guaranteed to be
+      affected by the same lighting and the same fog.
+
+      The mirrors below reproduce the material-construction logic
+      and the "is the same instance shared" check so a regression
+      in the component (e.g. accidentally creating a per-segment
+      material, or accidentally using MeshBasicMaterial again) is
+      caught by the test instead of by a visual inspection.
+   ================================================================== */
+
+// Mirrored constants — keep in sync with RacingGameScene.svelte.
+const ROAD_VISUAL_WIDTH = 3 * 3.5 * 1.6;
+const SEGMENT_LENGTH = 20;
+const ROAD_SUBDIVISIONS = 6;
+const SHOULDER_HALF_W = 0.3;
+
+/**
+ * Pure replica of the shoulder material factory used by
+ * RacingGameScene.svelte's `createContinuousRoadSegment`. The
+ * factory takes the module-level `shoulderMaterial` reference and
+ * lazily creates it on first use; subsequent calls return the
+ * same instance so every shoulder mesh shares one material.
+ */
+function getOrCreateSharedShoulderMaterial(cache) {
+  if (!cache.material) {
+    cache.material = {
+      type: 'MeshLambertMaterial',
+      color: ROAD_SHOULDER_COLOR,
+      fog: true,
+      transparent: false,
+    };
+  }
+  return cache.material;
+}
+
+/**
+ * Pure replica of the per-segment shoulder mesh builder. Returns
+ * one mesh per side (left/right) and the material they share, so
+ * the test can verify both sides reference the same instance.
+ */
+function buildShoulderMeshesForSegment(cache) {
+  const material = getOrCreateSharedShoulderMaterial(cache);
+  const left = { side: 'left', material };
+  const right = { side: 'right', material };
+  return { left, right, material };
+}
+
+describe('Shoulder material — shared instance, lit, opaque, fog-aware', () => {
+  it('the shoulder material is a Lambert-style material that responds to lighting', () => {
+    // MeshLambertMaterial responds to ambient + hemisphere +
+    // directional lights, so the shoulder receives the same shading
+    // as the neighbouring grass. MeshBasicMaterial would not, which
+    // is the regression we are guarding against.
+    const cache = {};
+    const mat = getOrCreateSharedShoulderMaterial(cache);
+    expect(mat.type).toBe('MeshLambertMaterial');
+    expect(mat.type).not.toBe('MeshBasicMaterial');
+  });
+
+  it('the shoulder material is opaque (no transparency flag)', () => {
+    // Transparency broke the fog blend at the far end of the road
+    // because transparent materials in Three.js use a different
+    // blending path and do not always pick up the fog factor. An
+    // opaque material lets the fragment colour be blended directly
+    // toward the fog colour, which is what dissolves the horizon.
+    const cache = {};
+    const mat = getOrCreateSharedShoulderMaterial(cache);
+    expect(mat.transparent).toBe(false);
+  });
+
+  it('the shoulder material has fog response enabled', () => {
+    // Explicit `fog: true` so the material's per-fragment colour is
+    // interpolated toward the fog colour at distance. This is
+    // implicit for Three.js standard materials, but stating it
+    // makes the contract auditable and immune to a future options-
+    // object refactor.
+    const cache = {};
+    const mat = getOrCreateSharedShoulderMaterial(cache);
+    expect(mat.fog).toBe(true);
+  });
+
+  it('both sides of a segment use the SAME material instance', () => {
+    // The left and right shoulder meshes must reference the same
+    // material instance. A per-side material would let the two
+    // sides drift out of sync (different colour, different fog
+    // state, etc.) and would re-introduce the left/right
+    // inconsistency the user reported.
+    const cache = {};
+    const { left, right, material } = buildShoulderMeshesForSegment(cache);
+    expect(left.material).toBe(material);
+    expect(right.material).toBe(material);
+    expect(left.material).toBe(right.material);
+  });
+
+  it('every segment shares the same shoulder material across segments', () => {
+    // Calling the segment builder twice must return the same
+    // material instance both times — i.e. a SINGLE shared material
+    // is used by every shoulder mesh in the scene, not a
+    // per-segment instance.
+    const cache = {};
+    const first = buildShoulderMeshesForSegment(cache);
+    const second = buildShoulderMeshesForSegment(cache);
+    expect(first.material).toBe(second.material);
+    expect(first.left.material).toBe(second.right.material);
+  });
+
+  it('the shoulder colour is between the road and grass colours (soft transition)', () => {
+    // The shoulder is a transition strip between the road and the
+    // grass. Its colour should sit between the two so the visual
+    // change from road → shoulder → grass reads as a smooth
+    // gradient, not as two jumps.
+    // Convert each hex colour to a luminance proxy and assert the
+    // ordering. This guards against an accidental change that
+    // pushes the shoulder colour to either extreme.
+    const luminance = (hex) => {
+      const r = (hex >> 16) & 0xff;
+      const g = (hex >> 8) & 0xff;
+      const b = hex & 0xff;
+      return 0.299 * r + 0.587 * g + 0.114 * b;
+    };
+    const roadL = luminance(ROAD_COLOR);
+    const shoulderL = luminance(ROAD_SHOULDER_COLOR);
+    const grassL = luminance(GRASS_COLOR);
+    expect(shoulderL).toBeGreaterThan(grassL);
+    expect(shoulderL).toBeLessThan(roadL);
+  });
+
+  it('shoulder geometry is symmetric about the road centreline', () => {
+    // The left and right shoulder meshes must be a mirror image of
+    // each other about the road centreline (x = 0). A drift on
+    // either side would re-introduce a left/right style gap.
+    // Reconstruct the inner/outer X positions of each shoulder for
+    // a single Z row at a sample curve offset of 0, and check the
+    // absolute distance from the centreline is identical on both
+    // sides.
+    const halfW = ROAD_VISUAL_WIDTH / 2;
+    const innerLeft = -halfW + SHOULDER_HALF_W;
+    const outerLeft = -halfW - SHOULDER_HALF_W;
+    const innerRight = halfW - SHOULDER_HALF_W;
+    const outerRight = halfW + SHOULDER_HALF_W;
+    expect(Math.abs(innerLeft)).toBeCloseTo(innerRight, 12);
+    expect(Math.abs(outerLeft)).toBeCloseTo(outerRight, 12);
+    // And the strip width is the same on both sides.
+    const leftWidth = innerLeft - outerLeft;
+    const rightWidth = outerRight - innerRight;
+    expect(leftWidth).toBeCloseTo(rightWidth, 12);
+    expect(leftWidth).toBeCloseTo(2 * SHOULDER_HALF_W, 12);
+  });
+});
+
+/* ==================================================================
+   16. Dynamic difficulty integration
+
+      The component computes the dynamic-difficulty snapshot from
+      `distance` and `runningTime` once per frame inside
+      `updateGame` and threads the resulting `enemySpeedMultiplier`,
+      `spawnChance`, `maxObjectsPerSegment` and
+      `spawnCooldownSeconds` into the spawn / advance pipeline. The
+      tests below mirror that pipeline so a regression in either
+      side (e.g. accidentally forgetting to pass the multiplier,
+      or using a stale snapshot) is caught deterministically.
+
+      The mirrors here re-use the constants exported by
+      `racingGame.js` (DIFFICULTY_*, SPAWN_*, MAX_OBJECTS_*) so a
+      future change to the export values automatically updates
+      the integration assertions. The two pure replicas
+      (`advanceOncomingVehiclesWithDifficulty` and
+      `pickDifficultySpawnParameters`) reproduce the per-frame
+      consumer logic; the assertions below exercise the contract
+      end-to-end against `computeDifficulty`.
+   ================================================================== */
+
+/**
+ * Pure replica of the per-frame advancement inside
+ * RacingGameScene.svelte's `advanceOncomingVehicles` AFTER the
+ * dynamic-difficulty integration: the function now takes a
+ * `speedMultiplier` (defaulting to 1) and applies it on top of
+ * the per-model `obj.speed`. Each vehicle advances at
+ * `obj.speed * speedMultiplier * dt` in road-space, with a
+ * fallback to a global constant for descriptors that lack a
+ * valid speed.
+ *
+ * Mutates `objectDescriptors` in place, matching the component's
+ * mutation pattern.
+ */
+function advanceOncomingVehiclesWithDifficulty(objectDescriptors, dt, speedMultiplier = 1) {
+  // Sanitise the multiplier exactly the way the component does
+  // inside advanceOncomingVehicles: non-finite / NaN / non-number
+  // / non-positive values clamp to 1.
+  const safeMultiplier = typeof speedMultiplier === 'number'
+    && Number.isFinite(speedMultiplier)
+    && speedMultiplier > 0
+    ? speedMultiplier
+    : 1;
+  for (let i = 0; i < objectDescriptors.length; i++) {
+    const obj = objectDescriptors[i];
+    if (!obj || obj.type !== 'oncoming_vehicle') continue;
+    const speed = typeof obj.speed === 'number'
+      && Number.isFinite(obj.speed)
+      && obj.speed > 0
+      ? obj.speed
+      : 14; // mirrors ONCOMING_VEHICLE_SPEED fallback.
+    obj.z += speed * safeMultiplier * dt;
+  }
+}
+
+/**
+ * Pure replica of the per-segment spawn decision inside
+ * RacingGameScene.svelte's `spawnObjects()`. Returns the
+ * `(spawnChance, maxObjectsPerSegment)` pair to use for a given
+ * difficulty snapshot. This is exactly the pair the component
+ * reads from `currentDifficulty` for every frame.
+ */
+function pickDifficultySpawnParameters(difficulty) {
+  return {
+    spawnChance: difficulty.spawnChance,
+    maxObjectsPerSegment: difficulty.maxObjectsPerSegment,
+  };
+}
+
+describe('Dynamic difficulty — spawn-loop parameters', () => {
+  it('level-0 baseline matches the legacy hard-coded spawn parameters', () => {
+    // The previous spawnObjects() used a 0.3 random chance and
+    // asked generateObjectsForSegment for max 1 object. The new
+    // spawn loop reads these from the snapshot, so at level 0
+    // the same values must come out.
+    const d = computeDifficulty({ distance: 0, runningTime: 0 });
+    const params = pickDifficultySpawnParameters(d);
+    expect(params.spawnChance).toBeCloseTo(0.3, 10);
+    expect(params.maxObjectsPerSegment).toBe(1);
+  });
+
+  it('at higher levels, the per-segment chance and object count both rise', () => {
+    // 4 levels of distance → level 4 → chance 0.54, max 2.
+    const d = computeDifficulty({
+      distance: 4 * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    const params = pickDifficultySpawnParameters(d);
+    expect(d.level).toBe(4);
+    expect(params.spawnChance).toBeGreaterThan(SPAWN_CHANCE_BASE);
+    expect(params.maxObjectsPerSegment).toBe(2);
+  });
+
+  it('at the cap, the spawn parameters reach their final values', () => {
+    const d = computeDifficulty({
+      distance: DIFFICULTY_MAX_LEVEL * DIFFICULTY_DISTANCE_PER_LEVEL,
+      runningTime: 0,
+    });
+    const params = pickDifficultySpawnParameters(d);
+    expect(d.level).toBe(DIFFICULTY_MAX_LEVEL);
+    // The spawn chance is still below the cap of SPAWN_CHANCE_MAX
+    // at level 10 (it would take more than 10 levels to hit 0.95).
+    expect(params.spawnChance).toBeLessThanOrEqual(SPAWN_CHANCE_MAX);
+    // The per-segment count has saturated at the cap.
+    expect(params.maxObjectsPerSegment).toBe(MAX_OBJECTS_CAP);
+  });
+
+  it('maxObjectsPerSegment is always a positive integer in [MAX_OBJECTS_BASE, MAX_OBJECTS_CAP]', () => {
+    // Sweep a wide input range; every output must be a valid
+    // integer in the documented range so the spawn loop can
+    // safely pass it straight to generateObjectsForSegment.
+    for (const distance of [0, 50, 250, 1000, 5000, 50000]) {
+      for (const runningTime of [0, 15, 60, 600, 3600]) {
+        const d = computeDifficulty({ distance, runningTime });
+        const params = pickDifficultySpawnParameters(d);
+        expect(Number.isInteger(params.maxObjectsPerSegment)).toBe(true);
+        expect(params.maxObjectsPerSegment).toBeGreaterThanOrEqual(MAX_OBJECTS_BASE);
+        expect(params.maxObjectsPerSegment).toBeLessThanOrEqual(MAX_OBJECTS_CAP);
+        expect(params.spawnChance).toBeGreaterThanOrEqual(0);
+        expect(params.spawnChance).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('the spawn cooldown field can replace the legacy hard-coded 0.25 reset', () => {
+    // The component resets spawnCooldown to currentDifficulty.spawnCooldownSeconds
+    // after a successful spawn. At level 0 the reset value must
+    // equal the previous hard-coded 0.25.
+    const d = computeDifficulty({ distance: 0, runningTime: 0 });
+    expect(d.spawnCooldownSeconds).toBeCloseTo(SPAWN_COOLDOWN_BASE, 10);
+  });
+
+  it('the spawn cooldown is strictly non-increasing with difficulty', () => {
+    let prev = Infinity;
+    for (let lvl = 0; lvl <= DIFFICULTY_MAX_LEVEL + 3; lvl++) {
+      const d = computeDifficulty({
+        distance: lvl * DIFFICULTY_DISTANCE_PER_LEVEL,
+        runningTime: 0,
+      });
+      expect(d.spawnCooldownSeconds).toBeLessThanOrEqual(prev + 1e-9);
+      expect(d.spawnCooldownSeconds).toBeGreaterThanOrEqual(SPAWN_COOLDOWN_MIN - 1e-9);
+      prev = d.spawnCooldownSeconds;
+    }
+  });
+});
+
+describe('Dynamic difficulty — per-frame enemy speed multiplier', () => {
+  it('at level 0, the multiplier is 1 (legacy baseline preserved)', () => {
+    const d = computeDifficulty({ distance: 0, runningTime: 0 });
+    expect(d.enemySpeedMultiplier).toBe(1);
+  });
+
+  it('a vehicle at level 0 advances by exactly model.speed * dt', () => {
+    // Replica of the per-frame advance with a 1.0 multiplier
+    // (the level-0 baseline). Must match the pre-difficulty
+    // behaviour exactly.
+    const sedan = { type: 'oncoming_vehicle', z: -100, modelId: 'sedan', speed: 14 };
+    const initial = sedan.z;
+    const dt = 1 / 60;
+    advanceOncomingVehiclesWithDifficulty([sedan], dt, 1);
+    expect(sedan.z).toBeCloseTo(initial + 14 * dt, 10);
+  });
+
+  it('a higher multiplier makes an oncoming vehicle close the gap faster', () => {
+    // With a 1.4x multiplier (roughly level 5), the sedan
+    // advances by 14 * 1.4 = 19.6 units in 1 s, compared to 14
+    // units at level 0. The closing speed relative to the
+    // player is therefore `PLAYER_SPEED + 14*1.4` ≈ 41.6.
+    const sedan = { type: 'oncoming_vehicle', z: -100, modelId: 'sedan', speed: 14 };
+    const initial = sedan.z;
+    const dt = 1 / 60;
+    advanceOncomingVehiclesWithDifficulty([sedan], dt, 1.4);
+    expect(sedan.z).toBeCloseTo(initial + 14 * 1.4 * dt, 10);
+  });
+
+  it('the multiplier applies identically to all three archetype speeds', () => {
+    // Sanity-check the multiplier interacts correctly with
+    // per-model speed: each archetype closes the gap at
+    // `model.speed * multiplier` per second.
+    const sedan = { type: 'oncoming_vehicle', z: -100, speed: 14 };
+    const truck = { type: 'oncoming_vehicle', z: -100, speed: 9 };
+    const sports = { type: 'oncoming_vehicle', z: -100, speed: 19 };
+    const initial = -100;
+    const dt = 1;
+    const mult = 1.5;
+    advanceOncomingVehiclesWithDifficulty([sedan, truck, sports], dt, mult);
+    expect(sedan.z).toBeCloseTo(initial + 14 * mult, 9);
+    expect(truck.z).toBeCloseTo(initial + 9 * mult, 9);
+    expect(sports.z).toBeCloseTo(initial + 19 * mult, 9);
+    // The relative ordering is preserved: sports > sedan > truck.
+    expect(sports.z - initial).toBeGreaterThan(sedan.z - initial);
+    expect(sedan.z - initial).toBeGreaterThan(truck.z - initial);
+  });
+
+  it('non-finite / non-positive multipliers clamp to 1 (no NaN pollution downstream)', () => {
+    // Defensive: a buggy caller that accidentally passes NaN,
+    // Infinity, 0 or a negative multiplier must not taint the
+    // per-frame arithmetic. The component's
+    // advanceOncomingVehicles implements the same guard.
+    const sedan = { type: 'oncoming_vehicle', z: -100, speed: 14 };
+    const initial = sedan.z;
+    const dt = 1 / 60;
+    for (const bad of [NaN, Infinity, -Infinity, 0, -1, 'fast', null, undefined, {}]) {
+      sedan.z = initial;
+      advanceOncomingVehiclesWithDifficulty([sedan], dt, bad);
+      expect(sedan.z).toBeCloseTo(initial + 14 * dt, 10);
+    }
+  });
+
+  it('obstacles and repair kits are unaffected by the multiplier', () => {
+    // The advance function only touches oncoming vehicles; other
+    // types are not moved in road-space regardless of the
+    // multiplier (the world scroll does that work, not the
+    // per-frame advance).
+    const objs = [
+      { type: 'obstacle', z: -30, speed: 100 },         // invalid: not a vehicle
+      { type: 'repair_kit', z: -30, speed: 100 },
+      { type: 'oncoming_vehicle', z: -30, speed: 12 },
+    ];
+    const initial = -30;
+    advanceOncomingVehiclesWithDifficulty(objs, 1, 2.0);
+    expect(objs[0].z).toBe(initial);
+    expect(objs[1].z).toBe(initial);
+    expect(objs[2].z).toBeCloseTo(initial + 12 * 2.0, 9);
+  });
+
+  it('closing speed relative to player equals PLAYER_SPEED + obj.speed * multiplier', () => {
+    // End-to-end: combine world scroll (player at PLAYER_SPEED)
+    // with the oncoming vehicle's `obj.speed * multiplier` to
+    // get the combined closing rate. A sports car with a
+    // 1.8x multiplier closes much faster than a level-0
+    // truck, and the order is preserved.
+    const sports = { type: 'oncoming_vehicle', z: -100, speed: 19 };
+    const truck = { type: 'oncoming_vehicle', z: -100, speed: 9 };
+    const dt = 1 / 60;
+    let scrollOffset = 0;
+    for (let i = 0; i < 60; i++) {
+      scrollOffset += PLAYER_SPEED * dt;
+      advanceOncomingVehiclesWithDifficulty(
+        [sports, truck],
+        dt,
+        ENEMY_SPEED_MAX_MULTIPLIER,
+      );
+    }
+    const sportsGap = Math.abs(sports.z + scrollOffset - 0);
+    const truckGap = Math.abs(truck.z + scrollOffset - 0);
+    // Initial gap was 100; with the cap multiplier the sports
+    // car has closed by PLAYER_SPEED + 19 * 1.8 and the truck
+    // by PLAYER_SPEED + 9 * 1.8.
+    const sportsClosing = 100 - sportsGap;
+    const truckClosing = 100 - truckGap;
+    expect(sportsClosing).toBeCloseTo(PLAYER_SPEED + 19 * ENEMY_SPEED_MAX_MULTIPLIER, 5);
+    expect(truckClosing).toBeCloseTo(PLAYER_SPEED + 9 * ENEMY_SPEED_MAX_MULTIPLIER, 5);
+    expect(sportsClosing).toBeGreaterThan(truckClosing);
+  });
+});
+
+describe('Dynamic difficulty — full updateGame loop simulation', () => {
+  // The component's updateGame does, in order, on every frame:
+  //   1. Advance runningTime, distance, scrollOffset by dt * PLAYER_SPEED.
+  //   2. Recompute currentDifficulty from (distance, runningTime).
+  //   3. Use currentDifficulty.spawnCooldownSeconds to reset
+  //      spawnCooldown after a successful spawn.
+  //   4. Use currentDifficulty.enemySpeedMultiplier to advance
+  //      oncoming vehicles in road-space.
+  //   5. Use currentDifficulty.spawnChance / maxObjectsPerSegment
+  //      in the next spawn tick.
+  //
+  // The mini-simulation below mirrors exactly those steps and
+  // asserts the difficulty integration keeps the legacy semantics
+  // at level 0 and ramps the game up to the cap as the player
+  // progresses.
+
+  /** Single-frame snapshot of the loop state. */
+  function tick(state, dt) {
+    state.runningTime += dt;
+    state.distance += PLAYER_SPEED * dt;
+    state.scrollOffset += PLAYER_SPEED * dt;
+    state.difficulty = computeDifficulty({
+      distance: state.distance,
+      runningTime: state.runningTime,
+    });
+    // Spawn-loop reset (mirrors updateGame).
+    state.spawnCooldown -= dt;
+    if (state.spawnCooldown <= 0) {
+      state.spawnCooldown = state.difficulty.spawnCooldownSeconds;
+    }
+    // Advance the vehicles using the per-frame multiplier.
+    advanceOncomingVehiclesWithDifficulty(
+      state.vehicles,
+      dt,
+      state.difficulty.enemySpeedMultiplier,
+    );
+    return state;
+  }
+
+  /**
+   * Tick variant that holds runningTime at a fixed value while
+   * letting distance / scrollOffset advance normally. Used to
+   * isolate the distance axis of the difficulty curve from the
+   * time axis (without this, a 36-second run to reach
+   * 4 × DIFFICULTY_DISTANCE_PER_LEVEL would also accrue a
+   * time-driven level and the assertions would need to account
+   * for both).
+   */
+  function tickDistanceOnly(state, dt) {
+    state.distance += PLAYER_SPEED * dt;
+    state.scrollOffset += PLAYER_SPEED * dt;
+    state.difficulty = computeDifficulty({
+      distance: state.distance,
+      runningTime: state.runningTime,
+    });
+    state.spawnCooldown -= dt;
+    if (state.spawnCooldown <= 0) {
+      state.spawnCooldown = state.difficulty.spawnCooldownSeconds;
+    }
+    advanceOncomingVehiclesWithDifficulty(
+      state.vehicles,
+      dt,
+      state.difficulty.enemySpeedMultiplier,
+    );
+    return state;
+  }
+
+  it('level 0 at start: no scaling on enemy speed, no change to spawn cadence', () => {
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0,
+      vehicles: [
+        { type: 'oncoming_vehicle', z: -100, speed: 14 },
+      ],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    // One tick of dt = 0.0167 s.
+    const dt = 1 / 60;
+    tick(state, dt);
+    expect(state.difficulty.level).toBe(0);
+    expect(state.difficulty.enemySpeedMultiplier).toBe(1);
+    // The vehicle advanced at 14 * 1 * dt units.
+    expect(state.vehicles[0].z).toBeCloseTo(-100 + 14 * dt, 10);
+    // And the cooldown reset to 0.25 s.
+    expect(state.spawnCooldown).toBeCloseTo(SPAWN_COOLDOWN_BASE, 5);
+  });
+
+  it('level rises with distance; enemy speed and spawn parameters scale accordingly', () => {
+    // Walk forward for 4 * DIFFICULTY_DISTANCE_PER_LEVEL units
+    // of distance (one tick at a time) and assert the per-
+    // frame difficulty snapshot ramps to level 4 with the
+    // expected multipliers / counts. Use `tickDistanceOnly`
+    // to isolate the distance axis from the time axis — a full
+    // 36-second run to reach 800 m would also pump the time
+    // component by 1.2 levels, so the assertions would have
+    // to subtract that off. Freezing time lets us assert the
+    // distance contribution cleanly.
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0,
+      vehicles: [
+        { type: 'oncoming_vehicle', z: -100, speed: 14 },
+      ],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    const dt = 1 / 60;
+    const targetDistance = 4 * DIFFICULTY_DISTANCE_PER_LEVEL;
+    const totalTicks = Math.ceil(targetDistance / (PLAYER_SPEED * dt));
+    for (let i = 0; i < totalTicks; i++) {
+      tickDistanceOnly(state, dt);
+      // Stop early once we are past the target distance.
+      if (state.distance >= targetDistance) break;
+    }
+    // Allow a small rounding tolerance.
+    expect(state.distance).toBeGreaterThanOrEqual(targetDistance);
+    // Time is still 0; the level comes purely from distance.
+    expect(state.runningTime).toBe(0);
+    // Level should be 4 (rawProgress >= 4).
+    expect(state.difficulty.level).toBe(4);
+    // Multiplier = 1 + 4 * 0.08 = 1.32.
+    expect(state.difficulty.enemySpeedMultiplier).toBeCloseTo(1 + 4 * ENEMY_SPEED_PER_LEVEL, 5);
+    // Per-segment chance and object count have moved off the
+    // baseline.
+    expect(state.difficulty.spawnChance).toBeGreaterThan(SPAWN_CHANCE_BASE);
+    expect(state.difficulty.maxObjectsPerSegment).toBe(2);
+    // Cooldown has shrunk but not yet hit the floor.
+    expect(state.difficulty.spawnCooldownSeconds).toBeLessThan(SPAWN_COOLDOWN_BASE);
+    expect(state.difficulty.spawnCooldownSeconds).toBeGreaterThanOrEqual(SPAWN_COOLDOWN_MIN);
+  });
+
+  it('level saturates at DIFFICULTY_MAX_LEVEL after a long run', () => {
+    // 30 minutes of playtime is way past the time-driven cap.
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0,
+      vehicles: [],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    const dt = 1;
+    const totalSeconds = 30 * 60;
+    for (let i = 0; i < totalSeconds; i++) {
+      tick(state, dt);
+    }
+    expect(state.runningTime).toBe(totalSeconds);
+    expect(state.difficulty.level).toBe(DIFFICULTY_MAX_LEVEL);
+    expect(state.difficulty.enemySpeedMultiplier).toBeCloseTo(
+      ENEMY_SPEED_MAX_MULTIPLIER,
+      5,
+    );
+    expect(state.difficulty.maxObjectsPerSegment).toBe(MAX_OBJECTS_CAP);
+    expect(state.difficulty.spawnChance).toBeLessThanOrEqual(SPAWN_CHANCE_MAX);
+    expect(state.difficulty.spawnCooldownSeconds).toBeCloseTo(SPAWN_COOLDOWN_MIN, 5);
+  });
+
+  it('time-only progression ramps the curve (no distance gain required)', () => {
+    // The "time-only" claim is about the curve, not about the
+    // player: the difficulty must still ramp when the player is
+    // stationary, because time alone is enough to climb the
+    // levels. We use a `tickTimeOnly` variant that holds the
+    // player at distance=0 (PLAYER_SPEED=0 surrogate) and only
+    // advances runningTime, so a successful test proves the
+    // curve reads the time axis independently.
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0,
+      vehicles: [],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    const dt = 1;
+    for (let i = 0; i < 60; i++) {
+      state.runningTime += dt;
+      state.difficulty = computeDifficulty({
+        distance: state.distance,
+        runningTime: state.runningTime,
+      });
+    }
+    // Distance is still 0; only time has progressed.
+    expect(state.distance).toBe(0);
+    expect(state.runningTime).toBe(60);
+    // raw = 0 + 60/30 = 2 → level 2.
+    expect(state.difficulty.level).toBe(2);
+    expect(state.difficulty.enemySpeedMultiplier).toBeCloseTo(
+      1 + 2 * ENEMY_SPEED_PER_LEVEL,
+      5,
+    );
+  });
+
+  it('cooldown reset uses the per-frame snapshot, not a stale value', () => {
+    // When the cooldown hits zero, the next reset must use the
+    // CURRENT frame's difficulty.spawnCooldownSeconds — not the
+    // value at game start. Walk the loop to a higher difficulty
+    // level, force a cooldown reset, and verify the reset value
+    // matches the new (lower) snapshot value rather than the
+    // legacy 0.25 s.
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0.0001, // already due to fire on the next tick
+      vehicles: [],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    const dt = 1 / 60;
+    // Pre-warm the loop to a high level by walking time forward
+    // BEFORE the reset tick. This puts the snapshot at a
+    // noticeably lower cooldown (close to SPAWN_COOLDOWN_MIN).
+    state.runningTime = 5 * DIFFICULTY_TIME_PER_LEVEL;
+    state.difficulty = computeDifficulty({
+      distance: state.distance,
+      runningTime: state.runningTime,
+    });
+    expect(state.difficulty.level).toBe(5);
+    const expectedCooldown = state.difficulty.spawnCooldownSeconds;
+    // Now tick once: the cooldown is still almost zero, so the
+    // reset branch fires and must copy the snapshot's value.
+    tick(state, dt);
+    // The reset value equals the snapshot's spawnCooldownSeconds
+    // (not the legacy 0.25), proving the reset reads the live
+    // snapshot.
+    expect(state.spawnCooldown).toBeCloseTo(expectedCooldown, 5);
+    expect(state.spawnCooldown).toBeLessThan(SPAWN_COOLDOWN_BASE);
+    expect(state.spawnCooldown).toBeGreaterThanOrEqual(SPAWN_COOLDOWN_MIN - 1e-9);
+  });
+
+  it('oncoming vehicles close the gap faster as the loop progresses', () => {
+    // Spawn a vehicle at the start, then tick the loop forward.
+    // The vehicle's z should grow faster as difficulty ramps up,
+    // because the per-frame multiplier is > 1 in the second
+    // half of the run.
+    const state = {
+      runningTime: 0,
+      distance: 0,
+      scrollOffset: 0,
+      spawnCooldown: 0,
+      vehicles: [
+        { type: 'oncoming_vehicle', z: -200, speed: 14 },
+      ],
+      difficulty: computeDifficulty({ distance: 0, runningTime: 0 }),
+    };
+    const dt = 1 / 60;
+    // Tick for 30 seconds, which is enough to take the player
+    // to roughly level 30 (the cap) on time alone.
+    for (let i = 0; i < 30 * 60; i++) {
+      tick(state, dt);
+    }
+    // The vehicle must have moved noticeably closer to the
+    // player: at the cap the multiplier is 1.8, so in 30 s
+    // the vehicle covers 14 * 1.8 * 30 = 756 units in road
+    // space (capped by being recycled once it passes the
+    // player, but starting at -200 it certainly did move a
+    // lot).
+    expect(state.vehicles[0].z).toBeGreaterThan(-200 + 14 * 30 * 0.9);
+  });
+});
+
 

@@ -60,6 +60,17 @@
   /** @type {THREE.Material|null} */
   let grassMaterial = null;
 
+  /**
+   * Shared road-shoulder material. All shoulder meshes (left and
+   * right side, across every road segment) reference this single
+   * instance so they pick up identical lighting and fog response.
+   * Keeping it at module scope also lets `onDestroy` release the GPU
+   * resource exactly once, even though the material is referenced
+   * by many meshes.
+   *
+   * @type {THREE.Material|null} */
+  let shoulderMaterial = null;
+
   /** @type {ResizeObserver|null} */
   let resizeObserver = null;
 
@@ -182,7 +193,16 @@
   // anchored to a stable, non-jittery ground plane.
   const GRASS_Y = ROAD_Y - MAX_HEIGHT_DELTA - 0.2;
   const GRASS_COLOR = 0x4a7a3a;
-  const GRASS_WIDTH = 400;
+  // Grass plane width must comfortably exceed the camera's horizontal
+  // field of view at the fog far plane, otherwise the plane's edge
+  // is visible as a hard colour boundary inside the fog band. With
+  // the camera at z=12 and the fog far plane at z≈-238 (250 units
+  // away in the -Z direction), the visible horizontal half-width at
+  // the far plane is ≈ 250·tan(45.5°) ≈ 255 units (assuming a 16:9
+  // aspect and ~91° horizontal FOV). GRASS_WIDTH=600 (±300) gives a
+  // generous margin so the plane edge always sits well outside the
+  // visible frustum, and therefore never produces a visible band.
+  const GRASS_WIDTH = 600;
   const GRASS_LENGTH = 4000;
 
   // Vehicle transform smoothing factors.
@@ -249,8 +269,20 @@
     const h = rect.height || 500;
 
     scene = new THREE.Scene();
+    // Background and fog use the SAME colour so the horizon line
+    // dissolves smoothly: at the fog far plane every fog-responsive
+    // material converges to exactly the background colour, leaving
+    // no visible band where the world meets the sky.
     scene.background = new THREE.Color(0x87CEEB);
-    scene.fog = new THREE.Fog(0x87CEEB, 80, 200);
+    // Fog range is intentionally wider than the original (80, 200) so
+    // the transition from "no fog" to "fully fog colour" happens over
+    // a longer Z span. The near edge (60) starts fading just past the
+    // close-to-player road tiles; the far edge (250) sits a little
+    // inside the camera's 300-unit far plane so the road and grass
+    // are guaranteed to be fully fog colour (and therefore equal to
+    // the sky) before the far plane clips them. This kills the hard
+    // "sky / ground" colour band the user reported.
+    scene.fog = new THREE.Fog(0x87CEEB, 60, 250);
 
     camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 300);
     camera.position.set(0, 6, 12);
@@ -386,6 +418,15 @@
     grassMaterial = new THREE.MeshPhongMaterial({
       color: GRASS_COLOR,
       flatShading: true,
+      // Explicitly enable fog response. MeshPhongMaterial defaults to
+      // fog:true in Three.js, but stating it makes the contract
+      // auditable and protects the material from accidentally being
+      // switched off by a future refactor that flattens the options
+      // object. With fog enabled, the grass colour is interpolated
+      // toward the sky colour (0x87CEEB) as the grass recedes into
+      // the distance, so the grass-to-sky transition is smooth
+      // rather than a hard line at the fog far plane.
+      fog: true,
     });
     grassGeometry = new THREE.PlaneGeometry(GRASS_WIDTH, GRASS_LENGTH);
     const grass = new THREE.Mesh(grassGeometry, grassMaterial);
@@ -471,6 +512,11 @@
       color: ROAD_COLOR,
       flatShading: true,
       side: THREE.DoubleSide,
+      // Explicitly enable fog so the road surface blends into the
+      // sky colour (0x87CEEB) at the far end of the visible range,
+      // matching the grass and shoulders. This is what removes the
+      // hard "road meets sky" colour band the user reported.
+      fog: true,
     });
     const surface = new THREE.Mesh(surfaceGeo, surfaceMat);
     surface.position.set(0, ROAD_Y, 0);
@@ -484,7 +530,7 @@
     // three lane boundaries read as intermittent dashed lines rather than a
     // continuous band. Road width, lane count and surface geometry are
     // unchanged.
-    const lineMat = new THREE.MeshBasicMaterial({ color: LANE_LINE_COLOR });
+    const lineMat = new THREE.MeshBasicMaterial({ color: LANE_LINE_COLOR, fog: true });
     const lineHalfW = 0.075;
     // Dash pattern based on subdivision indices: every DASH_PATTERN_SUBDIVS
     // subdivisions we draw DASH_LENGTH_SUBDIVS rows of stripe then leave the
@@ -555,11 +601,43 @@
     }
 
     // ---- Road shoulders ----
-    const shoulderMat = new THREE.MeshBasicMaterial({
-      color: ROAD_SHOULDER_COLOR,
-      transparent: true,
-      opacity: 0.5,
-    });
+    // The shoulder material is built ONCE and shared by every
+    // shoulder mesh (both sides of every road segment). The previous
+    // implementation created a fresh `MeshBasicMaterial` inside this
+    // function for each segment, so each tile had its own material
+    // instance, and that material was a flat, unlit, semi-transparent
+    // colour — meaning:
+    //   * the shoulder never reacted to the scene lights, so it read
+    //     as a uniformly coloured band sitting on top of the
+    //     (correctly lit) grass, creating a visible "shoulder-vs-
+    //     grass" style gap on both sides of the road;
+    //   * the `transparent: true, opacity: 0.5` made the shoulder
+    //     blend with whatever was behind it, which broke the fog
+    //     transition at the far end of the road and made the two
+    //     sides look different depending on the noise-driven road
+    //     curve.
+    // The shared `MeshLambertMaterial` below fixes both issues:
+    //   * it responds to the same ambient / hemisphere / directional
+    //     lights as the grass, so the shoulder and the grass on
+    //     either side receive identical illumination at the same
+    //     world position — the left and right shoulders therefore
+    //     pick up the same shading pattern as their neighbouring
+    //     grass, and the two sides look identical to each other;
+    //   * it is opaque (no `transparent` flag), so the fog
+    //     interpolates its colour directly toward the sky colour at
+    //     the far plane, matching the road surface and grass for a
+    //     smooth horizon transition.
+    // Both sides of every segment reference the same `shoulderMaterial`
+    // instance (set up in `createRoadSystem()`), so a state change on
+    // the material — colour, fog flag, etc. — automatically applies
+    // uniformly to every shoulder mesh in the scene.
+    if (!shoulderMaterial) {
+      shoulderMaterial = new THREE.MeshLambertMaterial({
+        color: ROAD_SHOULDER_COLOR,
+        fog: true,
+      });
+    }
+    const shoulderMat = shoulderMaterial;
     const shoulderHalfW = 0.3;
 
     for (let si = 0; si < 2; si++) {
@@ -761,22 +839,30 @@
   }
 
   function removeTileVisuals(data) {
-    const removeMesh = (mesh) => {
+    // `skipMaterialDispose` is true for shoulder meshes because the
+    // shoulder material is shared across every segment (and both
+    // sides) of the road — disposing it on the first segment recycle
+    // would leave every other shoulder mesh with a dangling GPU
+    // reference. The shared material is released exactly once in
+    // `onDestroy`, matching the lifecycle of `grassMaterial`.
+    const removeMesh = (mesh, skipMaterialDispose = false) => {
       if (!mesh) return;
       roadGroup.remove(mesh);
       if (mesh.isMesh || mesh.isPoints) {
         mesh.geometry.dispose();
-        if (Array.isArray(mesh.material)) {
-          mesh.material.forEach((m) => m.dispose());
-        } else if (mesh.material) {
-          mesh.material.dispose();
+        if (!skipMaterialDispose) {
+          if (Array.isArray(mesh.material)) {
+            mesh.material.forEach((m) => m.dispose());
+          } else if (mesh.material) {
+            mesh.material.dispose();
+          }
         }
       }
     };
 
     if (data.surface) removeMesh(data.surface);
     for (const line of data.lines) removeMesh(line);
-    for (const s of data.shoulders) removeMesh(s);
+    for (const s of data.shoulders) removeMesh(s, true);
   }
 
   /* ===================================================================
@@ -1396,10 +1482,23 @@
       const child = roadGroup.children[0];
       if (child.isMesh) {
         try { child.geometry.dispose(); } catch {}
-        if (Array.isArray(child.material)) {
-          child.material.forEach((m) => { try { m.dispose(); } catch {} });
-        } else if (child.material) {
-          try { child.material.dispose(); } catch {}
+        // The shoulder material is shared across every shoulder mesh,
+        // so we must NOT dispose it here — that would leave the
+        // about-to-be-created shoulders on the new road referencing a
+        // disposed GPU resource. The shared material is kept alive
+        // across restarts; it is only released in `onDestroy`. The
+        // surface and line materials are per-segment instances and
+        // are safe to dispose normally.
+        const isSharedShoulder = shoulderMaterial
+          && (child.material === shoulderMaterial
+            || (Array.isArray(child.material)
+              && child.material.indexOf(shoulderMaterial) !== -1));
+        if (!isSharedShoulder) {
+          if (Array.isArray(child.material)) {
+            child.material.forEach((m) => { try { m.dispose(); } catch {} });
+          } else if (child.material) {
+            try { child.material.dispose(); } catch {}
+          }
         }
       }
       roadGroup.remove(child);
@@ -1949,6 +2048,15 @@
       try { grassMaterial.dispose(); } catch {}
       grassMaterial = null;
     }
+    // Dispose the shared shoulder material exactly once. The
+    // per-segment recycle path (`removeTileVisuals`) deliberately
+    // skips material disposal for shoulder meshes because every
+    // shoulder mesh shares this single instance — releasing it here
+    // (in step with `grassMaterial`) keeps the lifecycle balanced.
+    if (shoulderMaterial) {
+      try { shoulderMaterial.dispose(); } catch {}
+      shoulderMaterial = null;
+    }
 
     if (renderer) {
       renderer.dispose();
@@ -1971,6 +2079,7 @@
     grassGroup = null;
     grassGeometry = null;
     grassMaterial = null;
+    shoulderMaterial = null;
     roadSegments = [];
     roadTileData = [];
     objectDescriptors = [];

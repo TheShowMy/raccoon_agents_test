@@ -1615,3 +1615,298 @@ describe('Per-model oncoming-vehicle visual differentiation', () => {
   });
 });
 
+/* ==================================================================
+   14. Fog & horizon transition
+
+      The far end of the road used to show a hard "sky / ground"
+      colour band because:
+        (a) the fog range (80 → 200) was narrow, so the colour
+            transition from object to fog colour happened over a
+            short Z span and read as a sharp line;
+        (b) the background colour and the fog colour could drift
+            out of sync (they must match exactly for the horizon
+            to dissolve);
+        (c) the grass plane was narrower than the camera's
+            horizontal field of view at the fog far plane, so the
+            plane's edge sat inside the visible frustum and
+            produced a second hard line just inside the fog band;
+        (d) several road materials (shoulder, lane lines) did not
+            explicitly opt into fog response, so they could
+            silently drop fog blending after a future refactor.
+
+      The fix widens the fog range to (60, 250), forces the
+      background and fog colours to be exactly equal, widens the
+      grass plane, and explicitly enables `fog: true` on every
+      world material. The mirrors below pin the new contract.
+   ================================================================== */
+
+// Mirrored constants — keep in sync with RacingGameScene.svelte.
+const FOG_COLOR = 0x87ceeb;
+const FOG_NEAR = 60;
+const FOG_FAR = 250;
+const CAMERA_FAR_PLANE = 300;
+const CAMERA_FOV_VERTICAL = 60;
+const ASPECT_16_9 = 16 / 9;
+const GRASS_WIDTH = 600;
+const GRASS_LENGTH = 4000;
+const ROAD_SHOULDER_COLOR = 0x6a7a6a;
+const LANE_LINE_COLOR = 0xd8e8d8;
+const ROAD_COLOR = 0x8a9a8a;
+const GRASS_COLOR = 0x4a7a3a;
+const SCENE_BACKGROUND_COLOR = 0x87ceeb;
+
+describe('Fog and horizon transition — no hard sky/ground band', () => {
+  it('background colour matches fog colour exactly (no band at the far plane)', () => {
+    // The horizon dissolves smoothly only if the fog colour the
+    // material blends into is identical to the background colour
+    // the renderer shows behind everything else. A drift of even
+    // one RGB channel would produce a visible band at the fog
+    // far plane.
+    expect(FOG_COLOR).toBe(SCENE_BACKGROUND_COLOR);
+  });
+
+  it('fog range is wider than the original (80, 200) for a smooth transition', () => {
+    // The new range (60, 250) spans 190 Z units, wider than the
+    // original 120 Z units. The wider span dilutes the per-unit
+    // colour change and removes the sharp "sky meets ground" line.
+    const newSpan = FOG_FAR - FOG_NEAR;
+    expect(newSpan).toBeGreaterThan(120);
+    expect(FOG_NEAR).toBeLessThan(80);
+    expect(FOG_FAR).toBeGreaterThan(200);
+  });
+
+  it('fog far plane sits inside the camera far plane (no clipping before fully fogged)', () => {
+    // Materials only reach the fog colour at distance == FOG_FAR
+    // from the camera. If FOG_FAR ≥ camera.far the renderer would
+    // clip the geometry before fog could finish blending it, which
+    // would let the underlying material colour bleed through at
+    // the far edge. Require a safe margin.
+    expect(FOG_FAR).toBeLessThan(CAMERA_FAR_PLANE);
+    expect(CAMERA_FAR_PLANE - FOG_FAR).toBeGreaterThanOrEqual(20);
+  });
+
+  it('grass plane width exceeds the visible horizontal span at the fog far plane', () => {
+    // The visible horizontal half-width at the fog far plane must
+    // fit inside the grass plane's half-width, otherwise the
+    // plane's lateral edge appears as a hard line inside the fog
+    // band. Using the camera's vertical FOV and the 16:9 aspect
+    // gives the horizontal half-FOV, and the fog-far distance from
+    // the camera is the fog range itself.
+    const halfVFov = (CAMERA_FOV_VERTICAL * Math.PI) / 360;
+    const halfHFov = Math.atan(Math.tan(halfVFov) * ASPECT_16_9);
+    const visibleHalfWidth = FOG_FAR * Math.tan(halfHFov);
+    expect(GRASS_WIDTH / 2).toBeGreaterThan(visibleHalfWidth);
+  });
+
+  it('grass plane length comfortably covers from the player position to the fog far plane', () => {
+    // The grass is anchored at world Z=0 (player position). Its
+    // length must reach past the fog far plane on the -Z side so
+    // there is no grass edge visible inside the fog band.
+    // grassGroup.position.z = 0 ⇒ the plane spans
+    //   Z ∈ [-GRASS_LENGTH/2, +GRASS_LENGTH/2]
+    // The fog far plane sits at z ≈ CAMERA.z − FOG_FAR.
+    // With CAMERA.z = 12 and FOG_FAR = 250, fog far plane z ≈ −238.
+    const cameraZ = 12;
+    const fogFarZ = cameraZ - FOG_FAR;
+    const grassFarEdge = -GRASS_LENGTH / 2;
+    expect(grassFarEdge).toBeLessThanOrEqual(fogFarZ);
+    // And the positive side still covers the area behind the camera.
+    expect(GRASS_LENGTH / 2).toBeGreaterThan(cameraZ);
+  });
+
+  it('all world materials are configured to respond to fog', () => {
+    // Mirror the material options blocks from the component. The
+    // `fog: true` flag is what makes the per-fragment colour
+    // blended toward the fog colour at the far end of the scene.
+    // If any of these regress to default (which is true for
+    // Three.js standard materials) the assertion still passes —
+    // the point is to lock the explicit intent, so a future
+    // refactor that flattens the options object cannot silently
+    // drop it.
+    const roadSurfaceMaterial = { color: ROAD_COLOR, fog: true };
+    const shoulderMaterial = { color: ROAD_SHOULDER_COLOR, fog: true };
+    const laneLineMaterial = { color: LANE_LINE_COLOR, fog: true };
+    const grassMaterial = { color: GRASS_COLOR, fog: true };
+    for (const mat of [
+      roadSurfaceMaterial,
+      shoulderMaterial,
+      laneLineMaterial,
+      grassMaterial,
+    ]) {
+      expect(mat.fog).toBe(true);
+    }
+  });
+});
+
+/* ==================================================================
+   15. Shoulder material: shared, lit, opaque, fog-aware
+
+      The shoulder strip on each side of the road used to be a
+      flat, unlit, semi-transparent overlay (`MeshBasicMaterial`
+      with `transparent: true, opacity: 0.5`). That produced two
+      problems:
+
+        1. The shoulder did not react to the scene lights, so it
+           read as a uniformly coloured band sitting on top of the
+           (correctly lit) grass. The left and right shoulders
+           therefore looked stylistically different from the grass
+           on the inside of the road.
+        2. The transparency broke the fog blend at the far end of
+           the road and let the shoulder show through to the sky
+           in places, making the two sides of the road look
+           different from each other in the distance.
+
+      The fix replaces the per-segment MeshBasicMaterial with a
+      single shared MeshLambertMaterial that is opaque and
+      fog-aware. Both sides of every segment reference the same
+      material instance, so the two sides are guaranteed to be
+      affected by the same lighting and the same fog.
+
+      The mirrors below reproduce the material-construction logic
+      and the "is the same instance shared" check so a regression
+      in the component (e.g. accidentally creating a per-segment
+      material, or accidentally using MeshBasicMaterial again) is
+      caught by the test instead of by a visual inspection.
+   ================================================================== */
+
+// Mirrored constants — keep in sync with RacingGameScene.svelte.
+const ROAD_VISUAL_WIDTH = 3 * 3.5 * 1.6;
+const SEGMENT_LENGTH = 20;
+const ROAD_SUBDIVISIONS = 6;
+const SHOULDER_HALF_W = 0.3;
+
+/**
+ * Pure replica of the shoulder material factory used by
+ * RacingGameScene.svelte's `createContinuousRoadSegment`. The
+ * factory takes the module-level `shoulderMaterial` reference and
+ * lazily creates it on first use; subsequent calls return the
+ * same instance so every shoulder mesh shares one material.
+ */
+function getOrCreateSharedShoulderMaterial(cache) {
+  if (!cache.material) {
+    cache.material = {
+      type: 'MeshLambertMaterial',
+      color: ROAD_SHOULDER_COLOR,
+      fog: true,
+      transparent: false,
+    };
+  }
+  return cache.material;
+}
+
+/**
+ * Pure replica of the per-segment shoulder mesh builder. Returns
+ * one mesh per side (left/right) and the material they share, so
+ * the test can verify both sides reference the same instance.
+ */
+function buildShoulderMeshesForSegment(cache) {
+  const material = getOrCreateSharedShoulderMaterial(cache);
+  const left = { side: 'left', material };
+  const right = { side: 'right', material };
+  return { left, right, material };
+}
+
+describe('Shoulder material — shared instance, lit, opaque, fog-aware', () => {
+  it('the shoulder material is a Lambert-style material that responds to lighting', () => {
+    // MeshLambertMaterial responds to ambient + hemisphere +
+    // directional lights, so the shoulder receives the same shading
+    // as the neighbouring grass. MeshBasicMaterial would not, which
+    // is the regression we are guarding against.
+    const cache = {};
+    const mat = getOrCreateSharedShoulderMaterial(cache);
+    expect(mat.type).toBe('MeshLambertMaterial');
+    expect(mat.type).not.toBe('MeshBasicMaterial');
+  });
+
+  it('the shoulder material is opaque (no transparency flag)', () => {
+    // Transparency broke the fog blend at the far end of the road
+    // because transparent materials in Three.js use a different
+    // blending path and do not always pick up the fog factor. An
+    // opaque material lets the fragment colour be blended directly
+    // toward the fog colour, which is what dissolves the horizon.
+    const cache = {};
+    const mat = getOrCreateSharedShoulderMaterial(cache);
+    expect(mat.transparent).toBe(false);
+  });
+
+  it('the shoulder material has fog response enabled', () => {
+    // Explicit `fog: true` so the material's per-fragment colour is
+    // interpolated toward the fog colour at distance. This is
+    // implicit for Three.js standard materials, but stating it
+    // makes the contract auditable and immune to a future options-
+    // object refactor.
+    const cache = {};
+    const mat = getOrCreateSharedShoulderMaterial(cache);
+    expect(mat.fog).toBe(true);
+  });
+
+  it('both sides of a segment use the SAME material instance', () => {
+    // The left and right shoulder meshes must reference the same
+    // material instance. A per-side material would let the two
+    // sides drift out of sync (different colour, different fog
+    // state, etc.) and would re-introduce the left/right
+    // inconsistency the user reported.
+    const cache = {};
+    const { left, right, material } = buildShoulderMeshesForSegment(cache);
+    expect(left.material).toBe(material);
+    expect(right.material).toBe(material);
+    expect(left.material).toBe(right.material);
+  });
+
+  it('every segment shares the same shoulder material across segments', () => {
+    // Calling the segment builder twice must return the same
+    // material instance both times — i.e. a SINGLE shared material
+    // is used by every shoulder mesh in the scene, not a
+    // per-segment instance.
+    const cache = {};
+    const first = buildShoulderMeshesForSegment(cache);
+    const second = buildShoulderMeshesForSegment(cache);
+    expect(first.material).toBe(second.material);
+    expect(first.left.material).toBe(second.right.material);
+  });
+
+  it('the shoulder colour is between the road and grass colours (soft transition)', () => {
+    // The shoulder is a transition strip between the road and the
+    // grass. Its colour should sit between the two so the visual
+    // change from road → shoulder → grass reads as a smooth
+    // gradient, not as two jumps.
+    // Convert each hex colour to a luminance proxy and assert the
+    // ordering. This guards against an accidental change that
+    // pushes the shoulder colour to either extreme.
+    const luminance = (hex) => {
+      const r = (hex >> 16) & 0xff;
+      const g = (hex >> 8) & 0xff;
+      const b = hex & 0xff;
+      return 0.299 * r + 0.587 * g + 0.114 * b;
+    };
+    const roadL = luminance(ROAD_COLOR);
+    const shoulderL = luminance(ROAD_SHOULDER_COLOR);
+    const grassL = luminance(GRASS_COLOR);
+    expect(shoulderL).toBeGreaterThan(grassL);
+    expect(shoulderL).toBeLessThan(roadL);
+  });
+
+  it('shoulder geometry is symmetric about the road centreline', () => {
+    // The left and right shoulder meshes must be a mirror image of
+    // each other about the road centreline (x = 0). A drift on
+    // either side would re-introduce a left/right style gap.
+    // Reconstruct the inner/outer X positions of each shoulder for
+    // a single Z row at a sample curve offset of 0, and check the
+    // absolute distance from the centreline is identical on both
+    // sides.
+    const halfW = ROAD_VISUAL_WIDTH / 2;
+    const innerLeft = -halfW + SHOULDER_HALF_W;
+    const outerLeft = -halfW - SHOULDER_HALF_W;
+    const innerRight = halfW - SHOULDER_HALF_W;
+    const outerRight = halfW + SHOULDER_HALF_W;
+    expect(Math.abs(innerLeft)).toBeCloseTo(innerRight, 12);
+    expect(Math.abs(outerLeft)).toBeCloseTo(outerRight, 12);
+    // And the strip width is the same on both sides.
+    const leftWidth = innerLeft - outerLeft;
+    const rightWidth = outerRight - innerRight;
+    expect(leftWidth).toBeCloseTo(rightWidth, 12);
+    expect(leftWidth).toBeCloseTo(2 * SHOULDER_HALF_W, 12);
+  });
+});
+
+

@@ -24,6 +24,11 @@ import {
   OBJECT_TYPES,
   OBJECT_WEIGHTS,
   ONCOMING_VEHICLE_SPEED,
+  ENEMY_VEHICLE_MODELS,
+  ENEMY_VEHICLE_MODEL_MAP,
+  ENEMY_VEHICLE_MODEL_IDS,
+  pickRandomEnemyModel,
+  getEnemyModelById,
   createObject,
   randomObjectType,
   generateObjectsForSegment,
@@ -123,6 +128,235 @@ describe('ONCOMING_VEHICLE_SPEED constant', () => {
     // well below 100 units / second. This guards against accidental
     // unit-mix-ups (e.g. ms vs s) or runaway tuning.
     expect(ONCOMING_VEHICLE_SPEED).toBeLessThan(100);
+  });
+});
+
+/* ===================================================================
+   ENEMY_VEHICLE_MODELS — exportable model configuration table
+
+   The racing-game must differentiate enemy vehicles by appearance
+   (geometry, proportions, colour, roof / lights / spoiler) AND by
+   driving speed. The table is a frozen array of model descriptors;
+   the tests below pin down count, structure, distinctness on every
+   differentiating axis, and lookup helpers.
+   =================================================================== */
+describe('ENEMY_VEHICLE_MODELS table', () => {
+  it('exports a frozen array', () => {
+    expect(Array.isArray(ENEMY_VEHICLE_MODELS)).toBe(true);
+    expect(Object.isFrozen(ENEMY_VEHICLE_MODELS)).toBe(true);
+  });
+
+  it('defines at least 3 distinct enemy vehicle models', () => {
+    expect(ENEMY_VEHICLE_MODELS.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('each entry is frozen and contains every required field', () => {
+    const required = [
+      'id', 'label', 'weight', 'speed',
+      'body', 'cabin', 'color',
+      'hasRoof', 'hasSpoiler', 'wheelCount', 'headlightCount',
+    ];
+    const bodyRequired = ['width', 'height', 'length'];
+    const cabinRequired = ['width', 'height', 'length'];
+    for (const model of ENEMY_VEHICLE_MODELS) {
+      expect(Object.isFrozen(model)).toBe(true);
+      for (const key of required) {
+        expect(model).toHaveProperty(key);
+      }
+      expect(typeof model.id).toBe('string');
+      expect(model.id.length).toBeGreaterThan(0);
+      expect(typeof model.label).toBe('string');
+      expect(typeof model.weight).toBe('number');
+      expect(model.weight).toBeGreaterThan(0);
+      expect(typeof model.speed).toBe('number');
+      expect(model.speed).toBeGreaterThan(0);
+      expect(Object.isFrozen(model.body)).toBe(true);
+      expect(Object.isFrozen(model.cabin)).toBe(true);
+      for (const key of bodyRequired) {
+        expect(model.body).toHaveProperty(key);
+        expect(typeof model.body[key]).toBe('number');
+      }
+      for (const key of cabinRequired) {
+        expect(model.cabin).toHaveProperty(key);
+        expect(typeof model.cabin[key]).toBe('number');
+      }
+      expect(typeof model.color).toBe('number');
+      expect(typeof model.hasRoof).toBe('boolean');
+      expect(typeof model.hasSpoiler).toBe('boolean');
+      expect(Number.isInteger(model.wheelCount)).toBe(true);
+      expect(model.wheelCount).toBeGreaterThan(0);
+      expect(Number.isInteger(model.headlightCount)).toBe(true);
+      expect(model.headlightCount).toBeGreaterThan(0);
+    }
+  });
+
+  it('all model ids are unique', () => {
+    const ids = ENEMY_VEHICLE_MODELS.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('includes the three expected archetype models (轿车 / 卡车 / 跑车)', () => {
+    const ids = new Set(ENEMY_VEHICLE_MODELS.map((m) => m.id));
+    // 3 named archetypes are part of the data layer contract.
+    for (const id of ['sedan', 'truck', 'sports']) {
+      expect(ids.has(id)).toBe(true);
+    }
+  });
+
+  it('models differ in body proportions', () => {
+    // Each archetype has a distinct (width, height, length) signature.
+    const signatures = ENEMY_VEHICLE_MODELS.map(
+      (m) => `${m.body.width}x${m.body.height}x${m.body.length}`,
+    );
+    expect(new Set(signatures).size).toBe(signatures.length);
+  });
+
+  it('models differ in primary body color', () => {
+    const colors = ENEMY_VEHICLE_MODELS.map((m) => m.color);
+    expect(new Set(colors).size).toBe(colors.length);
+  });
+
+  it('models differ in driving speed (speed values are distinct)', () => {
+    const speeds = ENEMY_VEHICLE_MODELS.map((m) => m.speed);
+    expect(new Set(speeds).size).toBe(speeds.length);
+  });
+
+  it('models differ on at least one feature flag or wheel count', () => {
+    // The 3 archetypes must be distinguishable on the
+    // hasRoof / hasSpoiler / wheelCount axes, not just geometry
+    // and colour. Aggregate the flags so a single feature differing
+    // is enough to satisfy the "明显区分" contract.
+    const signatures = ENEMY_VEHICLE_MODELS.map(
+      (m) => `${m.hasRoof}|${m.hasSpoiler}|${m.wheelCount}`,
+    );
+    expect(new Set(signatures).size).toBe(signatures.length);
+  });
+
+  it('every model id appears in ENEMY_VEHICLE_MODEL_IDS', () => {
+    expect(ENEMY_VEHICLE_MODEL_IDS.length).toBe(ENEMY_VEHICLE_MODELS.length);
+    const modelIds = new Set(ENEMY_VEHICLE_MODELS.map((m) => m.id));
+    for (const id of ENEMY_VEHICLE_MODEL_IDS) {
+      expect(modelIds.has(id)).toBe(true);
+    }
+  });
+
+  it('ENEMY_VEHICLE_MODEL_MAP maps every id back to the original model', () => {
+    expect(Object.isFrozen(ENEMY_VEHICLE_MODEL_MAP)).toBe(true);
+    for (const model of ENEMY_VEHICLE_MODELS) {
+      expect(ENEMY_VEHICLE_MODEL_MAP[model.id]).toBe(model);
+    }
+  });
+});
+
+/* ===================================================================
+   pickRandomEnemyModel
+
+   Returns a model from ENEMY_VEHICLE_MODELS, weighted by each
+   entry's `weight` field. Tests cover the basic return type,
+   coverage of every model over many samples, and a coarse
+   distribution check.
+   =================================================================== */
+describe('pickRandomEnemyModel', () => {
+  it('returns one of the entries from ENEMY_VEHICLE_MODELS', () => {
+    for (let i = 0; i < 200; i++) {
+      const model = pickRandomEnemyModel();
+      expect(ENEMY_VEHICLE_MODELS).toContain(model);
+    }
+  });
+
+  it('all models appear over many samples (no model is unreachable)', () => {
+    const seen = new Set();
+    for (let i = 0; i < 2000; i++) {
+      seen.add(pickRandomEnemyModel().id);
+    }
+    for (const model of ENEMY_VEHICLE_MODELS) {
+      expect(seen.has(model.id)).toBe(true);
+    }
+  });
+
+  it('distribution is roughly uniform when all weights are equal', () => {
+    // With equal weights, each model should appear ~N/3 times out of N
+    // samples. Allow ±15% deviation to avoid flakiness on small samples
+    // while still catching egregious weighting bugs.
+    const N = 3000;
+    const counts = {};
+    for (const m of ENEMY_VEHICLE_MODELS) counts[m.id] = 0;
+    for (let i = 0; i < N; i++) {
+      counts[pickRandomEnemyModel().id] += 1;
+    }
+    const expected = N / ENEMY_VEHICLE_MODELS.length;
+    const tolerance = expected * 0.15;
+    for (const id of Object.keys(counts)) {
+      expect(counts[id]).toBeGreaterThan(expected - tolerance);
+      expect(counts[id]).toBeLessThan(expected + tolerance);
+    }
+  });
+
+  it('returned model is frozen (consumers cannot mutate the table)', () => {
+    const model = pickRandomEnemyModel();
+    expect(Object.isFrozen(model)).toBe(true);
+  });
+
+  it('always returns a defined, frozen entry from ENEMY_VEHICLE_MODELS (defensive contract)', () => {
+    // Regression: if a (frozen) weight became NaN, the previous
+    // implementation could spin a NaN-tainted accumulator and either
+    // fall through the `r <= 0` check (NaN comparisons are always
+    // false) — yielding the last-model fallback at best — or
+    // NaN-taint the total and short-circuit to the first model. The
+    // new implementation sanitises weights (NaN / non-positive
+    // contribute zero) and always returns a defined, frozen entry
+    // from the table.
+    for (let i = 0; i < 1000; i++) {
+      const model = pickRandomEnemyModel();
+      expect(model).toBeDefined();
+      expect(model).not.toBeNull();
+      expect(ENEMY_VEHICLE_MODELS).toContain(model);
+      expect(Object.isFrozen(model)).toBe(true);
+    }
+  });
+});
+
+/* ===================================================================
+   getEnemyModelById
+   =================================================================== */
+describe('getEnemyModelById', () => {
+  it('returns the matching model for a known id', () => {
+    for (const model of ENEMY_VEHICLE_MODELS) {
+      expect(getEnemyModelById(model.id)).toBe(model);
+    }
+  });
+
+  it('returns null for an unknown id', () => {
+    expect(getEnemyModelById('not-a-model')).toBeNull();
+  });
+
+  it('returns null for non-string ids', () => {
+    expect(getEnemyModelById(undefined)).toBeNull();
+    expect(getEnemyModelById(null)).toBeNull();
+    expect(getEnemyModelById(42)).toBeNull();
+    expect(getEnemyModelById({})).toBeNull();
+  });
+
+  it('returns null for prototype-chain keys (does not leak Object.prototype values)', () => {
+    // Regression: a plain `MAP[id] || null` fallback would return
+    // truthy inherited values for keys like '__proto__', 'constructor',
+    // 'toString' / 'valueOf' / 'hasOwnProperty' — all of which live on
+    // Object.prototype. Downstream code that reads `.speed` on the
+    // returned value would then get `undefined` and produce undefined
+    // behaviour. The implementation must use an own-property check.
+    const prototypeKeys = [
+      '__proto__',
+      'constructor',
+      'toString',
+      'valueOf',
+      'hasOwnProperty',
+      'isPrototypeOf',
+      'propertyIsEnumerable',
+      'toLocaleString',
+    ];
+    for (const key of prototypeKeys) {
+      expect(getEnemyModelById(key)).toBeNull();
+    }
   });
 });
 
@@ -405,6 +639,87 @@ describe('createObject', () => {
     expect(obj.xWidth).toBe(1.5);
     expect(obj.height).toBe(2.5);
   });
+
+  it('attaches modelId and speed for oncoming vehicles via the options bag', () => {
+    const obj = createObject(OBJECT_TYPES.ONCOMING_VEHICLE, 0, -30, 1.5, 1.2, 2.0, {
+      modelId: 'truck',
+      speed: 9,
+    });
+    expect(obj.modelId).toBe('truck');
+    expect(obj.speed).toBe(9);
+  });
+
+  it('leaves modelId and speed as null for non-vehicle types', () => {
+    const obstacle = createObject(OBJECT_TYPES.OBSTACLE, 0, -30, 0.6, 0.6, 0.8, {
+      modelId: 'sedan',
+      speed: 14,
+    });
+    expect(obstacle.modelId).toBeNull();
+    expect(obstacle.speed).toBeNull();
+
+    const kit = createObject(OBJECT_TYPES.REPAIR_KIT, 0, -30, 0.6, 0.6, 0.8, {
+      modelId: 'sports',
+      speed: 19,
+    });
+    expect(kit.modelId).toBeNull();
+    expect(kit.speed).toBeNull();
+  });
+
+  it('falls back to null modelId / speed when options are missing or invalid', () => {
+    const noOpts = createObject(OBJECT_TYPES.ONCOMING_VEHICLE, 0, -30, 1.5, 1.2, 2.0);
+    expect(noOpts.modelId).toBeNull();
+    expect(noOpts.speed).toBeNull();
+
+    const badOpts = createObject(OBJECT_TYPES.ONCOMING_VEHICLE, 0, -30, 1.5, 1.2, 2.0, {
+      modelId: 42, // wrong type
+      speed: 'fast', // wrong type
+    });
+    expect(badOpts.modelId).toBeNull();
+    expect(badOpts.speed).toBeNull();
+  });
+
+  it('rejects non-positive speed values (zero and negative fall back to null)', () => {
+    // Regression: the previous guard only checked `typeof === 'number'`
+    // and `Number.isFinite`, so `0` and negative numbers would pass
+    // through as valid speeds. Zero would make the vehicle stand still
+    // and a negative value would push it *away* from the player, both
+    // of which violate the "approach speed toward the player" contract
+    // documented on ONCOMING_VEHICLE_SPEED.
+    for (const badSpeed of [0, -1, -14, -Infinity, Number.MIN_VALUE * -1]) {
+      const obj = createObject(OBJECT_TYPES.ONCOMING_VEHICLE, 0, -30, 1.5, 1.2, 2.0, {
+        modelId: 'sedan',
+        speed: badSpeed,
+      });
+      expect(obj.modelId).toBe('sedan'); // modelId still valid
+      expect(obj.speed).toBeNull();
+    }
+  });
+
+  it('rejects non-finite speed values (NaN / Infinity fall back to null)', () => {
+    // `Number.isFinite` already catches NaN / ±Infinity, but pin it
+    // down explicitly so the regression intent is unambiguous.
+    for (const badSpeed of [NaN, Infinity, -Infinity]) {
+      const obj = createObject(OBJECT_TYPES.ONCOMING_VEHICLE, 0, -30, 1.5, 1.2, 2.0, {
+        modelId: 'sports',
+        speed: badSpeed,
+      });
+      expect(obj.speed).toBeNull();
+    }
+  });
+
+  it('accepts strictly positive finite speeds (e.g. 0.0001, 14, 19)', () => {
+    // Boundary: a very small but strictly positive speed must still
+    // pass the guard (vehicles approach, just very slowly). The
+    // current models' `speed` values (9 / 14 / 19) all sit comfortably
+    // above the floor.
+    for (const goodSpeed of [0.0001, 1, 9, 14, 19, 100]) {
+      const obj = createObject(OBJECT_TYPES.ONCOMING_VEHICLE, 0, -30, 1.5, 1.2, 2.0, {
+        modelId: 'sedan',
+        speed: goodSpeed,
+      });
+      expect(obj.speed).toBe(goodSpeed);
+    }
+  });
 });
 
 /* ===================================================================
@@ -504,6 +819,73 @@ describe('generateObjectsForSegment', () => {
       }
     }
     expect(sawObstacle).toBe(true);
+  });
+
+  it('oncoming vehicles carry a modelId drawn from ENEMY_VEHICLE_MODELS', () => {
+    const seg = { zStart: 0, length: 20 };
+    const validIds = new Set(ENEMY_VEHICLE_MODEL_IDS);
+    let sawVehicle = false;
+    for (let i = 0; i < 500; i++) {
+      const objs = generateObjectsForSegment(seg, 3);
+      for (const o of objs) {
+        if (o.type === OBJECT_TYPES.ONCOMING_VEHICLE) {
+          expect(typeof o.modelId).toBe('string');
+          expect(validIds.has(o.modelId)).toBe(true);
+          sawVehicle = true;
+        }
+      }
+    }
+    expect(sawVehicle).toBe(true);
+  });
+
+  it('oncoming vehicle speed matches the picked model\u2019s speed exactly', () => {
+    const seg = { zStart: 0, length: 20 };
+    for (let i = 0; i < 500; i++) {
+      const objs = generateObjectsForSegment(seg, 3);
+      for (const o of objs) {
+        if (o.type === OBJECT_TYPES.ONCOMING_VEHICLE) {
+          const model = getEnemyModelById(o.modelId);
+          expect(model).not.toBeNull();
+          expect(o.speed).toBe(model.speed);
+        }
+      }
+    }
+  });
+
+  it('non-vehicle objects always have modelId and speed as null', () => {
+    const seg = { zStart: 0, length: 20 };
+    for (let i = 0; i < 500; i++) {
+      const objs = generateObjectsForSegment(seg, 3);
+      for (const o of objs) {
+        if (o.type !== OBJECT_TYPES.ONCOMING_VEHICLE) {
+          expect(o.modelId).toBeNull();
+          expect(o.speed).toBeNull();
+        }
+      }
+    }
+  });
+
+  it('every archetype (轿车 / 卡车 / 跑车) appears among generated vehicles', () => {
+    // Generate enough segments to expect all three models. With
+    // maxObjects = 3 and OBJECT_WEIGHTS giving oncoming vehicles a
+    // 0.35 share, the expected number of vehicles per call is small
+    // (≤ 1 on average), so 4000 segments is more than enough to see
+    // every archetype on a uniform random distribution.
+    const seg = { zStart: 0, length: 20 };
+    const seenModels = new Set();
+    for (let i = 0; i < 4000; i++) {
+      const objs = generateObjectsForSegment(seg, 3);
+      for (const o of objs) {
+        if (o.type === OBJECT_TYPES.ONCOMING_VEHICLE) {
+          seenModels.add(o.modelId);
+        }
+      }
+      if (seenModels.size === ENEMY_VEHICLE_MODELS.length) break;
+    }
+    expect(seenModels.size).toBe(ENEMY_VEHICLE_MODELS.length);
+    for (const model of ENEMY_VEHICLE_MODELS) {
+      expect(seenModels.has(model.id)).toBe(true);
+    }
   });
 });
 

@@ -800,7 +800,7 @@
       const newRoadZ = lastSeg ? lastSeg.zStart - SEGMENT_LENGTH : -SEGMENT_LENGTH;
       const newWorldZ = newRoadZ + scrollOffset;
       // Only generate if the new segment's far end is within draw distance
-      if (newWorldZ < -200) {
+      if (newWorldZ < -260) {
         needNew = false;
         break;
       }

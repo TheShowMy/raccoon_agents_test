@@ -65,6 +65,20 @@ import {
   SPAWN_CHANCE_STEP,
   SPAWN_CHANCE_MAX,
   computeDifficulty,
+  ENGINE_HUM_FREQ_MIN,
+  ENGINE_HUM_FREQ_MAX,
+  AUDIO_SPEED_MAX,
+  AUDIO_SMOOTH_TIME,
+  ENGINE_HUM_STARTUP_FREQ,
+  WIND_NOISE_STOP_BUFFER,
+  WIND_NOISE_FILTER_FREQ_MIN,
+  WIND_NOISE_FILTER_FREQ_MAX,
+  WIND_NOISE_GAIN_MAX,
+  updateEngineHumFrequency,
+  createWindNoise,
+  updateWindNoiseFilter,
+  updateWindNoiseGain,
+  stopWindNoise,
 } from '../src/lib/utils/racingGame.js';
 
 /* ===================================================================
@@ -1216,6 +1230,350 @@ describe('sound functions', () => {
       // 4 notes = 4 oscillators created
       expect(mockCtx.createOscillator).toHaveBeenCalledTimes(4);
     });
+  });
+
+  describe('engine hum constants', () => {
+    it('ENGINE_HUM_FREQ_MIN is 80', () => {
+      expect(ENGINE_HUM_FREQ_MIN).toBe(80);
+    });
+
+    it('ENGINE_HUM_FREQ_MAX is 400', () => {
+      expect(ENGINE_HUM_FREQ_MAX).toBe(400);
+    });
+
+    it('AUDIO_SPEED_MAX is positive and finite', () => {
+      expect(Number.isFinite(AUDIO_SPEED_MAX)).toBe(true);
+      expect(AUDIO_SPEED_MAX).toBeGreaterThan(0);
+    });
+
+    it('ENGINE_HUM_STARTUP_FREQ is between ENGINE_HUM_FREQ_MIN and ENGINE_HUM_FREQ_MAX', () => {
+      expect(ENGINE_HUM_STARTUP_FREQ).toBeGreaterThan(ENGINE_HUM_FREQ_MIN);
+      expect(ENGINE_HUM_STARTUP_FREQ).toBeLessThan(ENGINE_HUM_FREQ_MAX);
+    });
+  });
+
+  describe('wind noise constants', () => {
+    it('AUDIO_SMOOTH_TIME is positive and finite', () => {
+      expect(Number.isFinite(AUDIO_SMOOTH_TIME)).toBe(true);
+      expect(AUDIO_SMOOTH_TIME).toBeGreaterThan(0);
+    });
+
+    it('WIND_NOISE_STOP_BUFFER is positive and finite', () => {
+      expect(Number.isFinite(WIND_NOISE_STOP_BUFFER)).toBe(true);
+      expect(WIND_NOISE_STOP_BUFFER).toBeGreaterThan(0);
+    });
+
+    it('WIND_NOISE_FILTER_FREQ_MIN is positive and finite', () => {
+      expect(Number.isFinite(WIND_NOISE_FILTER_FREQ_MIN)).toBe(true);
+      expect(WIND_NOISE_FILTER_FREQ_MIN).toBeGreaterThan(0);
+    });
+
+    it('WIND_NOISE_FILTER_FREQ_MAX > WIND_NOISE_FILTER_FREQ_MIN', () => {
+      expect(WIND_NOISE_FILTER_FREQ_MAX).toBeGreaterThan(WIND_NOISE_FILTER_FREQ_MIN);
+    });
+
+    it('WIND_NOISE_GAIN_MAX is in (0, 1]', () => {
+      expect(WIND_NOISE_GAIN_MAX).toBeGreaterThan(0);
+      expect(WIND_NOISE_GAIN_MAX).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe('updateEngineHumFrequency', () => {
+    it('sets frequency to ENGINE_HUM_FREQ_MIN when speed is 0', () => {
+      const freqMock = { setTargetAtTime: vi.fn() };
+      const engine = { oscillator: { frequency: freqMock, context: { currentTime: 0 } } };
+      updateEngineHumFrequency(engine, 0);
+      expect(freqMock.setTargetAtTime).toHaveBeenCalledWith(ENGINE_HUM_FREQ_MIN, 0, AUDIO_SMOOTH_TIME);
+    });
+
+    it('sets frequency to midpoint (240 Hz) when speed is 25 (half of SPEED_MAX)', () => {
+      const freqMock = { setTargetAtTime: vi.fn() };
+      const engine = { oscillator: { frequency: freqMock, context: { currentTime: 0 } } };
+      updateEngineHumFrequency(engine, 25);
+      const expected = ENGINE_HUM_FREQ_MIN + (ENGINE_HUM_FREQ_MAX - ENGINE_HUM_FREQ_MIN) * 0.5;
+      expect(freqMock.setTargetAtTime).toHaveBeenCalledWith(expected, 0, AUDIO_SMOOTH_TIME);
+    });
+
+    it('sets frequency to ENGINE_HUM_FREQ_MAX when speed reaches AUDIO_SPEED_MAX', () => {
+      const freqMock = { setTargetAtTime: vi.fn() };
+      const engine = { oscillator: { frequency: freqMock, context: { currentTime: 0 } } };
+      updateEngineHumFrequency(engine, AUDIO_SPEED_MAX);
+      expect(freqMock.setTargetAtTime).toHaveBeenCalledWith(ENGINE_HUM_FREQ_MAX, 0, AUDIO_SMOOTH_TIME);
+    });
+
+    it('clamps negative speed to 0 (min frequency)', () => {
+      const freqMock = { setTargetAtTime: vi.fn() };
+      const engine = { oscillator: { frequency: freqMock, context: { currentTime: 0 } } };
+      updateEngineHumFrequency(engine, -1);
+      expect(freqMock.setTargetAtTime).toHaveBeenCalledWith(ENGINE_HUM_FREQ_MIN, 0, AUDIO_SMOOTH_TIME);
+    });
+
+    it('clamps speed above AUDIO_SPEED_MAX to max frequency', () => {
+      const freqMock = { setTargetAtTime: vi.fn() };
+      const engine = { oscillator: { frequency: freqMock, context: { currentTime: 0 } } };
+      updateEngineHumFrequency(engine, 100);
+      expect(freqMock.setTargetAtTime).toHaveBeenCalledWith(ENGINE_HUM_FREQ_MAX, 0, AUDIO_SMOOTH_TIME);
+    });
+
+    it('does nothing when engine is null', () => {
+      expect(() => updateEngineHumFrequency(null, 0)).not.toThrow();
+    });
+
+    it('does nothing when engine.oscillator is null', () => {
+      expect(() => updateEngineHumFrequency({ oscillator: null }, 0)).not.toThrow();
+    });
+  });
+});
+
+/* ===================================================================
+   Wind noise — extended AudioContext mock & tests
+   =================================================================== */
+describe('createWindNoise', () => {
+  let windCtx;
+  let mockBuffer;
+  let mockNoiseSource;
+  let mockNoiseFilter;
+  let mockNoiseGain;
+
+  beforeEach(() => {
+    mockNoiseGain = {
+      gain: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
+      connect: vi.fn(),
+    };
+    mockNoiseFilter = {
+      type: '',
+      frequency: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn() },
+      connect: vi.fn(() => mockNoiseGain),
+      context: { currentTime: 0 },
+    };
+    mockNoiseSource = {
+      buffer: null,
+      loop: false,
+      connect: vi.fn(() => mockNoiseFilter),
+      start: vi.fn(),
+      stop: vi.fn(),
+    };
+    mockBuffer = { getChannelData: vi.fn(() => new Float32Array(44100)) };
+    windCtx = {
+      currentTime: 0,
+      destination: 'mock-dest',
+      sampleRate: 44100,
+      createOscillator: vi.fn(),
+      createGain: vi.fn(() => mockNoiseGain),
+      createBuffer: vi.fn(() => mockBuffer),
+      createBufferSource: vi.fn(() => mockNoiseSource),
+      createBiquadFilter: vi.fn(() => mockNoiseFilter),
+    };
+  });
+
+  it('creates a buffer, buffer source, and biquad filter', () => {
+    const wind = createWindNoise(windCtx);
+    expect(windCtx.createBuffer).toHaveBeenCalled();
+    expect(windCtx.createBufferSource).toHaveBeenCalled();
+    expect(windCtx.createBiquadFilter).toHaveBeenCalled();
+    expect(wind.source).toBe(mockNoiseSource);
+    expect(wind.gain).toBe(mockNoiseGain);
+    expect(wind.filter).toBe(mockNoiseFilter);
+  });
+
+  it('sets source.loop to true', () => {
+    createWindNoise(windCtx);
+    expect(mockNoiseSource.loop).toBe(true);
+  });
+
+  it('starts the source', () => {
+    createWindNoise(windCtx);
+    expect(mockNoiseSource.start).toHaveBeenCalled();
+  });
+
+  it('sets initial filter frequency to WIND_NOISE_FILTER_FREQ_MIN', () => {
+    createWindNoise(windCtx);
+    expect(mockNoiseFilter.frequency.setValueAtTime).toHaveBeenCalledWith(WIND_NOISE_FILTER_FREQ_MIN, 0);
+  });
+
+  it('initializes gain to 0', () => {
+    createWindNoise(windCtx);
+    expect(mockNoiseGain.gain.setValueAtTime).toHaveBeenCalledWith(0, 0);
+  });
+});
+
+describe('updateWindNoiseFilter', () => {
+  let filterCtx;
+  let mockFilter;
+  let mockGain;
+  let mockSource;
+  let mockBuffer;
+
+  beforeEach(() => {
+    mockGain = { gain: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn() }, connect: vi.fn() };
+    mockFilter = {
+      type: 'lowpass',
+      frequency: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn() },
+      connect: vi.fn(() => mockGain),
+      context: { currentTime: 0 },
+    };
+    mockSource = { buffer: {}, loop: true, connect: vi.fn(() => mockFilter), start: vi.fn(), stop: vi.fn() };
+    mockBuffer = { getChannelData: vi.fn(() => new Float32Array(44100)) };
+    filterCtx = {
+      currentTime: 0,
+      destination: 'mock',
+      sampleRate: 44100,
+      createBuffer: vi.fn(() => mockBuffer),
+      createBufferSource: vi.fn(() => mockSource),
+      createBiquadFilter: vi.fn(() => mockFilter),
+      createGain: vi.fn(() => mockGain),
+    };
+  });
+
+  it('sets filter to WIND_NOISE_FILTER_FREQ_MIN when speed is 0', () => {
+    const wind = createWindNoise(filterCtx);
+    updateWindNoiseFilter(wind, 0);
+    expect(mockFilter.frequency.setTargetAtTime).toHaveBeenCalledWith(WIND_NOISE_FILTER_FREQ_MIN, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('sets filter to midpoint when speed is half of AUDIO_SPEED_MAX', () => {
+    const wind = createWindNoise(filterCtx);
+    updateWindNoiseFilter(wind, AUDIO_SPEED_MAX * 0.5);
+    const expected = WIND_NOISE_FILTER_FREQ_MIN + (WIND_NOISE_FILTER_FREQ_MAX - WIND_NOISE_FILTER_FREQ_MIN) * 0.5;
+    expect(mockFilter.frequency.setTargetAtTime).toHaveBeenCalledWith(expected, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('sets filter to WIND_NOISE_FILTER_FREQ_MAX when speed reaches AUDIO_SPEED_MAX', () => {
+    const wind = createWindNoise(filterCtx);
+    updateWindNoiseFilter(wind, AUDIO_SPEED_MAX);
+    expect(mockFilter.frequency.setTargetAtTime).toHaveBeenCalledWith(WIND_NOISE_FILTER_FREQ_MAX, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('clamps negative speed to min cutoff', () => {
+    const wind = createWindNoise(filterCtx);
+    updateWindNoiseFilter(wind, -5);
+    expect(mockFilter.frequency.setTargetAtTime).toHaveBeenCalledWith(WIND_NOISE_FILTER_FREQ_MIN, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('clamps speed above AUDIO_SPEED_MAX to max cutoff', () => {
+    const wind = createWindNoise(filterCtx);
+    updateWindNoiseFilter(wind, 200);
+    expect(mockFilter.frequency.setTargetAtTime).toHaveBeenCalledWith(WIND_NOISE_FILTER_FREQ_MAX, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('does nothing when wind is null', () => {
+    expect(() => updateWindNoiseFilter(null, 0)).not.toThrow();
+  });
+
+  it('does nothing when wind.filter is null', () => {
+    expect(() => updateWindNoiseFilter({ filter: null }, 0)).not.toThrow();
+  });
+});
+
+describe('updateWindNoiseGain', () => {
+  let gainCtx;
+  let mockFilter;
+  let mockGain;
+  let mockSource;
+  let mockBuffer;
+
+  beforeEach(() => {
+    mockGain = { gain: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn() }, connect: vi.fn(), context: { currentTime: 0 } };
+    mockFilter = { type: 'lowpass', frequency: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn() }, connect: vi.fn(() => mockGain), context: { currentTime: 0 } };
+    mockSource = { buffer: {}, loop: true, connect: vi.fn(() => mockFilter), start: vi.fn(), stop: vi.fn() };
+    mockBuffer = { getChannelData: vi.fn(() => new Float32Array(44100)) };
+    gainCtx = {
+      currentTime: 0,
+      destination: 'mock',
+      sampleRate: 44100,
+      createBuffer: vi.fn(() => mockBuffer),
+      createBufferSource: vi.fn(() => mockSource),
+      createBiquadFilter: vi.fn(() => mockFilter),
+      createGain: vi.fn(() => mockGain),
+    };
+  });
+
+  it('sets gain to 0 when speed is 0', () => {
+    const wind = createWindNoise(gainCtx);
+    updateWindNoiseGain(wind, 0);
+    expect(mockGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('sets gain to WIND_NOISE_GAIN_MAX when speed reaches AUDIO_SPEED_MAX', () => {
+    const wind = createWindNoise(gainCtx);
+    updateWindNoiseGain(wind, AUDIO_SPEED_MAX);
+    expect(mockGain.gain.setTargetAtTime).toHaveBeenCalledWith(WIND_NOISE_GAIN_MAX, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('scales gain linearly with speed', () => {
+    const wind = createWindNoise(gainCtx);
+    const halfSpeed = AUDIO_SPEED_MAX * 0.5;
+    updateWindNoiseGain(wind, halfSpeed);
+    const expected = WIND_NOISE_GAIN_MAX * 0.5;
+    expect(mockGain.gain.setTargetAtTime).toHaveBeenCalledWith(expected, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('clamps negative speed to 0 gain', () => {
+    const wind = createWindNoise(gainCtx);
+    updateWindNoiseGain(wind, -10);
+    expect(mockGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('does nothing when wind is null', () => {
+    expect(() => updateWindNoiseGain(null, 0)).not.toThrow();
+  });
+
+  it('does nothing when wind.gain is null', () => {
+    expect(() => updateWindNoiseGain({ gain: null }, 0)).not.toThrow();
+  });
+});
+
+describe('stopWindNoise', () => {
+  let stopCtx;
+  let mockFilter;
+  let mockGain;
+  let mockSource;
+  let mockBuffer;
+
+  beforeEach(() => {
+    mockGain = {
+      gain: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
+      connect: vi.fn(),
+      context: { currentTime: 0 },
+    };
+    mockFilter = { type: 'lowpass', frequency: { setValueAtTime: vi.fn(), setTargetAtTime: vi.fn() }, connect: vi.fn(() => mockGain), context: { currentTime: 0 } };
+    mockSource = { buffer: {}, loop: true, connect: vi.fn(() => mockFilter), start: vi.fn(), stop: vi.fn() };
+    mockBuffer = { getChannelData: vi.fn(() => new Float32Array(44100)) };
+    stopCtx = {
+      currentTime: 0,
+      destination: 'mock',
+      sampleRate: 44100,
+      createBuffer: vi.fn(() => mockBuffer),
+      createBufferSource: vi.fn(() => mockSource),
+      createBiquadFilter: vi.fn(() => mockFilter),
+      createGain: vi.fn(() => mockGain),
+    };
+  });
+
+  it('fades out gain and stops the source with default fadeOut', () => {
+    const wind = createWindNoise(stopCtx);
+    stopWindNoise(wind);
+    expect(mockGain.gain.linearRampToValueAtTime).toHaveBeenCalledWith(0, 0.3);
+    expect(mockSource.stop).toHaveBeenCalledWith(0.3 + WIND_NOISE_STOP_BUFFER);
+  });
+
+  it('uses custom fadeOut duration', () => {
+    const wind = createWindNoise(stopCtx);
+    stopWindNoise(wind, 0.5);
+    expect(mockGain.gain.linearRampToValueAtTime).toHaveBeenCalledWith(0, 0.5);
+    expect(mockSource.stop).toHaveBeenCalledWith(0.5 + WIND_NOISE_STOP_BUFFER);
+  });
+
+  it('does nothing when wind is null', () => {
+    expect(() => stopWindNoise(null)).not.toThrow();
+  });
+
+  it('does nothing when wind.source is null', () => {
+    expect(() => stopWindNoise({ source: null, gain: mockGain })).not.toThrow();
+  });
+
+  it('does nothing when wind.gain is null', () => {
+    expect(() => stopWindNoise({ source: mockSource, gain: null })).not.toThrow();
   });
 });
 

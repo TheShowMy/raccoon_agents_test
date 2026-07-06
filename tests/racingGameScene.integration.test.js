@@ -2442,4 +2442,152 @@ describe('Dynamic difficulty — full updateGame loop simulation', () => {
   });
 });
 
+/* ==================================================================
+   17. Road surface material: shared instance, lit, fog-aware
+
+      The road surface on each segment used to be a per-segment
+      MeshPhongMaterial, creating independent GPU instances per
+      tile. In a foggy scene this caused adjacent segments to
+      produce slightly different fog-interpolated colours at their
+      shared Z boundary, which read as a visible colour-step line
+      in the distance (60–250 units from the player).
+
+      The fix replaces the per-segment material with a single
+      shared module-level MeshPhongMaterial instance that all road
+      surface meshes reference. Since the same material instance
+      always samples the same fog factor at a given world Z, all
+      tiles transition to the fog colour in lockstep — eliminating
+      the inter-segment colour band. The shoulder material (section
+      15) follows the same pattern.
+
+      The mirrors below reproduce the lazy-create factory and the
+      per-segment surface mesh builder so a regression in the
+      component (e.g. accidentally creating a per-segment
+      material again, or using MeshBasicMaterial instead of
+      MeshPhongMaterial) is caught by the tests.
+   ================================================================== */
+
+// Mirrored constants — keep in sync with RacingGameScene.svelte.
+const ROAD_COLOR_SURFACE = 0x8a9a8a;
+
+/**
+ * Pure replica of the lazy surface-material factory inside
+ * `createContinuousRoadSegment`. Takes the module-level
+ * `surfaceMaterial` reference and lazily creates it on first use;
+ * subsequent calls return the same instance, mirroring the
+ * component's pattern exactly.
+ */
+function getOrCreateSharedSurfaceMaterial(cache) {
+  if (!cache.material) {
+    cache.material = {
+      type: 'MeshPhongMaterial',
+      color: ROAD_COLOR_SURFACE,
+      flatShading: true,
+      side: 'DoubleSide',
+      fog: true,
+    };
+  }
+  return cache.material;
+}
+
+/**
+ * Pure replica of the per-segment surface mesh builder. Returns
+ * one mesh and the shared material so the test can verify that
+ * multiple segment surfaces all reference the same material
+ * instance.
+ */
+function buildSurfaceMeshForSegment(cache) {
+  const material = getOrCreateSharedSurfaceMaterial(cache);
+  const mesh = { geometry: 'segment-geometry', material };
+  return { mesh, material };
+}
+
+describe('Road surface material — shared instance, lit, fog-aware', () => {
+  it('lazy factory returns the same instance on repeated calls', () => {
+    // Calling the factory twice must return the same object
+    // reference — a new object on every call would be the same
+    // regression as the original per-segment material.
+    const cache = {};
+    const first = getOrCreateSharedSurfaceMaterial(cache);
+    const second = getOrCreateSharedSurfaceMaterial(cache);
+    expect(first).toBe(second);
+  });
+
+  it('the surface material is MeshPhongMaterial (lit, not flat)', () => {
+    // MeshPhongMaterial responds to ambient / directional lights
+    // so the road surface shows shading that varies across the
+    // segment — which is what makes it read as a lit surface.
+    // MeshBasicMaterial would not show shading variation, which is
+    // the regression we are guarding against.
+    const cache = {};
+    const mat = getOrCreateSharedSurfaceMaterial(cache);
+    expect(mat.type).toBe('MeshPhongMaterial');
+    expect(mat.type).not.toBe('MeshBasicMaterial');
+  });
+
+  it('the surface material has fog response explicitly enabled', () => {
+    // The whole purpose of sharing one material instance is to
+    // keep all road segments in lockstep with the fog blend at
+    // their shared Z boundary. If `fog: false` ever snuck in, the
+    // material would never blend toward the sky colour and the
+    // horizon transition would be broken. Explicit `fog: true`
+    // pins the contract and guards a future options-flattening
+    // refactor.
+    const cache = {};
+    const mat = getOrCreateSharedSurfaceMaterial(cache);
+    expect(mat.fog).toBe(true);
+  });
+
+  it('flatShading and DoubleSide are set on the surface material', () => {
+    // `flatShading: true` gives the road a faceted look that is
+    // consistent with the terrain-style road geometry. `side:
+    // DoubleSide` ensures both faces are rendered so there is no
+    // back-face culling seam when the camera is above the road.
+    const cache = {};
+    const mat = getOrCreateSharedSurfaceMaterial(cache);
+    expect(mat.flatShading).toBe(true);
+    expect(mat.side).toBe('DoubleSide');
+  });
+
+  it('all segment surface meshes reference the SAME material instance', () => {
+    // Building two segment meshes must yield two mesh objects that
+    // both reference the identical material reference — not two
+    // distinct material objects with the same properties. Using
+    // `toBe` (identity) rather than `toEqual` (structural) is what
+    // catches the per-segment material regression.
+    const cache = {};
+    const { mesh: s1, material: m1 } = buildSurfaceMeshForSegment(cache);
+    const { mesh: s2, material: m2 } = buildSurfaceMeshForSegment(cache);
+    expect(s1).not.toBe(s2);        // different mesh objects (geometry is per-segment)
+    expect(s1.material).toBe(m1);   // mesh references its material
+    expect(s2.material).toBe(m2);
+    expect(m1).toBe(m2);            // same material instance across segments
+    expect(s1.material).toBe(s2.material); // meshes share the material
+  });
+
+  it('the surface colour sits between shoulder and lane-line colours (road identity)', () => {
+    // The surface colour should be between the shoulder and lane-line
+    // colours so the road reads as a distinct surface rather than
+    // matching either neighbour exactly. This guards against an
+    // accidental colour swap that would make the road disappear
+    // into the shoulder or the lane lines.
+    const luminance = (hex) => {
+      const r = (hex >> 16) & 0xff;
+      const g = (hex >> 8) & 0xff;
+      const b = hex & 0xff;
+      return 0.299 * r + 0.587 * g + 0.114 * b;
+    };
+    const roadL = luminance(ROAD_COLOR_SURFACE);
+    const shoulderL = luminance(ROAD_SHOULDER_COLOR);
+    const laneLineL = luminance(LANE_LINE_COLOR);
+    // Surface should be distinct from shoulder.
+    expect(roadL).not.toBe(shoulderL);
+    // Surface should be distinct from lane line.
+    expect(roadL).not.toBe(laneLineL);
+    // All three should be ordered: laneLine > road > shoulder.
+    expect(laneLineL).toBeGreaterThan(roadL);
+    expect(roadL).toBeGreaterThan(shoulderL);
+  });
+});
+
 

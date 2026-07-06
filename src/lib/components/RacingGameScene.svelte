@@ -72,6 +72,15 @@
    * @type {THREE.Material|null} */
   let shoulderMaterial = null;
 
+  /**
+   * Shared road-surface material. All surface meshes across every
+   * road segment reference this single instance so they respond to
+   * fog identically and eliminate colour-band artefacts at segment
+   * boundaries. Released exactly once in `onDestroy`.
+   *
+   * @type {THREE.Material|null} */
+  let surfaceMaterial = null;
+
   /** @type {ResizeObserver|null} */
   let resizeObserver = null;
 
@@ -509,16 +518,19 @@
     surfaceGeo.setIndex(surfaceIndices);
     surfaceGeo.computeVertexNormals();
 
-    const surfaceMat = new THREE.MeshPhongMaterial({
-      color: ROAD_COLOR,
-      flatShading: true,
-      side: THREE.DoubleSide,
-      // Explicitly enable fog so the road surface blends into the
-      // sky colour (0x87CEEB) at the far end of the visible range,
-      // matching the grass and shoulders. This is what removes the
-      // hard "road meets sky" colour band the user reported.
-      fog: true,
-    });
+    if (!surfaceMaterial) {
+      surfaceMaterial = new THREE.MeshPhongMaterial({
+        color: ROAD_COLOR,
+        flatShading: true,
+        side: THREE.DoubleSide,
+        // Explicitly enable fog so the road surface blends into the
+        // sky colour (0x87CEEB) at the far end of the visible range,
+        // matching the grass and shoulders. This is what removes the
+        // hard "road meets sky" colour band the user reported.
+        fog: true,
+      });
+    }
+    const surfaceMat = surfaceMaterial;
     const surface = new THREE.Mesh(surfaceGeo, surfaceMat);
     surface.position.set(0, ROAD_Y, 0);
     surface.receiveShadow = true;
@@ -861,7 +873,7 @@
       }
     };
 
-    if (data.surface) removeMesh(data.surface);
+    if (data.surface) removeMesh(data.surface, true);
     for (const line of data.lines) removeMesh(line);
     for (const s of data.shoulders) removeMesh(s, true);
   }
@@ -1557,18 +1569,22 @@
       const child = roadGroup.children[0];
       if (child.isMesh) {
         try { child.geometry.dispose(); } catch {}
-        // The shoulder material is shared across every shoulder mesh,
-        // so we must NOT dispose it here — that would leave the
-        // about-to-be-created shoulders on the new road referencing a
-        // disposed GPU resource. The shared material is kept alive
-        // across restarts; it is only released in `onDestroy`. The
-        // surface and line materials are per-segment instances and
+        // The shoulder and surface materials are shared across every
+        // shoulder/surface mesh — disposing either on the first segment
+        // recycle would leave every other mesh referencing a disposed
+        // GPU resource. Both shared materials are kept alive across
+        // restarts and released exactly once in `onDestroy`. Lane line
+        // materials are per-segment MeshBasicMaterial instances and
         // are safe to dispose normally.
         const isSharedShoulder = shoulderMaterial
           && (child.material === shoulderMaterial
             || (Array.isArray(child.material)
               && child.material.indexOf(shoulderMaterial) !== -1));
-        if (!isSharedShoulder) {
+        const isSharedSurface = surfaceMaterial
+          && (child.material === surfaceMaterial
+            || (Array.isArray(child.material)
+              && child.material.indexOf(surfaceMaterial) !== -1));
+        if (!isSharedShoulder && !isSharedSurface) {
           if (Array.isArray(child.material)) {
             child.material.forEach((m) => { try { m.dispose(); } catch {} });
           } else if (child.material) {
@@ -2131,6 +2147,10 @@
     if (shoulderMaterial) {
       try { shoulderMaterial.dispose(); } catch {}
       shoulderMaterial = null;
+    }
+    if (surfaceMaterial) {
+      try { surfaceMaterial.dispose(); } catch {}
+      surfaceMaterial = null;
     }
 
     if (renderer) {

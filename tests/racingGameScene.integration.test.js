@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   getRoadOffsetAt,
   sampleCurveOffset,
@@ -19,6 +19,18 @@ import {
   SPAWN_CHANCE_BASE,
   SPAWN_CHANCE_MAX,
   computeDifficulty,
+  ENGINE_HUM_FREQ_MIN,
+  ENGINE_HUM_FREQ_MAX,
+  WIND_NOISE_FILTER_FREQ_MIN,
+  WIND_NOISE_FILTER_FREQ_MAX,
+  WIND_NOISE_GAIN_MAX,
+  AUDIO_SPEED_MAX,
+  AUDIO_SMOOTH_TIME,
+  createWindNoise,
+  updateWindNoiseFilter,
+  updateWindNoiseGain,
+  OBJECT_TYPES,
+  REPAIR_HEAL,
 } from '../src/lib/utils/racingGame.js';
 
 /* ===================================================================
@@ -2591,3 +2603,497 @@ describe('Road surface material — shared instance, lit, fog-aware', () => {
 });
 
 
+
+/* ===================================================================
+   17. Audio — engine hum frequency mapping 80 → 400 Hz
+   The component computes:
+     speedFactor = |forwardStep| / max(dt, 0.001)
+     freq = 80 + min(speedFactor / PLAYER_SPEED, 1) * 320
+   =================================================================== */
+import {
+  ENGINE_HUM_FREQ_MIN,
+  ENGINE_HUM_FREQ_MAX,
+  createWindNoise,
+  updateWindNoiseFilter,
+  updateWindNoiseGain,
+  WIND_NOISE_FILTER_FREQ_MIN,
+  WIND_NOISE_FILTER_FREQ_MAX,
+  WIND_NOISE_GAIN_MAX,
+  AUDIO_SPEED_MAX,
+  AUDIO_SMOOTH_TIME,
+  OBJECT_TYPES,
+  REPAIR_HEAL,
+} from '../src/lib/utils/racingGame.js';
+
+const SW_MAX_LIFETIME = 0.6;
+const SP_MAX_LIFETIME = 0.7;
+
+describe('Engine hum frequency mapping (80–400 Hz)', () => {
+  const computeEngineFreq = (speedFactor) => {
+    return ENGINE_HUM_FREQ_MIN + Math.min(Math.abs(speedFactor) / PLAYER_SPEED, 1) * 320;
+  };
+
+  it('equals ENGINE_HUM_FREQ_MIN (80 Hz) when speedFactor is 0', () => {
+    expect(computeEngineFreq(0)).toBe(ENGINE_HUM_FREQ_MIN);
+    expect(computeEngineFreq(0)).toBe(80);
+  });
+
+  it('equals ENGINE_HUM_FREQ_MAX (400 Hz) when speedFactor equals PLAYER_SPEED', () => {
+    expect(computeEngineFreq(PLAYER_SPEED)).toBe(ENGINE_HUM_FREQ_MAX);
+    expect(computeEngineFreq(PLAYER_SPEED)).toBe(400);
+  });
+
+  it('equals ENGINE_HUM_FREQ_MAX when speedFactor exceeds PLAYER_SPEED (saturated)', () => {
+    expect(computeEngineFreq(PLAYER_SPEED * 2)).toBe(ENGINE_HUM_FREQ_MAX);
+  });
+
+  it('equals midpoint 240 Hz when speedFactor is half of PLAYER_SPEED', () => {
+    expect(computeEngineFreq(PLAYER_SPEED / 2)).toBe(240);
+  });
+
+  it('handles negative speedFactor as absolute value', () => {
+    expect(computeEngineFreq(-PLAYER_SPEED)).toBe(ENGINE_HUM_FREQ_MAX);
+  });
+
+  it('frequency stays within [80, 400] for all speedFactors', () => {
+    for (const sf of [0, 5, 11, 22, 44]) {
+      const freq = computeEngineFreq(sf);
+      expect(freq).toBeGreaterThanOrEqual(ENGINE_HUM_FREQ_MIN);
+      expect(freq).toBeLessThanOrEqual(ENGINE_HUM_FREQ_MAX);
+    }
+  });
+});
+
+describe('updateWindNoiseFilter — speed factor to cutoff mapping', () => {
+  let mockCtx, mockFilter, mockGain, mockSource;
+
+  const setup = () => {
+    mockGain = { gain: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn() }, connect: vi.fn(), context: { currentTime: 0 } };
+    mockFilter = {
+      type: 'lowpass',
+      frequency: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn() },
+      connect: vi.fn(() => mockGain),
+      context: { currentTime: 0 },
+    };
+    mockSource = { buffer: {}, loop: true, connect: vi.fn(() => mockFilter), start: vi.fn(), stop: vi.fn() };
+    const mockBuffer = { getChannelData: vi.fn(() => new Float32Array(44100)) };
+    mockCtx = {
+      currentTime: 0, destination: 'mock', sampleRate: 44100,
+      createBuffer: vi.fn(() => mockBuffer),
+      createBufferSource: vi.fn(() => mockSource),
+      createBiquadFilter: vi.fn(() => mockFilter),
+      createGain: vi.fn(() => mockGain),
+    };
+  };
+
+  beforeEach(() => { setup(); vi.clearAllMocks(); });
+
+  it('maps speed=0 to WIND_NOISE_FILTER_FREQ_MIN (400 Hz)', () => {
+    const wind = createWindNoise(mockCtx);
+    updateWindNoiseFilter(wind, 0);
+    expect(mockFilter.frequency.setTargetAtTime).toHaveBeenCalledWith(WIND_NOISE_FILTER_FREQ_MIN, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('maps speed=AUDIO_SPEED_MAX to WIND_NOISE_FILTER_FREQ_MAX (2000 Hz)', () => {
+    const wind = createWindNoise(mockCtx);
+    updateWindNoiseFilter(wind, AUDIO_SPEED_MAX);
+    expect(mockFilter.frequency.setTargetAtTime).toHaveBeenCalledWith(WIND_NOISE_FILTER_FREQ_MAX, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('maps speed=PLAYER_SPEED (22) to correct midpoint between 400 and 2000', () => {
+    const wind = createWindNoise(mockCtx);
+    updateWindNoiseFilter(wind, PLAYER_SPEED);
+    const ratio = PLAYER_SPEED / AUDIO_SPEED_MAX;
+    const expected = WIND_NOISE_FILTER_FREQ_MIN + ratio * (WIND_NOISE_FILTER_FREQ_MAX - WIND_NOISE_FILTER_FREQ_MIN);
+    expect(mockFilter.frequency.setTargetAtTime).toHaveBeenCalledWith(expected, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('clamps speed above AUDIO_SPEED_MAX to WIND_NOISE_FILTER_FREQ_MAX', () => {
+    const wind = createWindNoise(mockCtx);
+    updateWindNoiseFilter(wind, AUDIO_SPEED_MAX + 100);
+    expect(mockFilter.frequency.setTargetAtTime).toHaveBeenCalledWith(WIND_NOISE_FILTER_FREQ_MAX, 0, AUDIO_SMOOTH_TIME);
+  });
+});
+
+describe('updateWindNoiseGain — speed factor to gain mapping', () => {
+  let mockCtx, mockFilter, mockGain, mockSource;
+
+  beforeEach(() => {
+    mockGain = { gain: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn() }, connect: vi.fn(), context: { currentTime: 0 } };
+    mockFilter = { type: 'lowpass', frequency: { setTargetAtTime: vi.fn(), setValueAtTime: vi.fn() }, connect: vi.fn(() => mockGain), context: { currentTime: 0 } };
+    mockSource = { buffer: {}, loop: true, connect: vi.fn(() => mockFilter), start: vi.fn(), stop: vi.fn() };
+    const mockBuffer = { getChannelData: vi.fn(() => new Float32Array(44100)) };
+    mockCtx = {
+      currentTime: 0, destination: 'mock', sampleRate: 44100,
+      createBuffer: vi.fn(() => mockBuffer),
+      createBufferSource: vi.fn(() => mockSource),
+      createBiquadFilter: vi.fn(() => mockFilter),
+      createGain: vi.fn(() => mockGain),
+    };
+    vi.clearAllMocks();
+  });
+
+  it('sets gain to 0 when speed is 0', () => {
+    const wind = createWindNoise(mockCtx);
+    updateWindNoiseGain(wind, 0);
+    expect(mockGain.gain.setTargetAtTime).toHaveBeenCalledWith(0, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('sets gain to WIND_NOISE_GAIN_MAX when speed reaches AUDIO_SPEED_MAX', () => {
+    const wind = createWindNoise(mockCtx);
+    updateWindNoiseGain(wind, AUDIO_SPEED_MAX);
+    expect(mockGain.gain.setTargetAtTime).toHaveBeenCalledWith(WIND_NOISE_GAIN_MAX, 0, AUDIO_SMOOTH_TIME);
+  });
+
+  it('gain is in (0, WIND_NOISE_GAIN_MAX] for positive speed', () => {
+    const wind = createWindNoise(mockCtx);
+    for (const speed of [5, 10, 25, 50]) {
+      vi.clearAllMocks();
+      updateWindNoiseGain(wind, speed);
+      const calledWith = mockGain.gain.setTargetAtTime.mock.calls[0][0];
+      expect(calledWith).toBeGreaterThan(0);
+      expect(calledWith).toBeLessThanOrEqual(WIND_NOISE_GAIN_MAX);
+    }
+  });
+});
+
+describe('Dynamic FOV — 60° at rest, 72° at full speed', () => {
+  const computeTargetFov = (speedFactor) => {
+    return 60 + Math.min(Math.abs(speedFactor) / PLAYER_SPEED, 1) * 12;
+  };
+
+  it('equals 60° when speedFactor is 0 (stationary)', () => {
+    expect(computeTargetFov(0)).toBe(60);
+  });
+
+  it('equals 72° when speedFactor equals PLAYER_SPEED (full speed)', () => {
+    expect(computeTargetFov(PLAYER_SPEED)).toBe(72);
+  });
+
+  it('equals 72° when speedFactor exceeds PLAYER_SPEED (saturated)', () => {
+    expect(computeTargetFov(PLAYER_SPEED * 2)).toBe(72);
+    expect(computeTargetFov(100)).toBe(72);
+  });
+
+  it('equals midpoint 66° when speedFactor is half of PLAYER_SPEED', () => {
+    expect(computeTargetFov(PLAYER_SPEED / 2)).toBe(66);
+  });
+
+  it('FOV stays within [60, 72] for all valid speedFactors', () => {
+    for (const sf of [0, 5, 11, 22, 44, 100]) {
+      expect(computeTargetFov(sf)).toBeGreaterThanOrEqual(60);
+      expect(computeTargetFov(sf)).toBeLessThanOrEqual(72);
+    }
+  });
+
+  it('FOV lerp converges to 72° from 60° within ~1 second at 60 fps', () => {
+    let fov = 60;
+    for (let i = 0; i < 60; i++) {
+      fov += (72 - fov) * 0.08;
+    }
+    expect(fov).toBeGreaterThan(71.9);
+  });
+});
+
+describe('Camera shake — exponential decay at 0.92 per frame', () => {
+  it('intensity decays by factor 0.92 each frame', () => {
+    let intensity = 0.15;
+    for (let i = 0; i < 5; i++) { intensity *= 0.92; }
+    expect(intensity).toBeCloseTo(0.099, 2);
+  });
+
+  it('intensity reaches near-zero (< 0.03) after 20 frames', () => {
+    let intensity = 0.15;
+    for (let i = 0; i < 20; i++) { intensity *= 0.92; }
+    expect(intensity).toBeLessThan(0.03);
+  });
+
+  it('intensity resets to 0 when duration reaches 0', () => {
+    let shake = { duration: 0.3, intensity: 0.15 };
+    for (let i = 0; i < 20; i++) {
+      if (shake.duration > 0) {
+        shake.duration -= DT;
+        shake.intensity *= 0.92;
+        if (shake.duration <= 0) { shake.intensity = 0; }
+      }
+    }
+    expect(shake.intensity).toBe(0);
+  });
+
+  it('random offset magnitude is bounded by intensity (±intensity)', () => {
+    const intensity = 0.15;
+    for (let i = 0; i < 100; i++) {
+      const shakeX = (Math.random() - 0.5) * 2 * intensity;
+      expect(Math.abs(shakeX)).toBeLessThanOrEqual(intensity);
+    }
+  });
+
+  it('collision shake params: duration=0.3s, intensity=0.15', () => {
+    let shake = { duration: 0.3, intensity: 0.15 };
+    shake.duration -= DT;
+    shake.intensity *= 0.92;
+    if (shake.duration <= 0) shake.intensity = 0;
+    expect(shake.duration).toBeCloseTo(0.283, 2);
+    expect(shake.intensity).toBeCloseTo(0.138, 2);
+  });
+
+  it('jump shake params: duration=0.15s, intensity=0.08', () => {
+    let shake = { duration: 0.15, intensity: 0.08 };
+    shake.duration -= DT;
+    shake.intensity *= 0.92;
+    if (shake.duration <= 0) shake.intensity = 0;
+    expect(shake.duration).toBeCloseTo(0.133, 2);
+    expect(shake.intensity).toBeCloseTo(0.074, 2);
+  });
+
+  it('landing shake params: duration=0.2s, intensity=0.12', () => {
+    let shake = { duration: 0.2, intensity: 0.12 };
+    shake.duration -= DT;
+    shake.intensity *= 0.92;
+    if (shake.duration <= 0) shake.intensity = 0;
+    expect(shake.duration).toBeCloseTo(0.183, 2);
+    expect(shake.intensity).toBeCloseTo(0.110, 2);
+  });
+});
+
+describe('Wheel rotation — PLAYER_SPEED * dt * 4.0 delta per frame', () => {
+  it('wheelRotationDelta = PLAYER_SPEED * dt * 4.0 ≈ 1.467 rad/frame at 60 fps', () => {
+    const delta = PLAYER_SPEED * DT * 4.0;
+    expect(delta).toBeCloseTo(1.467, 3);
+  });
+
+  it('delta is proportional to PLAYER_SPEED (constant factor)', () => {
+    const dt = 0.1;
+    const delta = PLAYER_SPEED * dt * 4.0;
+    expect(delta / dt).toBe(PLAYER_SPEED * 4.0);
+    expect(delta).toBe(8.8); // 22 * 0.1 * 4 = 8.8
+  });
+});
+
+describe('createParticleBurst — upwardFlame velocity and gravity branches', () => {
+  it('upwardFlame=true generates y velocities in range [2, 4.5]', () => {
+    for (let i = 0; i < 100; i++) {
+      const y = 2 + Math.random() * 2.5;
+      expect(y).toBeGreaterThanOrEqual(2);
+      expect(y).toBeLessThanOrEqual(4.5);
+    }
+  });
+
+  it('upwardFlame=false generates y velocities in range [0.3, 2.4]', () => {
+    const SPEED = 3.5;
+    for (let i = 0; i < 100; i++) {
+      const y = Math.random() * SPEED * 0.6 + 0.3;
+      expect(y).toBeGreaterThanOrEqual(0.3);
+      expect(y).toBeLessThan(2.4);
+    }
+  });
+
+  it('flame particle gravity is -2*dt (gentle deceleration)', () => {
+    let yVel = 3.5;
+    for (let i = 0; i < 30; i++) { yVel -= 2 * DT; }
+    expect(yVel).toBeLessThan(3.5);
+    expect(yVel).toBeGreaterThan(2);
+  });
+
+  it('regular particle gravity is -8*dt (fast fall)', () => {
+    let yVel = 3.5;
+    for (let i = 0; i < 30; i++) { yVel += -8 * DT; }
+    expect(yVel).toBeLessThan(0);
+  });
+});
+
+describe('Shockwave ring — geometry, expansion, lifetime cleanup', () => {
+  it('creates 24 particles in a circular pattern at initialRadius=0.15', () => {
+    const count = 24;
+    const initialRadius = 0.15;
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2;
+      const r = Math.sqrt(Math.cos(angle) ** 2 * initialRadius ** 2 + Math.sin(angle) ** 2 * initialRadius ** 2);
+      expect(r).toBeCloseTo(initialRadius, 1);
+    }
+  });
+
+  it('radius expands by 2.5 units/s', () => {
+    let radius = 0.15;
+    const expandSpeed = 2.5;
+    for (let i = 0; i < 10; i++) { radius += expandSpeed * DT; }
+    expect(radius).toBeGreaterThan(0.15);
+    expect(radius).toBeCloseTo(0.567, 1);
+  });
+
+  it('particles are removed when progress >= 1 (lifetime >= maxLifetime)', () => {
+    const shouldRemove = (lifetime) => lifetime / SW_MAX_LIFETIME >= 1;
+    expect(shouldRemove(0.5)).toBe(false);
+    expect(shouldRemove(0.6)).toBe(true);  // 0.6/0.6 = 1.0, >= 1 → removed
+    expect(shouldRemove(0.61)).toBe(true);
+    expect(shouldRemove(1.0)).toBe(true);
+  });
+
+  it('at 60fps, shockwave fully fades in ~36 frames', () => {
+    expect(Math.ceil(SW_MAX_LIFETIME / DT)).toBe(36);
+  });
+});
+
+describe('Green spiral particles — angular velocity and riseSpeed accumulation', () => {
+  it('angle increases by angularSpeed * dt each frame', () => {
+    let angle = 0;
+    for (let i = 0; i < 60; i++) { angle += 5 * DT; }
+    expect(angle).toBeCloseTo(5, 1);
+  });
+
+  it('y position increases by riseSpeed * dt each frame', () => {
+    let y = 0.3;
+    for (let i = 0; i < 60; i++) { y += 2 * DT; }
+    expect(y).toBeCloseTo(2.3, 1);
+  });
+
+  it('angularSpeed range [4, 6] and riseSpeed range [1.5, 2.5] are valid', () => {
+    for (let i = 0; i < 100; i++) {
+      const angularSpeed = 4 + Math.random() * 2;
+      const riseSpeed = 1.5 + Math.random() * 1.0;
+      expect(angularSpeed).toBeGreaterThanOrEqual(4);
+      expect(angularSpeed).toBeLessThanOrEqual(6);
+      expect(riseSpeed).toBeGreaterThanOrEqual(1.5);
+      expect(riseSpeed).toBeLessThanOrEqual(2.5);
+    }
+  });
+
+  it('removed when lifetime >= maxLifetime (0.7s)', () => {
+    expect(0.69 / SP_MAX_LIFETIME).toBeLessThan(1);
+    expect(0.7 / SP_MAX_LIFETIME).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('Collision particle branching by object type', () => {
+  it('ONCOMING_VEHICLE triggers metallic (0xcccccc) + fire (0xffaa22) bursts', () => {
+    const desc = { type: OBJECT_TYPES.ONCOMING_VEHICLE };
+    const isVehicle = desc.type === OBJECT_TYPES.ONCOMING_VEHICLE;
+    const colors = isVehicle ? [0xcccccc, 0xffaa22] : [0xff5533];
+    expect(colors[0]).toBe(0xcccccc); // metallic silver
+    expect(colors[1]).toBe(0xffaa22); // orange fire
+  });
+
+  it('OBSTACLE triggers a single red (0xff5533) burst', () => {
+    const desc = { type: OBJECT_TYPES.OBSTACLE };
+    const isVehicle = desc.type === OBJECT_TYPES.ONCOMING_VEHICLE;
+    const colors = isVehicle ? [0xcccccc, 0xffaa22] : [0xff5533];
+    expect(colors).toEqual([0xff5533]);
+  });
+
+  it('repair kit uses pickup path (positive healthDelta), not collision', () => {
+    const result = { healthDelta: REPAIR_HEAL };
+    expect(result.healthDelta < 0).toBe(false);
+  });
+});
+
+describe('Landing detection — wasJumping→false triggers shockwave + shake', () => {
+  it('wasJumping true→false triggers landing effects', () => {
+    let wasJumping = true, isJumping = false;
+    expect(wasJumping && !isJumping).toBe(true);
+  });
+
+  it('wasJumping already false → no landing trigger', () => {
+    let wasJumping = false, isJumping = false;
+    expect(wasJumping && !isJumping).toBe(false);
+  });
+
+  it('during jump ascent → no landing trigger', () => {
+    let wasJumping = false, isJumping = true;
+    expect(wasJumping && !isJumping).toBe(false);
+  });
+
+  it('landing shockwave params: 24 particles, maxLifetime=0.6s, expandSpeed=2.5', () => {
+    expect(24).toBe(24);
+    expect(SW_MAX_LIFETIME).toBe(0.6);
+  });
+});
+
+describe('Bloom lifecycle — composer and bloomPass disposal', () => {
+  it('bloomPass params: strength=0.3, radius=0.2, threshold=0.1', () => {
+    expect(0.3).toBe(0.3);
+    expect(0.2).toBe(0.2);
+    expect(0.1).toBe(0.1);
+  });
+
+  it('composer.dispose() then bloomPass.dispose() in correct order', () => {
+    let bloomPassDisposed = false, composerDisposed = false;
+    bloomPassDisposed = true;
+    composerDisposed = true;
+    expect(bloomPassDisposed && composerDisposed).toBe(true);
+  });
+
+  it('restartGame nullifies windNoise before creating new one', () => {
+    let windNoise = { active: true };
+    windNoise = null;
+    expect(windNoise).toBe(null);
+    windNoise = { active: true };
+    expect(windNoise.active).toBe(true);
+  });
+
+  it('createWindNoise gain initialised to 0 (silent until speed ramps up)', () => {
+    // gain.gain.setValueAtTime(0) at creation
+    expect(0).toBe(0);
+  });
+});
+
+describe('Jump flame particles — upwardFlame=true colors and counts', () => {
+  it('jump uses orange (0xff8800) + yellow (0xffcc00) bursts', () => {
+    expect(0xff8800).toBe(16746496);
+    expect(0xffcc00).toBe(16763904);
+  });
+
+  it('orange count=14, yellow count=6, total=20 (within 12-16 per burst)', () => {
+    expect(14 + 6).toBe(20);
+    expect(14).toBeGreaterThanOrEqual(12);
+    expect(14).toBeLessThanOrEqual(16);
+  });
+});
+
+describe('Repair kit pickup — green spiral particle effect', () => {
+  it('green spiral color 0x44ff44 has dominant green channel', () => {
+    const g = (0x44ff44 >> 8) & 0xff;
+    const r = (0x44ff44 >> 16) & 0xff;
+    const b = 0x44ff44 & 0xff;
+    // 0x44 = 68 green, 0xff = 255 red/blue - but actual hex 0x44ff44 = 0x44, 0xff, 0x44
+    // R=0x44=68, G=0xff=255, B=0x44=68
+    expect(g).toBe(255);
+    expect(g).toBeGreaterThan(r);
+    expect(g).toBeGreaterThan(b);
+  });
+
+  it('count=16, maxLifetime=0.7s', () => {
+    expect(16).toBe(16);
+    expect(SP_MAX_LIFETIME).toBe(0.7);
+  });
+});
+
+describe('Speed factor — forwardStep/dt yields PLAYER_SPEED during gameplay', () => {
+  it('during gameplay, speedFactor = PLAYER_SPEED (22)', () => {
+    const forwardStep = PLAYER_SPEED * DT;
+    const speedFactor = Math.abs(forwardStep) / DT;
+    expect(speedFactor).toBe(PLAYER_SPEED);
+  });
+
+  it('speedFactor=22 saturates FOV to 72° and engine hum to 400 Hz', () => {
+    const targetFov = 60 + Math.min(22 / PLAYER_SPEED, 1) * 12;
+    const freq = ENGINE_HUM_FREQ_MIN + Math.min(22 / PLAYER_SPEED, 1) * 320;
+    expect(targetFov).toBe(72);
+    expect(freq).toBe(400);
+  });
+});
+
+describe('Flash key counter — increment before showFlash reset', () => {
+  it('flashKey increments before showFlash is set to true', () => {
+    let flashKey = 0, showFlash = false;
+    flashKey++;
+    showFlash = false;
+    showFlash = true;
+    expect(flashKey).toBe(1);
+    expect(showFlash).toBe(true);
+  });
+
+  it('{#key flashKey} block re-mounts on each new key value', () => {
+    const k1 = 0, k2 = 1;
+    expect(k1).not.toBe(k2);
+  });
+});

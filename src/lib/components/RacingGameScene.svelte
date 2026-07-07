@@ -138,6 +138,8 @@
   let displayHealth = MAX_HEALTH;
   let displayDistance = 0;
   let displayScore = 0;
+  let displaySpeed = 0; // km/h, updated each frame
+  let showOncomingWarning = false;
 
   /* ===================================================================
      Player state
@@ -1995,6 +1997,17 @@
     displayHealth = health;
     displayScore = calculateScore(distance, 1);
 
+    // -- Speed --
+    const speedMps = forwardStep / Math.max(dt, 0.001);
+    displaySpeed = Math.round(Math.min(speedMps * 3.6, 180));
+
+    // -- Oncoming warning --
+    showOncomingWarning = objectDescriptors.some((obj) => {
+      if (!obj || obj.type !== OBJECT_TYPES.ONCOMING_VEHICLE) return false;
+      const worldZ = obj.z + scrollOffset;
+      return worldZ >= -60 && worldZ <= 0;
+    });
+
     // -- Dynamic difficulty --
     // Recompute the per-frame difficulty snapshot from the freshly-
     // updated distance + running time so every downstream consumer
@@ -2118,6 +2131,8 @@
     displayHealth = MAX_HEALTH;
     displayDistance = 0;
     displayScore = 0;
+    displaySpeed = 0;
+    showOncomingWarning = false;
     gameState = 'playing';
     gameOverHandled = false;
     scrollOffset = 0;
@@ -3125,6 +3140,13 @@
       <span class="hud-item">❤️ {displayHealth}/{MAX_HEALTH}</span>
       <span class="hud-item">📏 {displayDistance}m</span>
       <span class="hud-item">⭐ {displayScore}</span>
+      <span class="hud-speed">
+        <span class="speed-gauge">
+          <span class="speed-needle" style="transform: rotate({Math.max(-135, Math.min(135, (displaySpeed / 120) * 270 - 135))}deg)"></span>
+        </span>
+        <span class="speed-value">{displaySpeed} km/h</span>
+      </span>
+      <span class="oncoming-warning" class:active={showOncomingWarning}>⚠ 前方来车</span>
       <span class="hud-controls">A/D 切换车道 · 空格跳跃</span>
     </div>
     {#key flashKey}
@@ -3182,6 +3204,56 @@
 
   .hud-item {
     white-space: nowrap;
+  }
+
+  .hud-speed {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .speed-gauge {
+    position: relative;
+    width: 28px;
+    height: 16px;
+    border-radius: 0 0 14px 14px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+
+  .speed-needle {
+    display: block;
+    width: 2px;
+    height: 13px;
+    background: linear-gradient(to top, #ff4444, #ffaa00);
+    transform-origin: bottom center;
+    border-radius: 1px;
+    transition: transform 0.15s ease-out;
+  }
+
+  .speed-value {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.3px;
+  }
+
+  .oncoming-warning {
+    font-size: 12px;
+    color: rgba(255, 200, 60, 0.5);
+    transition: color 0.2s ease;
+  }
+
+  .oncoming-warning.active {
+    color: #ffcc3c;
+    animation: blink 0.5s ease-in-out infinite alternate;
+  }
+
+  @keyframes blink {
+    from { opacity: 0.6; }
+    to { opacity: 1; }
   }
 
   .hud-controls {

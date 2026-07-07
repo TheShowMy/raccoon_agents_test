@@ -2065,7 +2065,7 @@
     updateVehicleTransform(dt);
 
     // -- Update camera --
-    updateCamera();
+    updateCamera(forwardStep, dt);
 
     // -- Update particles --
     updateParticles(dt);
@@ -2521,7 +2521,7 @@
   /* ===================================================================
      Camera
      =================================================================== */
-  function updateCamera() {
+  function updateCamera(forwardStep, dt) {
     if (!camera) return;
 
     // Look-ahead point: about 15 world units ahead on the road

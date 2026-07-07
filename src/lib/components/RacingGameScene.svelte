@@ -2062,7 +2062,7 @@
     }
 
     // -- Update vehicle --
-    updateVehicleTransform();
+    updateVehicleTransform(dt);
 
     // -- Update camera --
     updateCamera();
@@ -2439,7 +2439,7 @@
   /* ===================================================================
      Vehicle Visual Transform
      =================================================================== */
-  function updateVehicleTransform() {
+  function updateVehicleTransform(dt) {
     if (!vehicle) return;
 
     // Road offset at the player's road-space Z position.

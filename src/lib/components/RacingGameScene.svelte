@@ -22,12 +22,17 @@
     ENEMY_VEHICLE_MODEL_MAP, getEnemyModelById,
     ROAD_Y, JUMP_IMMUNITY_HEIGHT, checkCollision, applyCollision,
     calculateScore,
-    startEngineHum, stopEngineHum,
-    playLaneSwitchSound, playJumpSound, playCollisionSound,
-    playPickupSound, playGameOverSound,
     computeDifficulty,
-    createWindNoise, stopWindNoise, updateWindNoiseFilter, updateWindNoiseGain,
   } from '../utils/racingGame.js';
+  import {
+    createAudioController,
+    updateAudioSpeed,
+    stopEngineHumAudio,
+    stopWindNoiseAudio,
+    closeAudioContext,
+    playSoundEffect,
+  } from './racingGame/audio.js';
+  import { createEffects, SHAKE_DURATION_COLLISION, SHAKE_INTENSITY_COLLISION } from './racingGame/effects.js';
 
   /* ===================================================================
      Container ref
@@ -158,14 +163,13 @@
   let objectMeshMap = new Map();
 
   /* ===================================================================
-     Input
+     Audio (delegated to audio.js module)
      =================================================================== */
-
-  /* ===================================================================
-     Audio
-     =================================================================== */
+  /** @type {AudioContext|null} */
   let audioCtx = null;
+  /** @type {{ oscillator: OscillatorNode, gain: GainNode }|null} */
   let engineHum = null;
+  /** @type {{ source: AudioBufferSourceNode, gain: GainNode, filter: BiquadFilterNode }|null} */
   let windNoise = null;
 
   /* ===================================================================
@@ -175,14 +179,14 @@
   let runningTime = 0;
 
   /* ===================================================================
-     Particle effects system
+     Camera shake state
      =================================================================== */
-  const PARTICLE_COUNT_PER_BURST = 16;
-  const PARTICLE_LIFETIME = 0.7;
-  const PARTICLE_SPEED = 3.5;
-  let particleBursts = [];
-  let shockwaves = [];
-  let spiralParticles = [];
+  let cameraShake = { duration: 0, intensity: 0 };
+
+  /* ===================================================================
+     Effects system (delegated to effects.js module)
+     =================================================================== */
+  let effectsAPI = null;
 
   /* ===================================================================
      Constants (vehicle constants imported from playerVehicle module)
@@ -208,14 +212,20 @@
   // Shadow update interval (every N frames)
   const SHADOW_UPDATE_INTERVAL = 3;
 
-  /** Camera shake state */
-  let cameraShake = { duration: 0, intensity: 0 };
+  /** Frame counter for shadow map updates */
+  let frameCount = 0;
 
   /* ===================================================================
      Module APIs
      =================================================================== */
   let vehicleAPI = null;
   let worldObjectsAPI = null;
+
+  /* ===================================================================
+     Lane visual X (vehicle lateral offset for camera)
+     =================================================================== */
+  let laneVisualX = 0;
+
   /* ===================================================================
      Three.js — Scene Setup (delegated to environment.js)
      =================================================================== */
@@ -239,13 +249,16 @@
         grassGroup = env.grassGroup;
         disposeEnvironment = env.dispose;
 
+        // Initialize effects module (needs scene)
+        effectsAPI = createEffects({ scene });
+
         initRoadSystem();
 
-        // Initialize player vehicle module
+        // Initialize player vehicle module (needs scene + effects callbacks)
         vehicleAPI = createPlayerVehicle({
           scene,
-          createParticleBurst,
-          createShockwaveRing,
+          createParticleBurst: effectsAPI.createParticleBurst,
+          createShockwaveRing: effectsAPI.createShockwave,
           triggerShake,
           onCollisionEffect: triggerCollisionEffect,
           onPickupEffect: triggerPickupEffect,
@@ -338,6 +351,7 @@
 
     // -- Get current state from modules --
     const vehicleState = vehicleAPI ? vehicleAPI.getState() : {};
+    laneVisualX = vehicleState.laneVisualX ?? 0;
     const objectDescriptors = worldObjectsAPI ? worldObjectsAPI.getObjectDescriptors() : [];
     const objectMeshMap = worldObjectsAPI ? worldObjectsAPI.getObjectMeshMap() : new Map();
 
@@ -389,13 +403,11 @@
       setDecoData,
     });
 
-
-
     // -- Update camera --
     updateCamera(forwardStep, dt);
 
-    // -- Update particles --
-    updateParticles(dt);
+    // -- Update effects --
+    if (effectsAPI) effectsAPI.update(dt);
 
     // -- Update scenery parallax --
     if (sceneryGroup) {
@@ -406,45 +418,15 @@
       staticGroup.position.z = scrollOffset * 0.15;
     }
 
-    // -- Engine hum pitch modulation --
-    if (engineHum && audioCtx) {
-      try {
-        // Map PLAYER_SPEED (22) to frequency range 80-400Hz using speedFactor
-        const speedFactor = Math.abs(forwardStep) / Math.max(dt, 0.001);
-        const freq = 80 + Math.min(speedFactor / PLAYER_SPEED, 1) * 320;
-        engineHum.oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime);
-      } catch (e) {
-        console.warn('[RacingGame] engine hum modulation error:', e);
-      }
-    }
-
-    // -- Wind noise filter modulation --
-    if (windNoise && audioCtx) {
-      try {
-        updateWindNoiseFilter(windNoise, Math.abs(forwardStep) / Math.max(dt, 0.001));
-        updateWindNoiseGain(windNoise, Math.abs(forwardStep) / Math.max(dt, 0.001));
-      } catch (e) {
-        console.warn('[RacingGame] wind noise modulation error:', e);
-      }
-    }
+    // -- Update audio (engine pitch + wind noise) --
+    updateAudioSpeed(Math.abs(speedMps));
 
     // -- Game over check --
     if (health <= 0 && !gameOverHandled) {
       gameState = 'gameover';
       gameOverHandled = true;
-      if (engineHum && audioCtx) {
-        try {
-          stopEngineHum(engineHum, 0.5);
-        } catch (e) {
-          console.warn('[RacingGame] stop engine hum error:', e);
-        }
-        engineHum = null;
-      }
-      if (audioCtx) {
-        try { playGameOverSound(audioCtx); } catch (e) {
-          console.warn('[RacingGame] play game over sound error:', e);
-        }
-      }
+      stopEngineHumAudio(0.5);
+      playSoundEffect('gameOver');
     }
   }
 
@@ -480,8 +462,8 @@
       setRoadTileData: (d) => { roadTileData = d; },
     });
 
-    // Clean up particles
-    cleanupParticles();
+    // Clean up effects
+    if (effectsAPI) effectsAPI.cleanup();
 
     // Clean up decorations using module
     cleanupDecorationsForRestart({
@@ -506,39 +488,25 @@
     // Recreate vehicle
     if (vehicleAPI) vehicleAPI.createVehicle();
 
-    // Stop and restart wind noise
-    if (windNoise) {
-      try { stopWindNoise(windNoise, 0.1); } catch {}
-      windNoise = null;
-    }
-    if (audioCtx) {
-      try {
-        windNoise = createWindNoise(audioCtx);
-      } catch {}
-    }
-
-    // Restart engine hum
-    if (engineHum && audioCtx) {
-      try { stopEngineHum(engineHum, 0.1); } catch {}
-      engineHum = null;
-    }
-    if (audioCtx) {
-      try {
-        engineHum = startEngineHum(audioCtx);
-      } catch {}
-    }
+    // Stop and restart audio
+    stopWindNoiseAudio(0.1);
+    stopEngineHumAudio(0.1);
+    const handles = createAudioController();
+    audioCtx  = handles.audioCtx;
+    engineHum = handles.engineHum;
+    windNoise = handles.windNoise;
   }
 
   /* ===================================================================
      Start / Menu
      =================================================================== */
   function startGame() {
-    initAudio();
+    const handles = createAudioController();
+    audioCtx  = handles.audioCtx;
+    engineHum = handles.engineHum;
+    windNoise = handles.windNoise;
     if (audioCtx && audioCtx.state === 'suspended') {
       audioCtx.resume();
-    }
-    if (audioCtx && !windNoise) {
-      windNoise = createWindNoise(audioCtx);
     }
     gameState = 'playing';
   }
@@ -546,22 +514,28 @@
   function triggerCollisionEffect(position, desc) {
     if (desc && desc.type === OBJECT_TYPES.ONCOMING_VEHICLE) {
       // Oncoming vehicle: metal sparks + orange/yellow fire particles
-      createParticleBurst(position, 0xcccccc, 10); // metallic grey debris
-      createParticleBurst(position, 0xffaa22, 8);  // orange/yellow fire sparks
+      if (effectsAPI) {
+        effectsAPI.createParticleBurst(position, 0xcccccc, 10); // metallic grey debris
+        effectsAPI.createParticleBurst(position, 0xffaa22, 8);  // orange/yellow fire sparks
+      }
     } else {
       // Normal obstacle: red particles
-      createParticleBurst(position, 0xff5533, PARTICLE_COUNT_PER_BURST);
+      if (effectsAPI) {
+        effectsAPI.createParticleBurst(position, 0xff5533, 16);
+      }
     }
     showFlash = false;
     flashColor = 'rgba(255, 60, 40, 0.35)';
     flashKey++;
     showFlash = true;
-    triggerShake(0.3, 0.15);
+    triggerShake(SHAKE_DURATION_COLLISION, SHAKE_INTENSITY_COLLISION);
   }
 
   function triggerPickupEffect(position) {
-    createParticleBurst(position, 0x44ff44, PARTICLE_COUNT_PER_BURST);
-    createGreenSpiralParticles(position);
+    if (effectsAPI) {
+      effectsAPI.createParticleBurst(position, 0x44ff44, 16);
+      effectsAPI.createSpiralParticles(position);
+    }
     showFlash = false;
     flashColor = 'rgba(50, 255, 70, 0.25)';
     flashKey++;
@@ -644,270 +618,6 @@
   }
 
   /* ===================================================================
-     Particles — Burst Effects
-     =================================================================== */
-  function createParticleBurst(position, colorHex, count = PARTICLE_COUNT_PER_BURST, upwardFlame = false) {
-    const positions = new Float32Array(count * 3);
-    const velocities = [];
-
-    for (let i = 0; i < count; i++) {
-      positions[i * 3] = position.x + (Math.random() - 0.5) * 0.3;
-      positions[i * 3 + 1] = position.y + (Math.random() - 0.5) * 0.3;
-      positions[i * 3 + 2] = position.z + (Math.random() - 0.5) * 0.3;
-      if (upwardFlame) {
-        // Upward burst with random horizontal spread for flame effect
-        const angle = Math.random() * Math.PI * 2;
-        const spread = 0.5 + Math.random() * 1.5;
-        velocities.push({
-          x: Math.cos(angle) * spread,
-          y: 2 + Math.random() * 2.5,
-          z: Math.sin(angle) * spread,
-        });
-      } else {
-        velocities.push({
-          x: (Math.random() - 0.5) * PARTICLE_SPEED,
-          y: Math.random() * PARTICLE_SPEED * 0.6 + 0.3,
-          z: (Math.random() - 0.5) * PARTICLE_SPEED,
-        });
-      }
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-    const material = new THREE.PointsMaterial({
-      color: colorHex,
-      size: 0.25,
-      transparent: true,
-      opacity: 1.0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      sizeAttenuation: true,
-    });
-
-    const points = new THREE.Points(geometry, material);
-    if (scene) scene.add(points);
-
-    particleBursts.push({
-      velocities,
-      geometry,
-      material,
-      points,
-      count,
-      lifetime: 0,
-      maxLifetime: PARTICLE_LIFETIME,
-      upwardFlame,
-    });
-
-    return points;
-  }
-
-  function updateParticles(dt) {
-    for (let i = particleBursts.length - 1; i >= 0; i--) {
-      const burst = particleBursts[i];
-      burst.lifetime += dt;
-      const progress = burst.lifetime / burst.maxLifetime;
-
-      if (progress >= 1) {
-        if (scene) scene.remove(burst.points);
-        burst.geometry.dispose();
-        burst.material.dispose();
-        particleBursts.splice(i, 1);
-        continue;
-      }
-
-      const pos = burst.geometry.attributes.position.array;
-      for (let j = 0; j < burst.count; j++) {
-        pos[j * 3] += burst.velocities[j].x * dt;
-        pos[j * 3 + 1] += burst.velocities[j].y * dt;
-        pos[j * 3 + 2] += burst.velocities[j].z * dt;
-        // Flame particles: decelerate upward velocity gently
-        // Regular particles: apply gravity
-        if (burst.upwardFlame) {
-          burst.velocities[j].y -= 2 * dt;
-        } else {
-          burst.velocities[j].y += -8 * dt;
-        }
-      }
-      burst.geometry.attributes.position.needsUpdate = true;
-
-      burst.material.opacity = Math.max(0, 1 - progress);
-      const scale = 1 + progress * 0.5;
-      burst.points.scale.set(scale, scale, scale);
-    }
-
-    // Update shockwave rings
-    for (let i = shockwaves.length - 1; i >= 0; i--) {
-      const sw = shockwaves[i];
-      sw.lifetime += dt;
-      const progress = sw.lifetime / sw.maxLifetime;
-
-      if (progress >= 1) {
-        if (scene) scene.remove(sw.points);
-        sw.geometry.dispose();
-        sw.material.dispose();
-        shockwaves.splice(i, 1);
-        continue;
-      }
-
-      const pos = sw.geometry.attributes.position.array;
-      for (let j = 0; j < sw.count; j++) {
-        pos[j * 3] += sw.velocities[j].x * dt;
-        pos[j * 3 + 1] += sw.velocities[j].y * dt;
-        pos[j * 3 + 2] += sw.velocities[j].z * dt;
-      }
-      sw.geometry.attributes.position.needsUpdate = true;
-
-      sw.material.opacity = Math.max(0, 1 - progress);
-      const scale = 1 + progress * 3;
-      sw.points.scale.set(scale, 1, scale);
-    }
-
-    // Update spiral particles (repair kit pickup)
-    for (let i = spiralParticles.length - 1; i >= 0; i--) {
-      const sp = spiralParticles[i];
-      sp.lifetime += dt;
-      const progress = sp.lifetime / sp.maxLifetime;
-
-      if (progress >= 1) {
-        if (scene) scene.remove(sp.points);
-        sp.geometry.dispose();
-        sp.material.dispose();
-        spiralParticles.splice(i, 1);
-        continue;
-      }
-
-      const pos = sp.geometry.attributes.position.array;
-      for (let j = 0; j < sp.count; j++) {
-        const v = sp.velocities[j];
-        v.angle += v.angularSpeed * dt;
-        pos[j * 3] += Math.cos(v.angle) * v.radius * dt * 0.5;
-        pos[j * 3 + 1] += v.riseSpeed * dt;
-        pos[j * 3 + 2] += Math.sin(v.angle) * v.radius * dt * 0.5;
-      }
-      sp.geometry.attributes.position.needsUpdate = true;
-
-      sp.material.opacity = Math.max(0, 1 - progress);
-    }
-  }
-
-  function cleanupParticles() {
-    for (const burst of particleBursts) {
-      if (scene) scene.remove(burst.points);
-      burst.geometry.dispose();
-      burst.material.dispose();
-    }
-    particleBursts = [];
-    for (const sw of shockwaves) {
-      if (scene) scene.remove(sw.points);
-      sw.geometry.dispose();
-      sw.material.dispose();
-    }
-    shockwaves = [];
-    for (const sp of spiralParticles) {
-      if (scene) scene.remove(sp.points);
-      sp.geometry.dispose();
-      sp.material.dispose();
-    }
-    spiralParticles = [];
-  }
-
-  /**
-   * Shockwave ring: particles arranged in a circle, expanding outward and fading.
-   */
-  function createShockwaveRing(position) {
-    const count = 24;
-    const positions = new Float32Array(count * 3);
-    const velocities = [];
-    const initialRadius = 0.15;
-
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2;
-      positions[i * 3] = position.x + Math.cos(angle) * initialRadius;
-      positions[i * 3 + 1] = position.y + 0.05;
-      positions[i * 3 + 2] = position.z + Math.sin(angle) * initialRadius;
-      const expandSpeed = 2.5;
-      velocities.push({
-        x: Math.cos(angle) * expandSpeed,
-        y: 0.1,
-        z: Math.sin(angle) * expandSpeed,
-      });
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.PointsMaterial({
-      color: 0xffcc88,
-      size: 0.18,
-      transparent: true,
-      opacity: 1.0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      sizeAttenuation: true,
-    });
-    const points = new THREE.Points(geometry, material);
-    if (scene) scene.add(points);
-
-    shockwaves.push({ velocities, geometry, material, points, count, lifetime: 0, maxLifetime: 0.6 });
-    return points;
-  }
-
-  /**
-   * Green spiral particles for repair kit pickup: particles rotating upward around Y axis.
-   */
-  function createGreenSpiralParticles(position) {
-    const count = 16;
-    const positions = new Float32Array(count * 3);
-    const velocities = [];
-
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2;
-      const radius = 0.2 + Math.random() * 0.1;
-      positions[i * 3] = position.x + Math.cos(angle) * radius;
-      positions[i * 3 + 1] = position.y + 0.3;
-      positions[i * 3 + 2] = position.z + Math.sin(angle) * radius;
-      // Spiral upward with angular velocity
-      velocities.push({
-        angle,
-        radius,
-        angularSpeed: 4 + Math.random() * 2,
-        riseSpeed: 1.5 + Math.random() * 1.0,
-      });
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.PointsMaterial({
-      color: 0x44ff44,
-      size: 0.2,
-      transparent: true,
-      opacity: 1.0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      sizeAttenuation: true,
-    });
-    const points = new THREE.Points(geometry, material);
-    if (scene) scene.add(points);
-
-    spiralParticles.push({ velocities, geometry, material, points, count, lifetime: 0, maxLifetime: 0.7 });
-    return points;
-  }
-
-  /* ===================================================================
-     Audio Init
-     =================================================================== */
-  function initAudio() {
-    if (audioCtx) return;
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      engineHum = startEngineHum(audioCtx);
-      windNoise = createWindNoise(audioCtx);
-    } catch (e) {
-      console.warn('[RacingGame] audio init error:', e);
-    }
-  }
-
-  /* ===================================================================
      Input
      =================================================================== */
   function onKeyDown(e) {
@@ -929,7 +639,12 @@
     }
 
     // Init audio on first interaction
-    initAudio();
+    if (!audioCtx) {
+      const handles = createAudioController();
+      audioCtx  = handles.audioCtx;
+      engineHum = handles.engineHum;
+      windNoise = handles.windNoise;
+    }
 
     // Get vehicle state
     const vehicleState = vehicleAPI ? vehicleAPI.getState() : {};
@@ -987,6 +702,7 @@
 
     const deltaTime = (time - prevTime) / 1000;
     prevTime = time;
+    frameCount++;
 
     if (gameState === 'playing') {
       updateGame(deltaTime);
@@ -1039,27 +755,10 @@
       resizeObserver = null;
     }
 
-    // Stop engine hum
-    if (engineHum && audioCtx) {
-      try { stopEngineHum(engineHum, 0.2); } catch (e) {
-        console.warn('[RacingGame] stop engine hum on destroy error:', e);
-      }
-      engineHum = null;
-    }
-    if (windNoise) {
-      try { stopWindNoise(windNoise, 0.2); } catch (e) {
-        console.warn('[RacingGame] stop wind noise on destroy error:', e);
-      }
-      windNoise = null;
-    }
-
-    // Close audio context
-    if (audioCtx) {
-      try { audioCtx.close(); } catch (e) {
-        console.warn('[RacingGame] close audio context error:', e);
-      }
-      audioCtx = null;
-    }
+    // Stop audio
+    stopEngineHumAudio(0.2);
+    stopWindNoiseAudio(0.2);
+    closeAudioContext();
 
     // Dispose environment resources (sky sphere, grass plane, shared textures)
     // This is called first so environment-owned resources are released
@@ -1124,8 +823,8 @@
       }
     }
 
-    // Clean up particles
-    cleanupParticles();
+    // Clean up effects
+    if (effectsAPI) effectsAPI.cleanup();
 
     // Null out refs
     scene = null;

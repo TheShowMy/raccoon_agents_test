@@ -7,6 +7,8 @@
  * and DOM observers are released here to prevent memory leaks.
  */
 
+import { stopEngineHumAudio, stopWindNoiseAudio, closeAudioContext } from './audio.js';
+
 /* ===================================================================
    Public API factory
    =================================================================== */
@@ -171,7 +173,7 @@ export function createDisposal({ cancelAnimation, removeKeyListeners, disconnect
 }
 
 /* ===================================================================
-   Re-export audio stop functions used by disposal
+   Re-export audio stop functions for external consumers
    =================================================================== */
 
 export {

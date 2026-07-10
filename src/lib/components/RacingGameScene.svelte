@@ -5,24 +5,32 @@
   import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
   import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
   import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+  import { createEnvironment, createAsphaltTextures } from './racingGame/environment.js';
+  import { createRoadSystem, updateRoad, cleanupRoadForRestart, disposeRoadMaterials } from './racingGame/road.js';
   import {
-    LANE_COUNT, LANE_WIDTH, getLaneX, clampLane,
-    MAX_HEALTH, OBSTACLE_DAMAGE, VEHICLE_DAMAGE, REPAIR_HEAL,
-    SEGMENT_LENGTH,
-    MAX_HEIGHT_DELTA,
-    generateSegment, generateSegments, getRoadOffsetAt,
+    createDecorations,
+    updateDecorations,
+    cleanupDecorationsForRestart,
+    disposeDecorations,
+  } from './racingGame/decorations.js';
+  import { createPlayerVehicle, PLAYER_SPEED } from './racingGame/playerVehicle.js';
+  import { createWorldObjects } from './racingGame/worldObjects.js';
+  import {
+    MAX_HEALTH,
     OBJECT_TYPES,
-    generateObjectsForSegment,
-    ONCOMING_VEHICLE_SPEED,
-    ENEMY_VEHICLE_MODEL_MAP, getEnemyModelById,
-    ROAD_Y, JUMP_IMMUNITY_HEIGHT, checkCollision, applyCollision,
-    calculateScore,
-    startEngineHum, stopEngineHum,
-    playLaneSwitchSound, playJumpSound, playCollisionSound,
-    playPickupSound, playGameOverSound,
-    computeDifficulty,
-    createWindNoise, stopWindNoise, updateWindNoiseFilter, updateWindNoiseGain,
   } from '../utils/racingGame.js';
+  import {
+    createAudioController,
+    updateAudioSpeed,
+    stopEngineHumAudio,
+    stopWindNoiseAudio,
+    closeAudioContext,
+    playSoundEffect,
+  } from './racingGame/audio.js';
+  import { createEffects, SHAKE_DURATION_COLLISION, SHAKE_INTENSITY_COLLISION } from './racingGame/effects.js';
+  import { createInputController } from './racingGame/input.js';
+  import { createHud } from './racingGame/hud.js';
+  import { createGameLoop } from './racingGame/gameLoop.js';
 
   /* ===================================================================
      Container ref
@@ -35,94 +43,36 @@
      =================================================================== */
   /** @type {THREE.Scene|null} */
   let scene = null;
-
   /** @type {THREE.PerspectiveCamera|null} */
   let camera = null;
-
   /** @type {THREE.WebGLRenderer|null} */
   let renderer = null;
-
+  /** @type {THREE.Group|null} */
+  let staticGroup = null;
+  /** @type {THREE.Group|null} */
+  let grassGroup = null;
+  /** @type {THREE.Group|null} */
+  let roadGroup = null;
+  /** @type {THREE.Group|null} */
+  let objectsGroup = null;
+  /** @type {EffectComposer|null} */
+  let composer = null;
+  /** @type {UnrealBloomPass|null} */
+  let bloomPass = null;
   /** @type {number|null} */
   let animationId = null;
 
-  /** @type {THREE.Group|null} */
-  let roadGroup = null;
-
-  /** @type {THREE.Group|null} */
-  let objectsGroup = null;
-
-  /** @type {THREE.Group|null} */
-  let vehicle = null;
-
-  /** @type {THREE.Group|null} */
-  let sceneryGroup = null;
-
-  /** @type {THREE.Group|null} */
-  let grassGroup = null;
-
-  /** @type {THREE.Group|null} */
-  let staticGroup = null;
-
-  /** @type {THREE.BufferGeometry|null} */
-  let grassGeometry = null;
-
-  /** @type {THREE.Material|null} */
-  let grassMaterial = null;
-
-  /**
-   * Shared road-shoulder material. All shoulder meshes (left and
-   * right side, across every road segment) reference this single
-   * instance so they pick up identical lighting and fog response.
-   * Keeping it at module scope also lets `onDestroy` release the GPU
-   * resource exactly once, even though the material is referenced
-   * by many meshes.
-   *
-   * @type {THREE.Material|null} */
-  let shoulderMaterial = null;
-
-  /**
-   * Shared road-surface material. All surface meshes across every
-   * road segment reference this single instance so they respond to
-   * fog identically and eliminate colour-band artefacts at segment
-   * boundaries. Released exactly once in `onDestroy`.
-   *
-   * @type {THREE.Material|null} */
-  let surfaceMaterial = null;
-
-  /** Unified disposables list for performance optimization */
+  /** Unified disposables list */
   const disposables = { geometries: [], materials: [], textures: [] };
 
-  /**
-   * Shared asphalt textures - created once in createRoadSystem() and reused
-   * across all road segments and restarts. Lifecycle: createRoadSystem ->
-   * createAsphaltTextures (once) -> surfaceMaterial.map/normalMap/roughnessMap.
-   * Disposed once in onDestroy. NOT recreated in restart to avoid texture leaks.
-   */
+  /** Shared asphalt textures — created once, reused across all restarts */
   let asphaltTextures = null;
-
-  /** Tree InstancedMesh references and per-instance data for recycling */
-  let trunkMesh = null;
-  let foliageMesh = null;
-  let treesData = []; // { roadZ, x, trunkH, foliageH, foliageR, foliageCount, side, distFromCenter, foliageBaseIdx }
-
-  /** Decoration InstancedMesh references and per-instance data */
-  let decoPoleMesh = null;
-  let decoHeadMesh = null;
-  let decoUtilityPoleMesh = null;
-  let decoFencePostMesh = null;
-  let decoFenceBarMesh = null;
-  let decoData = []; // { roadZ, x, type, side, distFromCenter, lampIdx, poleIdx, fencePostBaseIdx, fenceBarIdx }
 
   /** @type {ResizeObserver|null} */
   let resizeObserver = null;
 
-  /** Post-processing composer for bloom/glow effects */
-  let composer = null;
-  /** Bloom pass reference for proper disposal */
-  let bloomPass = null;
-
   /* ===================================================================
-     Game state
+     Game state reactive variables (written by gameLoop via callbacks)
      =================================================================== */
   let health = MAX_HEALTH;
   let distance = 0;
@@ -134,2835 +84,237 @@
   let loading = true;
   let webglError = false;
 
-  // Reactive display values (updated each frame)
+  // Reactive display values (updated each frame by hud module)
   let displayHealth = MAX_HEALTH;
   let displayDistance = 0;
   let displayScore = 0;
-  let displaySpeed = 0; // km/h, updated each frame
+  let displaySpeed = 0; // km/h
   let showOncomingWarning = false;
 
-  /* ===================================================================
-     Player state
-     =================================================================== */
-  let currentLane = 0;
-  let targetLane = 0;
-  // Visual lane X position (smoothed during switch)
-  let laneVisualX = 0;
-  let laneSwitchProgress = 1; // 1 = done
+  // Road/decorations data arrays (kept in sync by gameLoop callbacks)
+  let roadSegments = [];
+  let roadTileData = [];
+  let treesData = [];
+  let decoData = [];
 
-  // Vehicle Z-axis tilt is the sum of two independently tracked
-  // components. Tracking them separately (rather than accumulating
-  // into `vehicle.rotation.z`) is required because each component
-  // has a different lifecycle:
-  //   * lane-switch tilt: snaps to the animation curve value while
-  //     a lane switch is in progress, then exponentially decays to
-  //     0 once the switch completes.
-  //   * curve-bank tilt: lerps toward the curve direction so the
-  //     vehicle leans into the road in a curve and eases back to
-  //     flat on a straight.
-  // Composing them each frame (instead of adding on top of last
-  // frame's rotation.z) prevents either component from
-  // accumulating across frames and producing a runaway tilt.
-  let currentLaneSwitchTilt = 0;
-  let currentCurveBank = 0;
-
-  /** Wheel mesh references for dynamic rotation */
-  let wheels = [];
-
-  let playerY = 0; // jump height above road surface
-  let isJumping = false;
-  let jumpVelocity = 0;
-
-  // Cumulative forward scroll. As player moves forward, scrollOffset increases.
-  // Road tiles at roadZ have world Z = roadZ + scrollOffset.
-  // Camera and player stay at world Z ≈ 0.
-  let scrollOffset = 0;
-
-  /* ===================================================================
-     Road state
-     =================================================================== */
-  const SEGMENTS_AHEAD = 40;
-  let roadSegments = []; // sorted: [0] = closest, [last] = farthest ahead
-
-  // Track meshes created for road tiles so we can reposition them
-  let roadTileData = []; // { segment, surface, lines[], shoulders[] }
-
-  /* ===================================================================
-     Game objects
-     =================================================================== */
-  let objectDescriptors = [];
-  let objectMeshMap = new Map();
-
-  /* ===================================================================
-     Input
-     =================================================================== */
-
-  /* ===================================================================
-     Audio
-     =================================================================== */
-  let audioCtx = null;
-  let engineHum = null;
-  let windNoise = null;
-
-  /* ===================================================================
-     Timing
-     =================================================================== */
-  let prevTime = 0;
-  let runningTime = 0;
-
-  /* ===================================================================
-     Particle effects system
-     =================================================================== */
-  const PARTICLE_COUNT_PER_BURST = 16;
-  const PARTICLE_LIFETIME = 0.7;
-  const PARTICLE_SPEED = 3.5;
-  let particleBursts = [];
-  let shockwaves = [];
-  let spiralParticles = [];
-
-  /* ===================================================================
-     Constants
-     =================================================================== */
-  const PLAYER_SPEED = 22;
-  const LANE_SWITCH_DURATION = 0.18;
-  const JUMP_FORCE = 7.5;
-  const GRAVITY = -22;
-  // ROAD_Y imported from racingGame.js
-
-  const ROAD_VISUAL_WIDTH = LANE_COUNT * LANE_WIDTH * 1.6;
-  const ROAD_TILE_HEIGHT = 0.2;
-  /** Subdivisions per road segment for continuous noise-sampled geometry. */
-  const ROAD_SUBDIVISIONS = 6;
-  const ROAD_COLOR = 0x8a9a8a;
-  const ROAD_SHOULDER_COLOR = 0x6a7a6a;
-  const LANE_LINE_COLOR = 0xd8e8d8;
-
-  // Texture repeat factors for seamless road tiling
-  const ROAD_TEXTURE_REPEAT_X = 4;
-  const ROAD_TEXTURE_REPEAT_Z = 2;
-
-  // Grass / ground plane that covers the area below and around the road,
-  // giving roadside trees a visible surface to stand on instead of floating
-  // at road-surface height. The road surface itself can dip by up to
-  // MAX_HEIGHT_DELTA below ROAD_Y, so GRASS_Y is anchored to
-  // ROAD_Y - MAX_HEIGHT_DELTA - 0.2 to guarantee the grass plane stays
-  // strictly below the deepest possible road surface — preventing the
-  // grass from clipping through the road in dips. The small 0.2 unit
-  // buffer keeps the surfaces visually distinct while trees stay
-  // anchored to a stable, non-jittery ground plane.
-  const GRASS_Y = ROAD_Y - MAX_HEIGHT_DELTA - 0.2;
-  const GRASS_COLOR = 0x4a7a3a;
-  // Grass plane width must comfortably exceed the camera's horizontal
-  // field of view at the fog far plane, otherwise the plane's edge
-  // is visible as a hard colour boundary inside the fog band. With
-  // the camera at z=12 and the fog far plane at z≈-238 (250 units
-  // away in the -Z direction), the visible horizontal half-width at
-  // the far plane is ≈ 250·tan(45.5°) ≈ 255 units (assuming a 16:9
-  // aspect and ~91° horizontal FOV). GRASS_WIDTH=600 (±300) gives a
-  // generous margin so the plane edge always sits well outside the
-  // visible frustum, and therefore never produces a visible band.
-  const GRASS_WIDTH = 600;
-  const GRASS_LENGTH = 4000;
-
-  // Vehicle transform smoothing factors.
-  // Fast convergence is safe because the Perlin noise road centreline
-  // is continuous and low-frequency (0.006 Hz, 2 octaves), and the
-  // lateral amplitude is now amplified by MAX_CURVE_OFFSET = 5.0 so
-  // curves produce visibly wider swings than before.
-  const VEHICLE_SMOOTH_X = 0.35;
-  const VEHICLE_SMOOTH_Y = 0.25;
-
-  // Camera following interpolation factor — gentle enough to glide
-  // smoothly into curves, fast enough to avoid perceptible lag.
-  const CAMERA_SMOOTH = 0.15;
-  // Fraction of the lane offset visible in the camera target position.
-  // Bumped from 0.4 to 0.7 so the camera visibly swings with the road
-  // when the player changes lane inside a curve, reinforcing the
-  // sense that curves are wider than straights.
-  const CAMERA_LANE_FACTOR = 0.7;
-
-  // Curve-banking factors: when the road curves ahead, the camera and
-  // vehicle roll a small amount around the Z axis. The factor converts
-  // the lateral curveOffset delta ahead of the player into a roll
-  // angle. The CAMERA_BANK_FACTOR controls how dramatically the
-  // camera leans into a curve; VEHICLE_BANK_FACTOR keeps the vehicle
-  // tilt subtle so it doesn't fight the existing lane-switch tilt.
-  // Both are computed from the *change* in curveOffset over a small
-  // look-ahead window so straights (curveOffset flat across the look-
-  // ahead) produce ~0 banking while curves (curveOffset changing
-  // ahead of the player) produce a visible lean.
-  const CAMERA_BANK_LOOK_AHEAD = 8;
-  const VEHICLE_BANK_LOOK_AHEAD = 6;
-  const CAMERA_BANK_FACTOR = 0.3;
-  const VEHICLE_BANK_FACTOR = 0.04;
-  // Smoothing factor for the vehicle curve-bank tilt. Each frame the
-  // vehicle's curve-bank component lerps toward the new target by
-  // this fraction. Equivalent exponential-decay rate is ~85%/frame
-  // (≈96% converged in ~20 frames / 0.33 s) — fast enough to lean
-  // visibly into curves but slow enough that the tilt does not
-  // jitter on the noisy Perlin road. Crucially, using lerp toward
-  // the target (not += delta) means the bank component converges
-  // to its per-frame target and does not accumulate.
-  const VEHICLE_BANK_SMOOTH = 0.15;
-
-  let frameCount = 0;
-  const COLLISION_CHECK_MOD = 4;
-
-  // Shadow update interval (every N frames)
-  const SHADOW_UPDATE_INTERVAL = 3;
-
-  // Objects with worldZ > this are recycled (behind the player)
-  const RECYCLE_WORLD_Z = 5;
-
-  // Road segments are kept until their far end has scrolled past the
-  // camera (camera Z = 12, looking toward -Z). Recycling on segment
-  // "center" caused the road under the player to disappear while its far
-  // portion was still in view; checking the far end ensures each segment
-  // only disappears after it is entirely behind the camera.
-  const CAMERA_RECYCLE_Z = 12;
-
-  /** Camera shake state */
+  // Camera shake state (managed by gameLoop)
   let cameraShake = { duration: 0, intensity: 0 };
-  /** Previous jump state for landing detection */
-  let wasJumping = false;
+
+  // Scroll offset (managed by gameLoop)
+  let scrollOffset = 0;
+  let runningTime = 0;
+  let frameCount = 0;
 
   /* ===================================================================
-     Three.js — Scene Setup
+     Module APIs (populated during onMount)
      =================================================================== */
-  function initScene() {
-    const container = containerEl;
-    const rect = container.getBoundingClientRect();
-    const w = rect.width || 800;
-    const h = rect.height || 500;
+  /** @type {ReturnType<typeof createEffects>|null} */
+  let effectsAPI = null;
+  /** @type {ReturnType<typeof createPlayerVehicle>|null} */
+  let vehicleAPI = null;
+  /** @type {ReturnType<typeof createWorldObjects>|null} */
+  let worldObjectsAPI = null;
+  /** @type {ReturnType<typeof createInputController>|null} */
+  let inputAPI = null;
+  /** @type {ReturnType<typeof createHud>|null} */
+  let hudAPI = null;
+  /** @type {ReturnType<typeof createGameLoop>|null} */
+  let gameLoopAPI = null;
 
-    scene = new THREE.Scene();
-    // Fog range is intentionally wider than the original (80, 200) so
-    // the transition from "no fog" to "fully fog colour" happens over
-    // a longer Z span. The near edge (60) starts fading just past the
-    // close-to-player road tiles; the far edge (250) sits a little
-    // inside the camera's 300-unit far plane so the road and grass
-    // are guaranteed to be fully fog colour (and therefore equal to
-    // the sky) before the far plane clips them. This kills the hard
-    // "sky / ground" colour band the user reported.
-    scene.fog = new THREE.Fog(0x87CEEB, 60, 250);
-
-    camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 300);
-    camera.position.set(0, 6, 12);
-    camera.lookAt(0, 0, -10);
-
-    try {
-      renderer = new THREE.WebGLRenderer({ antialias: true });
-    } catch (e) {
-      console.warn('[RacingGame] WebGL not supported:', e);
-      webglError = true;
-      loading = false;
-      return;
-    }
-    renderer.setSize(w, h);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.shadowMap.autoUpdate = false; // Manual shadow updates for performance; any event that changes shadow geometry (instance recycling, road tile changes) must explicitly set renderer.shadowMap.needsUpdate = true
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
-    container.appendChild(renderer.domElement);
-
-    setupLighting();
-
-    // Create static group for frustum culling optimization
-    staticGroup = new THREE.Group();
-    staticGroup.frustumCulled = true;
-    scene.add(staticGroup);
-
-    // Create procedural sky sphere
-    createProceduralSky();
-
-    createBackgroundScenery();
-    createGrassPlane();
-    createRoadSystem();
-    createVehicle();
-
-    // Post-processing: bloom / glow
-    composer = new EffectComposer(renderer);
-    composer.addPass(new RenderPass(scene, camera));
-    bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(w, h),
-      0.3,   // strength
-      0.2,   // radius
-      0.1    // threshold
-    );
-    composer.addPass(bloomPass);
-    composer.addPass(new OutputPass());
-
-    loading = false;
-    animate(0);
-  }
-
-  function setupLighting() {
-    const ambient = new THREE.AmbientLight(0x8899bb, 0.5);
-    scene.add(ambient);
-
-    const hemi = new THREE.HemisphereLight(0x87CEEB, 0x3a5a3a, 0.6);
-    scene.add(hemi);
-
-    const dirLight = new THREE.DirectionalLight(0xffeedd, 1.0);
-    dirLight.position.set(20, 30, 10);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 1024;
-    dirLight.shadow.mapSize.height = 1024;
-    const d = 30;
-    dirLight.shadow.camera.left = -d;
-    dirLight.shadow.camera.right = d;
-    dirLight.shadow.camera.top = d;
-    dirLight.shadow.camera.bottom = -d;
-    dirLight.shadow.camera.near = 1;
-    dirLight.shadow.camera.far = 60;
-    scene.add(dirLight);
-
-    const fillLight = new THREE.DirectionalLight(0xaaaaee, 0.3);
-    fillLight.position.set(-15, 10, -20);
-    scene.add(fillLight);
-  }
+  /** Environment dispose function (captured from env creation) */
+  let envDispose = null;
 
   /* ===================================================================
-     Background Scenery (mountains, hills) — InstancedMesh
+     External refs helpers (passed to road / decorations modules)
      =================================================================== */
-  function createBackgroundScenery() {
-    sceneryGroup = new THREE.Group();
-    scene.add(sceneryGroup);
-
-    // Mountains: single InstancedMesh for 12 cones
-    const MOUNTAIN_COUNT = 12;
-    const mountainGeo = new THREE.ConeGeometry(1, 1, 6);
-    disposables.geometries.push(mountainGeo);
-    const mountainMat = new THREE.MeshLambertMaterial({
-      color: 0x6a8a6a,
-      flatShading: true,
-      fog: true,
-    });
-    disposables.materials.push(mountainMat);
-
-    const mountainMesh = new THREE.InstancedMesh(mountainGeo, mountainMat, MOUNTAIN_COUNT);
-    const mountainDummy = new THREE.Object3D();
-
-    for (let i = 0; i < MOUNTAIN_COUNT; i++) {
-      const height = 8 + Math.random() * 16;
-      const radius = 5 + Math.random() * 10;
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 60 + Math.random() * 40;
-      const scaleX = 0.8 + Math.random() * 0.6;
-
-      mountainDummy.position.set(
-        Math.cos(angle) * dist,
-        -2 + height / 2,
-        -30 - Math.random() * 50
-      );
-      mountainDummy.rotation.set(0, Math.random() * Math.PI, 0);
-      mountainDummy.scale.set(radius * scaleX, height, radius);
-      mountainDummy.updateMatrix();
-      mountainMesh.setMatrixAt(i, mountainDummy.matrix);
-    }
-    mountainMesh.instanceMatrix.needsUpdate = true;
-    staticGroup.add(mountainMesh);
-
-    // Hills: single InstancedMesh for 8 half-spheres
-    const HILL_COUNT = 8;
-    const hillGeo = new THREE.SphereGeometry(1, 8, 8, 0, Math.PI * 2, 0, Math.PI / 2);
-    disposables.geometries.push(hillGeo);
-    const hillMat = new THREE.MeshLambertMaterial({
-      color: 0x7a9a7a,
-      flatShading: true,
-      fog: true,
-    });
-    disposables.materials.push(hillMat);
-
-    const hillMesh = new THREE.InstancedMesh(hillGeo, hillMat, HILL_COUNT);
-    const hillDummy = new THREE.Object3D();
-
-    for (let i = 0; i < HILL_COUNT; i++) {
-      const radius = 15 + Math.random() * 20;
-      const side = Math.random() > 0.5 ? -1 : 1;
-
-      // Half-sphere base (y=0 in local coords) at world y=-2 (ground level)
-      hillDummy.position.set(
-        (40 + Math.random() * 30) * side,
-        -2,
-        -20 - Math.random() * 40
-      );
-      hillDummy.rotation.set(0, 0, 0);
-      hillDummy.scale.set(radius, radius, radius);
-      hillDummy.updateMatrix();
-      hillMesh.setMatrixAt(i, hillDummy.matrix);
-    }
-    hillMesh.instanceMatrix.needsUpdate = true;
-    staticGroup.add(hillMesh);
-  }
-
-  /* ===================================================================
-     Grass / Ground Plane
-     =================================================================== */
-  function createGrassPlane() {
-    // A wide, flat green plane covering the area below and around the road.
-    // It exists purely as scenery — a stable surface that roadside trees
-    // can sit on at a constant Y instead of inheriting the road's noise-
-    // driven heightOffset (which would make them float in dips and sink on
-    // hilltops). The plane is added to its own group so it doesn't get
-    // recycled by the road tile system. The grass plane is anchored at
-    // world Z=0 (under the player position) and does NOT scroll with
-    // scrollOffset; its length (GRASS_LENGTH=4000) is sufficient to
-    // cover from the player position to well past the fog far plane
-    // (≈200 units ahead) regardless of how far the player has travelled.
-    grassGroup = new THREE.Group();
-    grassGroup.position.z = 0;
-    staticGroup.add(grassGroup);
-
-    // Capture the geometry and material at module level so onDestroy can
-    // explicitly dispose them. The scene.traverse() in onDestroy already
-    // disposes every mesh, but retaining direct references guarantees the
-    // GPU resources are freed even if the grass group is ever detached
-    // from the scene graph during a future refactor.
-    grassMaterial = new THREE.MeshPhongMaterial({
-      color: GRASS_COLOR,
-      flatShading: true,
-      // Explicitly enable fog response. MeshPhongMaterial defaults to
-      // fog:true in Three.js, but stating it makes the contract
-      // auditable and protects the material from accidentally being
-      // switched off by a future refactor that flattens the options
-      // object. With fog enabled, the grass colour is interpolated
-      // toward the sky colour (0x87CEEB) as the grass recedes into
-      // the distance, so the grass-to-sky transition is smooth
-      // rather than a hard line at the fog far plane.
-      fog: true,
-    });
-    disposables.materials.push(grassMaterial);
-    grassGeometry = new THREE.PlaneGeometry(GRASS_WIDTH, GRASS_LENGTH);
-    disposables.geometries.push(grassGeometry);
-    const grass = new THREE.Mesh(grassGeometry, grassMaterial);
-    grass.rotation.x = -Math.PI / 2;
-    grass.position.y = GRASS_Y;
-    grass.receiveShadow = true;
-    grassGroup.add(grass);
-  }
-
-  /* ===================================================================
-     Procedural Sky Texture
-     =================================================================== */
-  function createProceduralSky() {
-    // Use canvas to draw procedural sky texture
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 512;
-    const ctx = canvas.getContext('2d');
-
-    // Gradient from horizon to zenith
-    const gradient = ctx.createLinearGradient(0, 0, 0, 512);
-    gradient.addColorStop(0, '#a0c4e8');     // Light blue at horizon
-    gradient.addColorStop(0.3, '#87CEEB');   // Sky blue
-    gradient.addColorStop(0.5, '#b8d4e8');   // Pale blue
-    gradient.addColorStop(0.7, '#f5e6d0');   // Warm sunset tint
-    gradient.addColorStop(0.85, '#ff9966');  // Orange sunset
-    gradient.addColorStop(1.0, '#ff6600');   // Deep sunset orange
-
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 512, 512);
-
-    // Add sun glow (yellow-white glow in upper right area)
-    const sunX = 380;
-    const sunY = 100;
-    const sunGlow = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 80);
-    sunGlow.addColorStop(0, 'rgba(255, 255, 200, 0.9)');
-    sunGlow.addColorStop(0.2, 'rgba(255, 220, 150, 0.6)');
-    sunGlow.addColorStop(0.5, 'rgba(255, 180, 100, 0.2)');
-    sunGlow.addColorStop(1, 'rgba(255, 150, 50, 0)');
-    ctx.fillStyle = sunGlow;
-    ctx.fillRect(0, 0, 512, 512);
-
-    // Draw sun disc
-    ctx.beginPath();
-    ctx.arc(sunX, sunY, 25, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 230, 1)';
-    ctx.fill();
-
-    // Add clouds (semi-transparent white circles)
-    const drawCloud = (cx, cy, r) => {
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.fill();
-      // Smaller overlapping circles for fluffy effect
-      ctx.beginPath();
-      ctx.arc(cx - r * 0.6, cy + r * 0.2, r * 0.6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx + r * 0.5, cy + r * 0.3, r * 0.5, 0, Math.PI * 2);
-      ctx.fill();
-    };
-
-    // Place clouds at various positions
-    drawCloud(120, 150, 30);
-    drawCloud(200, 200, 25);
-    drawCloud(280, 170, 35);
-    drawCloud(350, 220, 20);
-    drawCloud(80, 250, 22);
-    drawCloud(450, 180, 28);
-    drawCloud(160, 280, 18);
-    drawCloud(320, 260, 24);
-
-    const skyTexture = new THREE.CanvasTexture(canvas);
-    skyTexture.wrapS = THREE.RepeatWrapping;
-    skyTexture.wrapT = THREE.ClampToEdgeWrapping;
-    disposables.textures.push(skyTexture);
-
-    // Use texture directly for background (scene.background accepts Texture, not Mesh)
-    scene.background = skyTexture;
-  }
-
-  /* ===================================================================
-     Procedural Road Textures
-     =================================================================== */
-  function createAsphaltTextures() {
-    const textureSize = 256;
-
-    // Create canvas for color map (grayscale asphalt)
-    const colorCanvas = document.createElement('canvas');
-    colorCanvas.width = textureSize;
-    colorCanvas.height = textureSize;
-    const colorCtx = colorCanvas.getContext('2d');
-
-    // Fill with base gray
-    colorCtx.fillStyle = '#7a7a7a';
-    colorCtx.fillRect(0, 0, textureSize, textureSize);
-
-    // Add noise for asphalt texture
-    const imageData = colorCtx.getImageData(0, 0, textureSize, textureSize);
-    const data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const noise = (Math.random() - 0.5) * 30;
-      data[i] = Math.max(0, Math.min(255, data[i] + noise));     // R
-      data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise)); // G
-      data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise)); // B
-    }
-    colorCtx.putImageData(imageData, 0, 0);
-
-    const colorTexture = new THREE.CanvasTexture(colorCanvas);
-    colorTexture.wrapS = THREE.RepeatWrapping;
-    colorTexture.wrapT = THREE.RepeatWrapping;
-    colorTexture.repeat.set(ROAD_TEXTURE_REPEAT_X, ROAD_TEXTURE_REPEAT_Z);
-    colorTexture.needsUpdate = true;
-
-    // Create normal map (bump)
-    const normalCanvas = document.createElement('canvas');
-    normalCanvas.width = textureSize;
-    normalCanvas.height = textureSize;
-    const normalCtx = normalCanvas.getContext('2d');
-
-    // Fill with neutral normal (128, 128, 255)
-    normalCtx.fillStyle = 'rgb(128, 128, 255)';
-    normalCtx.fillRect(0, 0, textureSize, textureSize);
-
-    const normalImageData = normalCtx.getImageData(0, 0, textureSize, textureSize);
-    const normalData = normalImageData.data;
-    for (let i = 0; i < normalData.length; i += 4) {
-      // Add random perturbation for normal map variation (intensity 0.3-0.5)
-      const perturb = (Math.random() - 0.5) * 40;
-      normalData[i] = Math.max(0, Math.min(255, 128 + perturb));     // R (x)
-      normalData[i + 1] = Math.max(0, Math.min(255, 128 + perturb)); // G (y)
-      // B stays at 255 for z-up normals
-    }
-    normalCtx.putImageData(normalImageData, 0, 0);
-
-    const normalTexture = new THREE.CanvasTexture(normalCanvas);
-    normalTexture.wrapS = THREE.RepeatWrapping;
-    normalTexture.wrapT = THREE.RepeatWrapping;
-    normalTexture.repeat.set(ROAD_TEXTURE_REPEAT_X, ROAD_TEXTURE_REPEAT_Z);
-    normalTexture.needsUpdate = true;
-
-    // Create roughness map (rough asphalt ~0.8)
-    const roughnessCanvas = document.createElement('canvas');
-    roughnessCanvas.width = textureSize;
-    roughnessCanvas.height = textureSize;
-    const roughnessCtx = roughnessCanvas.getContext('2d');
-
-    const roughnessImageData = roughnessCtx.createImageData(textureSize, textureSize);
-    const roughnessData = roughnessImageData.data;
-    for (let i = 0; i < roughnessData.length; i += 4) {
-      // Roughness value around 0.8 (200 in RGB)
-      const roughness = 180 + Math.random() * 40;
-      roughnessData[i] = roughness;
-      roughnessData[i + 1] = roughness;
-      roughnessData[i + 2] = roughness;
-      roughnessData[i + 3] = 255;
-    }
-    roughnessCtx.putImageData(roughnessImageData, 0, 0);
-
-    const roughnessTexture = new THREE.CanvasTexture(roughnessCanvas);
-    roughnessTexture.wrapS = THREE.RepeatWrapping;
-    roughnessTexture.wrapT = THREE.RepeatWrapping;
-    roughnessTexture.repeat.set(ROAD_TEXTURE_REPEAT_X, ROAD_TEXTURE_REPEAT_Z);
-    roughnessTexture.needsUpdate = true;
-
-    // Track textures for proper disposal
-    disposables.textures.push(colorTexture, normalTexture, roughnessTexture);
-
-    return { map: colorTexture, normalMap: normalTexture, roughnessMap: roughnessTexture };
-  }
-
-  /* ===================================================================
-     Road System
-     =================================================================== */
-  function createRoadSystem() {
-    roadGroup = new THREE.Group();
-    scene.add(roadGroup);
-
-    objectsGroup = new THREE.Group();
-    scene.add(objectsGroup);
-
-    // Create procedural asphalt textures (created once, reused across all segments)
-    asphaltTextures = createAsphaltTextures();
-
-    // Generate initial road segments (ahead of player, in road-space)
-    roadSegments = generateSegments(0, SEGMENTS_AHEAD);
-
-    // Create visuals for each segment
-    roadSegments.forEach((seg) => {
-      createContinuousRoadSegment(seg, asphaltTextures);
-    });
-
-    // Roadside decoration trees
-    createRoadsideTrees();
-
-    // Roadside decorations: lamps, poles, fences
-    createRoadsideDecorations();
-  }
-
-  /**
-   * Create continuous smooth road geometry for a single road segment.
-   * Uses a custom BufferGeometry with vertices sampled from the Perlin noise
-   * centre‑line at multiple Z positions, ensuring seamless connection with
-   * adjacent segments (vertices at shared Z boundaries match exactly).
-   *
-   * Lane divider lines and road shoulders are also created as continuous
-   * strips using the same noise sampling.
-   */
-  function createContinuousRoadSegment(segment, asphaltTextures) {
-    const zStart = segment.zStart;
-    const step = segment.length / ROAD_SUBDIVISIONS;
-    const rows = ROAD_SUBDIVISIONS + 1;
-    const halfW = ROAD_VISUAL_WIDTH / 2;
-
-    // `spawned` records whether objects have already been generated for
-    // this segment during its lifetime. It stays false until spawnObjects
-    // produces objects in this segment, then is flipped to true so the
-    // segment never spawns again. This prevents an oncoming vehicle from
-    // leaving its parent segment (its desc.z is advanced toward the
-    // player every frame) and a fresh vehicle being spawned into the
-    // same segment which is now very close to — or already past — the
-    // player, causing an object to suddenly pop in front of or behind
-    // them.
-    let data = { segment, surface: null, lines: [], shoulders: [], spawned: false };
-
-    // ---- Road surface ----
-    const surfacePositions = [];
-    const surfaceIndices = [];
-
-    for (let i = 0; i < rows; i++) {
-      const z = zStart - i * step;
-      const offset = getRoadOffsetAt(roadSegments, z);
-      surfacePositions.push(offset.curveOffset - halfW, offset.heightOffset, z);
-      surfacePositions.push(offset.curveOffset + halfW, offset.heightOffset, z);
-    }
-
-    for (let i = 0; i < ROAD_SUBDIVISIONS; i++) {
-      const a = i * 2;
-      const b = i * 2 + 1;
-      const c = (i + 1) * 2;
-      const d = (i + 1) * 2 + 1;
-      surfaceIndices.push(a, c, b, b, c, d);
-    }
-
-    const surfaceGeo = new THREE.BufferGeometry();
-    surfaceGeo.setAttribute('position', new THREE.Float32BufferAttribute(surfacePositions, 3));
-    surfaceGeo.setIndex(surfaceIndices);
-    surfaceGeo.computeVertexNormals();
-
-    if (!surfaceMaterial) {
-      // Create procedural road texture once and share across all road segments
-      surfaceMaterial = new THREE.MeshStandardMaterial({
-        color: 0x5a5a5a, // Darker asphalt base
-        map: asphaltTextures.map,
-        normalMap: asphaltTextures.normalMap,
-        roughnessMap: asphaltTextures.roughnessMap,
-        roughness: 0.85,
-        metalness: 0.0,
-        flatShading: false,
-        side: THREE.DoubleSide,
-        fog: true,
-      });
-      // Surface material is shared, will be disposed in onDestroy
-    }
-    const surfaceMat = surfaceMaterial;
-    const surface = new THREE.Mesh(surfaceGeo, surfaceMat);
-    surface.position.set(0, ROAD_Y, 0);
-    surface.receiveShadow = true;
-    surface.castShadow = true;
-    roadGroup.add(surface);
-    data.surface = surface;
-
-    // ---- Lane divider lines (2 dividers for 3 lanes, drawn as dashes) ----
-    // Each divider is split into short mesh strips separated by gaps, so the
-    // three lane boundaries read as intermittent dashed lines rather than a
-    // continuous band. Road width, lane count and surface geometry are
-    // unchanged.
-    const lineMat = new THREE.MeshBasicMaterial({ color: LANE_LINE_COLOR, fog: true });
-    const lineHalfW = 0.075;
-    // Dash pattern based on subdivision indices: every DASH_PATTERN_SUBDIVS
-    // subdivisions we draw DASH_LENGTH_SUBDIVS rows of stripe then leave the
-    // rest as a gap.  ROAD_SUBDIVISIONS (6) is a multiple of 3, so each
-    // segment cleanly contains two full dashes and segments tile seamlessly.
-    const DASH_PATTERN_SUBDIVS = 3;
-    const DASH_LENGTH_SUBDIVS = 2;
-
-    for (let li = 0; li < LANE_COUNT - 1; li++) {
-      const lineCenterX = (li - (LANE_COUNT - 2) / 2) * LANE_WIDTH;
-      let dashPositions = [];
-      let dashIndices = [];
-
-      const flushDash = () => {
-        // Skip building a mesh when the buffered strip has no triangles.
-        // This happens at the trailing edge of every segment because
-        // rows = ROAD_SUBDIVISIONS + 1 = 7 leaves the final dash row with
-        // no following row to pair into a quad within the same segment.
-        // Without this guard we'd allocate a degenerate 2-vertex / 0-index
-        // mesh for every lane of every segment.
-        if (dashIndices.length === 0) {
-          dashPositions = [];
-          dashIndices = [];
-          return;
-        }
-        const lineGeo = new THREE.BufferGeometry();
-        lineGeo.setAttribute(
-          'position',
-          new THREE.Float32BufferAttribute(dashPositions, 3),
-        );
-        lineGeo.setIndex(dashIndices);
-        lineGeo.computeVertexNormals();
-
-        const lineMesh = new THREE.Mesh(lineGeo, lineMat);
-        lineMesh.position.set(0, ROAD_Y, 0);
-        roadGroup.add(lineMesh);
-        data.lines.push(lineMesh);
-        dashPositions = [];
-        dashIndices = [];
-      };
-
-      for (let i = 0; i < rows; i++) {
-        const z = zStart - i * step;
-        const offset = getRoadOffsetAt(roadSegments, z);
-        const cx = offset.curveOffset;
-        const cy = offset.heightOffset;
-        const inDash = (i % DASH_PATTERN_SUBDIVS) < DASH_LENGTH_SUBDIVS;
-
-        if (inDash) {
-          const v0 = dashPositions.length / 3;
-          dashPositions.push(cx + lineCenterX - lineHalfW, cy + 0.12, z);
-          dashPositions.push(cx + lineCenterX + lineHalfW, cy + 0.12, z);
-          // Only emit quad indices once we have a previous row to pair with.
-          if (v0 >= 2) {
-            const a = v0 - 2;
-            const b = v0 - 1;
-            const c = v0;
-            const d = v0 + 1;
-            dashIndices.push(a, c, b, b, c, d);
-          }
-        } else {
-          flushDash();
-        }
-      }
-
-      // Flush any trailing dash that reaches the end of the segment.
-      flushDash();
-    }
-
-    // ---- Road shoulders ----
-    // The shoulder material is built ONCE and shared by every
-    // shoulder mesh (both sides of every road segment). The previous
-    // implementation created a fresh `MeshBasicMaterial` inside this
-    // function for each segment, so each tile had its own material
-    // instance, and that material was a flat, unlit, semi-transparent
-    // colour — meaning:
-    //   * the shoulder never reacted to the scene lights, so it read
-    //     as a uniformly coloured band sitting on top of the
-    //     (correctly lit) grass, creating a visible "shoulder-vs-
-    //     grass" style gap on both sides of the road;
-    //   * the `transparent: true, opacity: 0.5` made the shoulder
-    //     blend with whatever was behind it, which broke the fog
-    //     transition at the far end of the road and made the two
-    //     sides look different depending on the noise-driven road
-    //     curve.
-    // The shared `MeshLambertMaterial` below fixes both issues:
-    //   * it responds to the same ambient / hemisphere / directional
-    //     lights as the grass, so the shoulder and the grass on
-    //     either side receive identical illumination at the same
-    //     world position — the left and right shoulders therefore
-    //     pick up the same shading pattern as their neighbouring
-    //     grass, and the two sides look identical to each other;
-    //   * it is opaque (no `transparent` flag), so the fog
-    //     interpolates its colour directly toward the sky colour at
-    //     the far plane, matching the road surface and grass for a
-    //     smooth horizon transition.
-    // Both sides of every segment reference the same `shoulderMaterial`
-    // instance (set up in `createRoadSystem()`), so a state change on
-    // the material — colour, fog flag, etc. — automatically applies
-    // uniformly to every shoulder mesh in the scene.
-    if (!shoulderMaterial) {
-      shoulderMaterial = new THREE.MeshLambertMaterial({
-        color: ROAD_SHOULDER_COLOR,
-        fog: true,
-      });
-    }
-    const shoulderMat = shoulderMaterial;
-    const shoulderHalfW = 0.3;
-
-    for (let si = 0; si < 2; si++) {
-      const side = si === 0 ? -1 : 1;
-      const shoulderPositions = [];
-      const shoulderIndices = [];
-
-      for (let i = 0; i < rows; i++) {
-        const z = zStart - i * step;
-        const offset = getRoadOffsetAt(roadSegments, z);
-        const cx = offset.curveOffset;
-        const cy = offset.heightOffset;
-
-        const innerEdge = side * halfW - side * shoulderHalfW;
-        const outerEdge = side * halfW + side * shoulderHalfW;
-        shoulderPositions.push(cx + innerEdge, cy + 0.12, z);
-        shoulderPositions.push(cx + outerEdge, cy + 0.12, z);
-      }
-
-      for (let i = 0; i < ROAD_SUBDIVISIONS; i++) {
-        const a = i * 2;
-        const b = i * 2 + 1;
-        const c = (i + 1) * 2;
-        const d = (i + 1) * 2 + 1;
-        shoulderIndices.push(a, c, b, b, c, d);
-      }
-
-      const shoulderGeo = new THREE.BufferGeometry();
-      shoulderGeo.setAttribute('position', new THREE.Float32BufferAttribute(shoulderPositions, 3));
-      shoulderGeo.setIndex(shoulderIndices);
-      shoulderGeo.computeVertexNormals();
-
-      const shoulderMesh = new THREE.Mesh(shoulderGeo, shoulderMat);
-      shoulderMesh.position.set(0, ROAD_Y, 0);
-      roadGroup.add(shoulderMesh);
-      data.shoulders.push(shoulderMesh);
-    }
-
-    roadTileData.push(data);
-  }
-
-  /**
-   * Reposition all road tile visuals based on current scrollOffset.
-   * With continuous noise‑sampled geometry, vertex positions already encode
-   * the correct lateral and height offsets.  We only need to scroll the
-   * meshes along the Z axis.
-   */
-  function repositionRoadTiles() {
-    for (const data of roadTileData) {
-      // With continuous noise‑based geometry, vertex positions are already at
-      // the correct local‑space curve/height offsets. Only scroll Z.
-      if (data.surface) {
-        data.surface.position.z = scrollOffset;
-      }
-      for (const line of data.lines) {
-        line.position.z = scrollOffset;
-      }
-      for (const s of data.shoulders) {
-        s.position.z = scrollOffset;
-      }
-    }
-
-    // Anchor the grass plane at world Z=0 so it always covers the
-    // player position. The grass plane is not scrolled with the world —
-    // it is fixed at Z=0 regardless of scrollOffset; its length
-    // (GRASS_LENGTH=4000) is sufficient to cover the visible range.
-    if (grassGroup) {
-      grassGroup.position.z = 0;
-    }
-  }
-
-  /**
-   * Simple cone-shaped trees along the road using InstancedMesh.
-   * 60 trees split into 2 InstancedMeshes: trunks and foliage.
-   * Tree positions are stored in treesData[] for per-instance recycling.
-   */
-  function createRoadsideTrees() {
-    const TREE_COUNT = 60;
-
-    // Collect tree data for positioning and store in module-level array for recycling
-    treesData = [];
-    for (let i = 0; i < TREE_COUNT; i++) {
-      const roadZ = -5 - Math.random() * 200;
-      const side = Math.random() > 0.5 ? -1 : 1;
-      const distFromCenter = ROAD_VISUAL_WIDTH / 2 + 2 + Math.random() * 5;
-      const offset = getRoadOffsetAt(roadSegments, roadZ);
-      const trunkH = 0.5 + Math.random() * 0.5;
-      const foliageH = 0.8 + Math.random() * 0.6;
-      const foliageR = 0.5 + Math.random() * 0.4;
-      const foliageCount = 1 + Math.floor(Math.random() * 2);
-      treesData.push({
-        roadZ,
-        x: offset.curveOffset + side * distFromCenter,
-        trunkH,
-        foliageH,
-        foliageR,
-        foliageCount,
-        side,
-        distFromCenter,
-        foliageBaseIdx: 0, // Will be set during instance setup
-      });
-    }
-
-    // Trunk InstancedMesh
-    const trunkGeo = new THREE.CylinderGeometry(0.15, 0.2, 1, 4);
-    disposables.geometries.push(trunkGeo);
-    const trunkMat = new THREE.MeshPhongMaterial({ color: 0x6a4a2a });
-    disposables.materials.push(trunkMat);
-    trunkMesh = new THREE.InstancedMesh(trunkGeo, trunkMat, TREE_COUNT);
-    trunkMesh.castShadow = true;
-
-    // Foliage InstancedMesh (multiple cones per tree merged into one)
-    const foliageGeo = new THREE.ConeGeometry(1, 1, 5);
-    disposables.geometries.push(foliageGeo);
-    const foliageMat = new THREE.MeshPhongMaterial({
-      color: 0x5a9a5a,
-      flatShading: true,
-    });
-    disposables.materials.push(foliageMat);
-    foliageMesh = new THREE.InstancedMesh(foliageGeo, foliageMat, TREE_COUNT * 2); // Max 2 foliage cones per tree
-    foliageMesh.castShadow = true;
-
-    const dummy = new THREE.Object3D();
-    let foliageIdx = 0;
-
-    for (let i = 0; i < TREE_COUNT; i++) {
-      const td = treesData[i];
-      td.foliageBaseIdx = foliageIdx;
-
-      // Trunk
-      dummy.position.set(td.x, GRASS_Y + td.trunkH / 2, td.roadZ);
-      dummy.rotation.set(0, 0, 0);
-      dummy.scale.set(1, td.trunkH, 1);
-      dummy.updateMatrix();
-      trunkMesh.setMatrixAt(i, dummy.matrix);
-
-      // Foliage cones
-      for (let f = 0; f < td.foliageCount && foliageIdx < TREE_COUNT * 2; f++) {
-        // Align with original algorithm: foliage.position.y = trunkH + f * fHeight * 0.5
-        dummy.position.set(td.x, GRASS_Y + td.trunkH + f * td.foliageH * 0.5, td.roadZ);
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(td.foliageR, td.foliageH, td.foliageR);
-        dummy.updateMatrix();
-        foliageMesh.setMatrixAt(foliageIdx, dummy.matrix);
-        foliageIdx++;
-      }
-    }
-
-    // Hide unused foliage instances
-    for (let i = foliageIdx; i < TREE_COUNT * 2; i++) {
-      dummy.position.set(0, -1000, 0);
-      dummy.scale.set(0, 0, 0);
-      dummy.updateMatrix();
-      foliageMesh.setMatrixAt(i, dummy.matrix);
-    }
-
-    trunkMesh.instanceMatrix.needsUpdate = true;
-    foliageMesh.instanceMatrix.needsUpdate = true;
-
-    roadGroup.add(trunkMesh);
-    roadGroup.add(foliageMesh);
-  }
-
-  /**
-   * Roadside decorations: street lamps, utility poles, and fences.
-   * All use InstancedMesh for performance.
-   * Decoration data is stored in decoData[] for per-instance recycling.
-   */
-  function createRoadsideDecorations() {
-    const DECO_COUNT = 30; // Mix of decorations
-
-    // Street lamp InstancedMesh (pole + head)
-    const lampPoleGeo = new THREE.CylinderGeometry(0.05, 0.08, 3, 6);
-    disposables.geometries.push(lampPoleGeo);
-    const lampHeadGeo = new THREE.SphereGeometry(0.3, 8, 8);
-    disposables.geometries.push(lampHeadGeo);
-    const lampMat = new THREE.MeshPhongMaterial({
-      color: 0x444444,
-      flatShading: true,
-    });
-    disposables.materials.push(lampMat);
-    const lampGlowMat = new THREE.MeshPhongMaterial({
-      color: 0xffff88,
-      emissive: 0xffaa00,
-      emissiveIntensity: 0.8,
-    });
-    disposables.materials.push(lampGlowMat);
-
-    decoPoleMesh = new THREE.InstancedMesh(lampPoleGeo, lampMat, DECO_COUNT);
-    decoHeadMesh = new THREE.InstancedMesh(lampHeadGeo, lampGlowMat, DECO_COUNT);
-    decoPoleMesh.castShadow = true;
-    decoHeadMesh.castShadow = true;
-
-    // Utility pole InstancedMesh
-    const poleGeo = new THREE.BoxGeometry(0.15, 4, 0.15);
-    disposables.geometries.push(poleGeo);
-    const poleColorMat = new THREE.MeshPhongMaterial({ color: 0x5a4030 });
-    disposables.materials.push(poleColorMat);
-    decoUtilityPoleMesh = new THREE.InstancedMesh(poleGeo, poleColorMat, DECO_COUNT);
-    decoUtilityPoleMesh.castShadow = true;
-
-    // Fence InstancedMesh (horizontal bar + vertical posts)
-    const fencePostGeo = new THREE.BoxGeometry(0.1, 0.8, 0.1);
-    disposables.geometries.push(fencePostGeo);
-    const fenceBarGeo = new THREE.BoxGeometry(0.08, 0.08, 2);
-    disposables.geometries.push(fenceBarGeo);
-    const fenceMat = new THREE.MeshPhongMaterial({ color: 0x888888 });
-    disposables.materials.push(fenceMat);
-    decoFencePostMesh = new THREE.InstancedMesh(fencePostGeo, fenceMat, DECO_COUNT * 3);
-    decoFenceBarMesh = new THREE.InstancedMesh(fenceBarGeo, fenceMat, DECO_COUNT);
-    decoFencePostMesh.castShadow = true;
-    decoFenceBarMesh.castShadow = true;
-
-    // Collect decoration data for recycling
-    decoData = [];
-    const dummy = new THREE.Object3D();
-
-    // Generate decoration positions along the roadside
-    for (let i = 0; i < DECO_COUNT; i++) {
-      const roadZ = -10 - i * 8 + Math.random() * 4;
-      const side = i % 2 === 0 ? -1 : 1;
-      const distFromCenter = ROAD_VISUAL_WIDTH / 2 + 1.5 + Math.random() * 2;
-      const offset = getRoadOffsetAt(roadSegments, roadZ);
-      decoData.push({
-        roadZ,
-        x: offset.curveOffset + side * distFromCenter,
-        type: i % 3, // 0=lamp, 1=pole, 2=fence
-        side,
-        distFromCenter,
-        lampIdx: -1,
-        poleIdx: -1,
-        fencePostBaseIdx: -1,
-        fenceBarIdx: -1,
-      });
-    }
-
-    // Place street lamps (type 0)
-    let lampIdx = 0;
-    // Place utility poles (type 1)
-    let poleIdx = 0;
-    // Place fences (type 2) - track post and bar indices separately
-    let fencePostIdx = 0;
-    let fenceBarIdx = 0;
-
-    for (let i = 0; i < DECO_COUNT; i++) {
-      const deco = decoData[i];
-      const worldZ = deco.roadZ;
-
-      if (deco.type === 0 && lampIdx < DECO_COUNT) {
-        deco.lampIdx = lampIdx;
-        // Pole
-        dummy.position.set(deco.x, GRASS_Y + 1.5, worldZ);
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(1, 1, 1);
-        dummy.updateMatrix();
-        decoPoleMesh.setMatrixAt(lampIdx, dummy.matrix);
-        // Head
-        dummy.position.set(deco.x, GRASS_Y + 3.2, worldZ);
-        dummy.scale.set(1, 1, 1);
-        dummy.updateMatrix();
-        decoHeadMesh.setMatrixAt(lampIdx, dummy.matrix);
-        lampIdx++;
-      } else if (deco.type === 1 && poleIdx < DECO_COUNT) {
-        deco.poleIdx = poleIdx;
-        dummy.position.set(deco.x, GRASS_Y + 2, worldZ);
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(1, 1, 1);
-        dummy.updateMatrix();
-        decoUtilityPoleMesh.setMatrixAt(poleIdx, dummy.matrix);
-        poleIdx++;
-      } else if (deco.type === 2) {
-        // Fence: 3 vertical posts
-        deco.fencePostBaseIdx = fencePostIdx;
-        for (let p = 0; p < 3; p++) {
-          dummy.position.set(deco.x, GRASS_Y + 0.4, worldZ - 1 + p);
-          dummy.rotation.set(0, 0, 0);
-          dummy.scale.set(1, 1, 1);
-          dummy.updateMatrix();
-          decoFencePostMesh.setMatrixAt(fencePostIdx, dummy.matrix);
-          fencePostIdx++;
-        }
-        // 1 horizontal bar
-        if (fenceBarIdx < DECO_COUNT) {
-          deco.fenceBarIdx = fenceBarIdx;
-          dummy.position.set(deco.x, GRASS_Y + 0.6, worldZ);
-          dummy.rotation.set(0, 0, 0);
-          dummy.scale.set(1, 1, 1);
-          dummy.updateMatrix();
-          decoFenceBarMesh.setMatrixAt(fenceBarIdx, dummy.matrix);
-          fenceBarIdx++;
-        }
-      }
-    }
-
-    // Hide unused instances
-    const hideInstance = (mesh, idx) => {
-      dummy.position.set(0, -1000, 0);
-      dummy.scale.set(0, 0, 0);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(idx, dummy.matrix);
-    };
-    for (let i = lampIdx; i < DECO_COUNT; i++) {
-      hideInstance(decoPoleMesh, i);
-      hideInstance(decoHeadMesh, i);
-    }
-    for (let i = poleIdx; i < DECO_COUNT; i++) {
-      hideInstance(decoUtilityPoleMesh, i);
-    }
-    for (let i = fencePostIdx; i < DECO_COUNT * 3; i++) {
-      hideInstance(decoFencePostMesh, i);
-    }
-    for (let i = fenceBarIdx; i < DECO_COUNT; i++) {
-      hideInstance(decoFenceBarMesh, i);
-    }
-
-    decoPoleMesh.instanceMatrix.needsUpdate = true;
-    decoHeadMesh.instanceMatrix.needsUpdate = true;
-    decoUtilityPoleMesh.instanceMatrix.needsUpdate = true;
-    decoFencePostMesh.instanceMatrix.needsUpdate = true;
-    decoFenceBarMesh.instanceMatrix.needsUpdate = true;
-
-    roadGroup.add(decoPoleMesh);
-    roadGroup.add(decoHeadMesh);
-    roadGroup.add(decoUtilityPoleMesh);
-    roadGroup.add(decoFencePostMesh);
-    roadGroup.add(decoFenceBarMesh);
-  }
-
-  /**
-   * Update road: recycle old segments, extend new ones ahead,
-   * reposition all road tile visuals.
-   */
-  function updateRoad() {
-    if (!roadGroup) return;
-
-    // -- Recycle old segments that are fully past the camera --
-    // Each segment extends in road-space from seg.zStart (near end, +Z
-    // side when viewed in front of the player) to seg.zStart - seg.length
-    // (far end, -Z side). We recycle only when this far end has scrolled
-    // past the camera, guaranteeing the segment is no longer visible.
-    while (roadTileData.length > 0) {
-      const data = roadTileData[0];
-      const seg = data.segment;
-      const roadFarZ = seg.zStart - seg.length;
-      const worldZ = roadFarZ + scrollOffset;
-      if (worldZ < CAMERA_RECYCLE_Z) break;
-
-      // Remove from roadSegments (index 0 = closest segment)
-      roadSegments.shift();
-
-      // Remove meshes
-      removeTileVisuals(data);
-      roadTileData.shift();
-    }
-
-    // -- Extend new segments at the front (ahead) --
-    let needNew = true;
-    while (needNew) {
-      const lastSeg = roadSegments.length > 0 ? roadSegments[roadSegments.length - 1] : null;
-      const newRoadZ = lastSeg ? lastSeg.zStart - SEGMENT_LENGTH : -SEGMENT_LENGTH;
-      const newWorldZ = newRoadZ + scrollOffset;
-      // Only generate if the new segment's far end is within draw distance
-      if (newWorldZ < -260) {
-        needNew = false;
-        break;
-      }
-
-      const newSeg = generateSegment(newRoadZ);
-      roadSegments.push(newSeg);
-      createContinuousRoadSegment(newSeg, asphaltTextures);
-    }
-
-    // -- Reposition all road tiles --
-    repositionRoadTiles();
-
-    // -- Reposition trees (InstancedMesh per-instance recycling) --
-    if (trunkMesh && foliageMesh && treesData.length > 0) {
-      const dummy = new THREE.Object3D();
-      let needsTreeUpdate = false;
-
-      for (let i = 0; i < treesData.length; i++) {
-        const td = treesData[i];
-        const worldZ = td.roadZ + scrollOffset;
-
-        if (worldZ > RECYCLE_WORLD_Z + 20) {
-          // Recycle tree: place it far ahead
-          const lastSeg = roadSegments[roadSegments.length - 1];
-          td.roadZ = lastSeg ? lastSeg.zStart - Math.random() * 200 : -200;
-          td.side = Math.random() > 0.5 ? -1 : 1;
-          td.distFromCenter = ROAD_VISUAL_WIDTH / 2 + 2 + Math.random() * 5;
-          needsTreeUpdate = true;
-        }
-
-        // Update road-aligned X position
-        const offset = getRoadOffsetAt(roadSegments, td.roadZ);
-        td.x = offset.curveOffset + td.side * td.distFromCenter;
-
-        // Update trunk instance matrix
-        dummy.position.set(td.x, GRASS_Y + td.trunkH / 2, td.roadZ + scrollOffset);
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(1, td.trunkH, 1);
-        dummy.updateMatrix();
-        trunkMesh.setMatrixAt(i, dummy.matrix);
-
-        // Update foliage instance matrices
-        for (let f = 0; f < td.foliageCount; f++) {
-          const foliageIdx = td.foliageBaseIdx + f;
-          dummy.position.set(td.x, GRASS_Y + td.trunkH + f * td.foliageH * 0.5, td.roadZ + scrollOffset);
-          dummy.rotation.set(0, 0, 0);
-          dummy.scale.set(td.foliageR, td.foliageH, td.foliageR);
-          dummy.updateMatrix();
-          foliageMesh.setMatrixAt(foliageIdx, dummy.matrix);
-        }
-      }
-
-      // Always upload matrices every frame (not just on recycling frames) for smooth following
-      trunkMesh.instanceMatrix.needsUpdate = true;
-      foliageMesh.instanceMatrix.needsUpdate = true;
-
-      if (needsTreeUpdate) {
-        // Trigger shadow update after recycling instances
-        if (renderer) renderer.shadowMap.needsUpdate = true;
-      }
-    }
-
-    // -- Reposition decorations (InstancedMesh per-instance recycling) --
-    // Decorations are recycled like trees to provide infinite roadside scenery
-    if (decoPoleMesh && decoData.length > 0) {
-      const dummy = new THREE.Object3D();
-      let needsDecoUpdate = false;
-
-      for (let i = 0; i < decoData.length; i++) {
-        const deco = decoData[i];
-        const worldZ = deco.roadZ + scrollOffset;
-
-        if (worldZ > RECYCLE_WORLD_Z + 20) {
-          // Recycle decoration: place it far ahead
-          const lastSeg = roadSegments[roadSegments.length - 1];
-          deco.roadZ = lastSeg ? lastSeg.zStart - Math.random() * 240 : -240;
-          deco.side = Math.random() > 0.5 ? -1 : 1;
-          deco.distFromCenter = ROAD_VISUAL_WIDTH / 2 + 1.5 + Math.random() * 2;
-          needsDecoUpdate = true;
-        }
-
-        // Update road-aligned X position
-        const offset = getRoadOffsetAt(roadSegments, deco.roadZ);
-        deco.x = offset.curveOffset + deco.side * deco.distFromCenter;
-        const currentWorldZ = deco.roadZ + scrollOffset;
-
-        // Update lamp instances
-        if (deco.lampIdx >= 0) {
-          dummy.position.set(deco.x, GRASS_Y + 1.5, currentWorldZ);
-          dummy.rotation.set(0, 0, 0);
-          dummy.scale.set(1, 1, 1);
-          dummy.updateMatrix();
-          decoPoleMesh.setMatrixAt(deco.lampIdx, dummy.matrix);
-
-          dummy.position.set(deco.x, GRASS_Y + 3.2, currentWorldZ);
-          dummy.updateMatrix();
-          decoHeadMesh.setMatrixAt(deco.lampIdx, dummy.matrix);
-        }
-
-        // Update utility pole instance
-        if (deco.poleIdx >= 0) {
-          dummy.position.set(deco.x, GRASS_Y + 2, currentWorldZ);
-          dummy.rotation.set(0, 0, 0);
-          dummy.scale.set(1, 1, 1);
-          dummy.updateMatrix();
-          decoUtilityPoleMesh.setMatrixAt(deco.poleIdx, dummy.matrix);
-        }
-
-        // Update fence instances
-        if (deco.fencePostBaseIdx >= 0) {
-          for (let p = 0; p < 3; p++) {
-            dummy.position.set(deco.x, GRASS_Y + 0.4, currentWorldZ - 1 + p);
-            dummy.rotation.set(0, 0, 0);
-            dummy.scale.set(1, 1, 1);
-            dummy.updateMatrix();
-            decoFencePostMesh.setMatrixAt(deco.fencePostBaseIdx + p, dummy.matrix);
-          }
-          if (deco.fenceBarIdx >= 0) {
-            dummy.position.set(deco.x, GRASS_Y + 0.6, currentWorldZ);
-            dummy.updateMatrix();
-            decoFenceBarMesh.setMatrixAt(deco.fenceBarIdx, dummy.matrix);
-          }
-        }
-      }
-
-      // Always upload matrices every frame (not just on recycling frames) for smooth following
-      decoPoleMesh.instanceMatrix.needsUpdate = true;
-      decoHeadMesh.instanceMatrix.needsUpdate = true;
-      decoUtilityPoleMesh.instanceMatrix.needsUpdate = true;
-      decoFencePostMesh.instanceMatrix.needsUpdate = true;
-      decoFenceBarMesh.instanceMatrix.needsUpdate = true;
-
-      if (needsDecoUpdate) {
-        // Trigger shadow update after recycling decorations
-        if (renderer) renderer.shadowMap.needsUpdate = true;
-      }
-    }
-  }
-
-  function removeTileVisuals(data) {
-    // `skipMaterialDispose` is true for shoulder meshes because the
-    // shoulder material is shared across every segment (and both
-    // sides) of the road — disposing it on the first segment recycle
-    // would leave every other shoulder mesh with a dangling GPU
-    // reference. The shared material is released exactly once in
-    // `onDestroy`, matching the lifecycle of `grassMaterial`.
-    const removeMesh = (mesh, skipMaterialDispose = false) => {
-      if (!mesh) return;
-      roadGroup.remove(mesh);
-      if (mesh.isMesh || mesh.isPoints) {
-        mesh.geometry.dispose();
-        if (!skipMaterialDispose) {
-          if (Array.isArray(mesh.material)) {
-            mesh.material.forEach((m) => m.dispose());
-          } else if (mesh.material) {
-            mesh.material.dispose();
-          }
-        }
-      }
-    };
-
-    if (data.surface) removeMesh(data.surface, true);
-    for (const line of data.lines) removeMesh(line);
-    for (const s of data.shoulders) removeMesh(s, true);
-  }
-
-  /* ===================================================================
-     Vehicle Model
-     =================================================================== */
-  function createVehicle() {
-    vehicle = new THREE.Group();
-
-    // Main body — off-road SUV
-    const bodyMat = new THREE.MeshPhongMaterial({
-      color: 0x3a9ad9,
-      emissive: 0x1a5a8a,
-      emissiveIntensity: 0.15,
-      shininess: 40,
-    });
-    const bodyGeo = new THREE.BoxGeometry(1.6, 0.6, 2.8);
-    const body = new THREE.Mesh(bodyGeo, bodyMat);
-    body.position.y = 0.4;
-    body.castShadow = true;
-    vehicle.add(body);
-
-    // Cabin
-    const cabinMat = new THREE.MeshPhongMaterial({
-      color: 0x2a7ab9,
-      emissive: 0x1a4a7a,
-      emissiveIntensity: 0.1,
-      shininess: 30,
-      transparent: true,
-      opacity: 0.85,
-    });
-    const cabinGeo = new THREE.BoxGeometry(1.3, 0.45, 1.6);
-    const cabin = new THREE.Mesh(cabinGeo, cabinMat);
-    cabin.position.set(0, 0.75, -0.2);
-    cabin.castShadow = true;
-    vehicle.add(cabin);
-
-    // Windshield glow
-    const glassMat = new THREE.MeshPhongMaterial({
-      color: 0x88ccff,
-      emissive: 0x4488cc,
-      emissiveIntensity: 0.3,
-      transparent: true,
-      opacity: 0.4,
-    });
-    const glassGeo = new THREE.BoxGeometry(1.1, 0.25, 0.08);
-    const windshield = new THREE.Mesh(glassGeo, glassMat);
-    windshield.position.set(0, 0.75, -1.0);
-    vehicle.add(windshield);
-    const rearGlass = new THREE.Mesh(glassGeo, glassMat);
-    rearGlass.position.set(0, 0.75, 0.6);
-    vehicle.add(rearGlass);
-
-    // Bumpers
-    const bumperMat = new THREE.MeshPhongMaterial({ color: 0x4a4a4a, shininess: 20 });
-    const bumperGeo = new THREE.BoxGeometry(1.7, 0.15, 0.2);
-    const frontBumper = new THREE.Mesh(bumperGeo, bumperMat);
-    frontBumper.position.set(0, 0.15, -1.5);
-    vehicle.add(frontBumper);
-    const rearBumper = new THREE.Mesh(bumperGeo, bumperMat);
-    rearBumper.position.set(0, 0.15, 1.5);
-    vehicle.add(rearBumper);
-
-    // Wheels (4)
-    const wheelMat = new THREE.MeshPhongMaterial({ color: 0x2a2a2a, shininess: 10 });
-    const wheelGeo = new THREE.CylinderGeometry(0.25, 0.25, 0.15, 8);
-    const wheelPositions = [
-      [-0.6, 0.15, -0.9],
-      [0.6, 0.15, -0.9],
-      [-0.6, 0.15, 0.9],
-      [0.6, 0.15, 0.9],
-    ];
-    wheels = [];
-    for (const pos of wheelPositions) {
-      const wheel = new THREE.Mesh(wheelGeo, wheelMat);
-      wheel.rotation.x = Math.PI / 2;
-      wheel.position.set(pos[0], pos[1], pos[2]);
-      wheel.castShadow = true;
-      vehicle.add(wheel);
-      wheels.push(wheel);
-    }
-
-    // Roof lights
-    const lightMat = new THREE.MeshPhongMaterial({
-      color: 0xffcc44,
-      emissive: 0xff8800,
-      emissiveIntensity: 0.5,
-    });
-    for (let lx = -0.4; lx <= 0.4; lx += 0.8) {
-      const light = new THREE.Mesh(
-        new THREE.SphereGeometry(0.08, 6, 6),
-        lightMat
-      );
-      light.position.set(lx, 0.98, -1.3);
-      vehicle.add(light);
-    }
-
-    vehicle.position.set(0, ROAD_Y, 0);
-    scene.add(vehicle);
-  }
-
-  /* ===================================================================
-     Game Objects — Visuals
-     =================================================================== */
-  function createObjectVisual(desc) {
-    const offset = getRoadOffsetAt(roadSegments, desc.z);
-    const worldX = offset.curveOffset + desc.x;
-    const worldY = ROAD_Y + offset.heightOffset;
-    const worldZ = desc.z + scrollOffset;
-
-    let mesh;
-
-    switch (desc.type) {
-      case OBJECT_TYPES.OBSTACLE: {
-        const geo = new THREE.BoxGeometry(1.2, 0.8, 1.2);
-        const mat = new THREE.MeshPhongMaterial({
-          color: 0xff6633,
-          emissive: 0x883311,
-          emissiveIntensity: 0.2,
-          flatShading: true,
-        });
-        mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(worldX, worldY + 0.4, worldZ);
-        mesh.castShadow = true;
-        break;
-      }
-      case OBJECT_TYPES.ONCOMING_VEHICLE: {
-        // Look up the model config so the geometry / colour / wheel
-        // count / roof / spoiler all match the descriptor's `modelId`.
-        // When the descriptor has no `modelId` (defensive fallback for
-        // descriptors created outside `generateObjectsForSegment`) we
-        // use the first model from the table so the visual is still a
-        // valid oncoming vehicle, not an empty / misaligned mesh.
-        const model = getEnemyModelById(desc.modelId)
-          || ENEMY_VEHICLE_MODEL_MAP[Object.keys(ENEMY_VEHICLE_MODEL_MAP)[0]];
-        const bodyDims = model.body;
-        const cabinDims = model.cabin;
-        const bodyColor = model.color;
-        // Darken the body for the emissive channel so the colour reads
-        // strongly as primary body paint (not as glow).
-        const emissiveColor = bodyColor & 0xfefefe;
-        const wheelCount = model.wheelCount;
-        const headlightCount = model.headlightCount;
-        const hasRoof = model.hasRoof;
-        const hasSpoiler = model.hasSpoiler;
-
-        const group = new THREE.Group();
-        const bodyMat = new THREE.MeshPhongMaterial({
-          color: bodyColor,
-          emissive: emissiveColor,
-          emissiveIntensity: 0.15,
-          shininess: 30,
-        });
-        const body = new THREE.Mesh(
-          new THREE.BoxGeometry(bodyDims.width, bodyDims.height, bodyDims.length),
-          bodyMat
-        );
-        body.position.y = bodyDims.height / 2;
-        body.castShadow = true;
-        group.add(body);
-
-        // Cabin: only rendered for models with an enclosed roof. The
-        // truck model is open-top (hasRoof=false) so it shows just the
-        // body. The cabin sits centred above the body with its base
-        // at y = bodyDims.height so the top of the body and the bottom
-        // of the cabin are flush.
-        if (hasRoof) {
-          const cabinMat = new THREE.MeshPhongMaterial({
-            color: bodyColor,
-            emissive: emissiveColor,
-            emissiveIntensity: 0.1,
-            transparent: true,
-            opacity: 0.8,
-          });
-          const cabin = new THREE.Mesh(
-            new THREE.BoxGeometry(cabinDims.width, cabinDims.height, cabinDims.length),
-            cabinMat
-          );
-          cabin.position.set(0, bodyDims.height + cabinDims.height / 2, 0);
-          group.add(cabin);
-        }
-
-        // Spoiler: only the sports car carries one. Mounted at the
-        // rear (positive Z in the vehicle's local space; remember the
-        // group is rotated 180° at the end so the vehicle's "front"
-        // is the player's facing direction).
-        if (hasSpoiler) {
-          const spoilerMat = new THREE.MeshPhongMaterial({ color: bodyColor });
-          const spoilerWing = new THREE.Mesh(
-            new THREE.BoxGeometry(bodyDims.width * 0.9, 0.05, 0.2),
-            spoilerMat
-          );
-          // Sit the wing just above the body so it reads as a
-          // rear-mounted spoiler rather than floating in space.
-          spoilerWing.position.set(
-            0,
-            bodyDims.height + 0.18,
-            bodyDims.length / 2 - 0.15,
-          );
-          // Two thin struts to support the wing.
-          const strutGeo = new THREE.BoxGeometry(0.05, 0.18, 0.05);
-          for (const sx of [-bodyDims.width * 0.3, bodyDims.width * 0.3]) {
-            const strut = new THREE.Mesh(strutGeo, spoilerMat);
-            strut.position.set(
-              sx,
-              bodyDims.height + 0.09,
-              bodyDims.length / 2 - 0.15,
-            );
-            group.add(strut);
-          }
-          group.add(spoilerWing);
-        }
-
-        // Wheels: distribute `wheelCount` wheels evenly along the
-        // body length. For 4 wheels the layout matches the original
-        // (4 corners); 6 wheels (truck) adds a middle axle.
-        const wheelMat = new THREE.MeshPhongMaterial({ color: 0x222222 });
-        const wheelGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.12, 6);
-        // 4 → 2 axles (front, back); 6 → 3 axles (front, mid, back).
-        const axles = wheelCount / 2;
-        const lengthSpan = bodyDims.length * 0.7;
-        for (let a = 0; a < axles; a++) {
-          // Distribute axles symmetrically around the body centre.
-          const z = (a / Math.max(axles - 1, 1) - 0.5) * lengthSpan;
-          for (const sx of [-bodyDims.width / 2 + 0.1, bodyDims.width / 2 - 0.1]) {
-            const w = new THREE.Mesh(wheelGeo, wheelMat);
-            w.rotation.x = Math.PI / 2;
-            w.position.set(sx, 0.15, z);
-            group.add(w);
-          }
-        }
-
-        // Headlights: a row of small spheres mounted on the front
-        // face of the body. The front of the vehicle is at
-        // z = -bodyDims.length / 2 in the group's local space (the
-        // group is rotated 180° below, so this becomes the player's
-        // direction).
-        const hlMat = new THREE.MeshBasicMaterial({ color: 0xffff88 });
-        const frontZ = -bodyDims.length / 2 - 0.05;
-        for (let h = 0; h < headlightCount; h++) {
-          // Centre the headlight row on the body and space them
-          // across the available width.
-          const t = headlightCount === 1
-            ? 0
-            : (h / (headlightCount - 1)) - 0.5;
-          const hx = t * (bodyDims.width * 0.6);
-          const hl = new THREE.Mesh(
-            new THREE.SphereGeometry(0.08, 6, 6),
-            hlMat,
-          );
-          hl.position.set(hx, 0.3, frontZ);
-          group.add(hl);
-        }
-
-        group.position.set(worldX, worldY, worldZ);
-        group.rotation.y = Math.PI;
-        mesh = group;
-        break;
-      }
-      case OBJECT_TYPES.REPAIR_KIT: {
-        const group = new THREE.Group();
-
-        const kitMat = new THREE.MeshPhongMaterial({
-          color: 0x44dd44,
-          emissive: 0x22aa22,
-          emissiveIntensity: 0.6,
-          transparent: true,
-          opacity: 0.9,
-        });
-        const box = new THREE.Mesh(
-          new THREE.BoxGeometry(0.6, 0.6, 0.6),
-          kitMat
-        );
-        box.position.y = 0.3;
-        box.castShadow = true;
-        group.add(box);
-
-        const glowMat = new THREE.MeshBasicMaterial({
-          color: 0x44ff44,
-          transparent: true,
-          opacity: 0.15,
-          side: THREE.DoubleSide,
-        });
-        const glow = new THREE.Mesh(
-          new THREE.SphereGeometry(0.5, 8, 8),
-          glowMat
-        );
-        glow.position.y = 0.3;
-        group.add(glow);
-
-        group.position.set(worldX, worldY, worldZ);
-        mesh = group;
-        break;
-      }
-      default:
-        return null;
-    }
-
-    if (mesh) {
-      mesh.userData.descriptor = desc;
-      objectsGroup.add(mesh);
-    }
-    return mesh;
-  }
-
-  function updateObjectVisuals() {
-    // Remove visuals for recycled descriptors
-    const validDescs = new Set(objectDescriptors);
-    const toRemove = [];
-    objectMeshMap.forEach((entry, desc) => {
-      if (!validDescs.has(desc)) {
-        toRemove.push(desc);
-      }
-    });
-    for (const desc of toRemove) {
-      const entry = objectMeshMap.get(desc);
-      if (entry) {
-        objectsGroup.remove(entry.mesh);
-        disposeMeshTree(entry.mesh);
-      }
-      objectMeshMap.delete(desc);
-    }
-
-    // Create visuals for new descriptors
-    for (const desc of objectDescriptors) {
-      if (!objectMeshMap.has(desc)) {
-        const visual = createObjectVisual(desc);
-        if (visual) objectMeshMap.set(desc, { mesh: visual });
-      }
-    }
-
-    // Reposition existing visuals based on current scrollOffset
-    objectMeshMap.forEach((entry, desc) => {
-      const offset = getRoadOffsetAt(roadSegments, desc.z);
-      const worldX = offset.curveOffset + desc.x;
-      const worldY = ROAD_Y + offset.heightOffset;
-      const worldZ = desc.z + scrollOffset;
-
-      entry.mesh.position.set(worldX, worldY, worldZ);
-
-      // Bob repair kits
-      if (desc.type === OBJECT_TYPES.REPAIR_KIT) {
-        entry.mesh.children.forEach((child) => {
-          if (child.isMesh && child.geometry && child.geometry.type === 'SphereGeometry') {
-            child.material.opacity = 0.1 + 0.08 * Math.sin(runningTime * 3 + desc.z);
-          }
-        });
-      }
-    });
-  }
-
-  function disposeMeshTree(obj) {
-    if (!obj) return;
-    if (obj.isMesh || obj.isPoints) {
-      try { obj.geometry.dispose(); } catch {}
-      if (Array.isArray(obj.material)) {
-        obj.material.forEach((m) => { try { m.dispose(); } catch {} });
-      } else if (obj.material) {
-        try { obj.material.dispose(); } catch {}
-      }
-    }
-    if (obj.children) {
-      for (let i = obj.children.length - 1; i >= 0; i--) {
-        disposeMeshTree(obj.children[i]);
-      }
-    }
-  }
-
-  /* ===================================================================
-     Object Spawning & Recycling
-     =================================================================== */
-  let spawnCooldown = 0;
-
-  // Dynamic-difficulty snapshot. Recomputed every frame inside
-  // `updateGame` from the freshly-updated `distance` and
-  // `runningTime` and consumed by `spawnObjects` (for the per-
-  // segment spawn chance and the per-segment max object count)
-  // and by `advanceOncomingVehicles` (for the enemy speed
-  // multiplier). Stored at module scope so the spawn / advance
-  // functions can read it without having to thread the same
-  // snapshot object through every call site. Initialised to a
-  // level-0 snapshot (distance=0, runningTime=0) so the very
-  // first frame — which `updateGame` enters with a 0-deltaTime
-  // `runningTime` advance but a still-0 `distance` — sees
-  // baseline difficulty, matching the previous hard-coded
-  // behaviour exactly.
-  let currentDifficulty = computeDifficulty({ distance: 0, runningTime: 0 });
-
-  function spawnObjects() {
-    if (!roadSegments.length) return;
-
-    // Pull the per-frame difficulty parameters out of the
-    // snapshot so the rest of the function reads a single,
-    // consistent set of values for this frame. Reading from the
-    // module-level `currentDifficulty` rather than from
-    // `distance` / `runningTime` directly keeps the contract
-    // "difficulty is computed once per frame" honest: even if
-    // some future refactor mutates `distance` during the spawn
-    // loop, the snapshot is the source of truth.
-    const spawnChance = currentDifficulty.spawnChance;
-    const maxObjectsPerSegment = currentDifficulty.maxObjectsPerSegment;
-
-    // Only spawn on segments that are approaching the player
-    for (let i = 0; i < roadSegments.length; i++) {
-      const seg = roadSegments[i];
-      // roadSegments and roadTileData are kept in sync (same length,
-      // shifted together during recycling), so we can look up the
-      // per-segment `spawned` flag by the same index.
-      const tileData = roadTileData[i];
-      const roadZ = seg.zStart - seg.length / 2;
-      const worldZ = roadZ + scrollOffset;
-
-      // Only spawn if within visible range ahead
-      if (worldZ < -120 || worldZ > -5) continue;
-
-      // Each segment spawns objects at most once during its lifetime.
-      // Oncoming vehicles move in road-space toward the player every
-      // frame, so without this guard a spawned vehicle could leave the
-      // segment it was placed in (the `hasObjects` check below would
-      // then return false) and a fresh vehicle could spawn into the
-      // same segment which is now very close to — or already past —
-      // the player, causing an object to suddenly pop in front of or
-      // behind them.
-      if (tileData && tileData.spawned) continue;
-
-      // Check if segment already has objects (defence in depth — covers
-      // the brief window between `spawned` being set and the descriptors
-      // being pushed, and any future refactor that might skip the flag).
-      const segStart = seg.zStart;
-      const segEnd = seg.zStart - seg.length;
-      const hasObjects = objectDescriptors.some(
-        (o) => o.z >= segEnd && o.z <= segStart
-      );
-      if (hasObjects) continue;
-
-      // Per-segment spawn chance, ramped by the dynamic-difficulty
-      // snapshot. At level 0 the chance equals the prior hard-coded
-      // 0.3; at higher levels it climbs toward SPAWN_CHANCE_MAX.
-      if (Math.random() > spawnChance) continue;
-
-      const objects = generateObjectsForSegment(seg, maxObjectsPerSegment);
-      objectDescriptors.push(...objects);
-      if (tileData) tileData.spawned = true;
-    }
-  }
-
-  function recycleWorldObjects() {
-    // Recycle objects whose world Z has passed behind the player
-    for (let i = objectDescriptors.length - 1; i >= 0; i--) {
-      const obj = objectDescriptors[i];
-      const worldZ = obj.z + scrollOffset;
-      if (worldZ > RECYCLE_WORLD_Z) {
-        const entry = objectMeshMap.get(obj);
-        if (entry) {
-          objectsGroup.remove(entry.mesh);
-          disposeMeshTree(entry.mesh);
-          objectMeshMap.delete(obj);
-        }
-        objectDescriptors.splice(i, 1);
-      }
-    }
-  }
-
-  /**
-   * Advance every active oncoming vehicle in road-space toward the
-   * player (+Z direction). Obstacles and repair kits stay anchored to
-   * their road-space Z and are only moved visually by the world scroll,
-   * so this function only touches objects whose type is
-   * OBJECT_TYPES.ONCOMING_VEHICLE.
-   *
-   * Each vehicle advances at its OWN per-model `obj.speed` (set on
-   * the descriptor by `generateObjectsForSegment` from the model
-   * table) rather than the global `ONCOMING_VEHICLE_SPEED` constant.
-   * This lets fast models close in faster than slow ones, so the
-   * visual / audio / collision pacing actually varies per vehicle.
-   * Vehicles whose descriptor carries no usable `speed` (e.g. a
-   * descriptor built outside `generateObjectsForSegment`) fall back
-   * to `ONCOMING_VEHICLE_SPEED`, preserving the prior behaviour for
-   * any hand-crafted / legacy descriptor and keeping the per-frame
-   * arithmetic a single `+=` per vehicle.
-   *
-   * The `speedMultiplier` parameter carries the per-frame dynamic-
-   * difficulty multiplier (see {@link computeDifficulty} /
-   * `currentDifficulty.enemySpeedMultiplier`). Applying the
-   * multiplier at advance time — rather than at spawn time —
-   * means every active vehicle in the scene feels the current
-   * difficulty, so the curve is smooth even when no new vehicles
-   * are spawning. A multiplier of `1` (the default) is a no-op,
-   * preserving the previous behaviour for any caller that does
-   * not pass an explicit multiplier.
-   *
-   * Mutating obj.z (rather than a separate "vehicle-local Z" field)
-   * keeps the downstream world-Z calculation `obj.z + scrollOffset`
-   * unchanged, so visual repositioning, recycling and collision
-   * detection all keep working with their existing arithmetic — the
-   * oncoming vehicle simply closes the gap faster than a stationary
-   * prop would (at PLAYER_SPEED + obj.speed*speedMultiplier instead
-   * of just PLAYER_SPEED), with `obj.speed` now varying per model
-   * and `speedMultiplier` now varying per frame.
-   */
-  function advanceOncomingVehicles(dt, speedMultiplier = 1) {
-    // Sanitise the multiplier the same way `computeDifficulty` does
-    // on its output: non-finite, NaN, negative or non-number values
-    // are clamped to 1 (no scaling). This keeps a buggy caller from
-    // silently breaking the per-frame arithmetic the way a NaN
-    // multiplier would taint every obj.z downstream.
-    const safeMultiplier = typeof speedMultiplier === 'number'
-      && Number.isFinite(speedMultiplier)
-      && speedMultiplier > 0
-      ? speedMultiplier
-      : 1;
-    for (let i = 0; i < objectDescriptors.length; i++) {
-      const obj = objectDescriptors[i];
-      if (!obj || obj.type !== OBJECT_TYPES.ONCOMING_VEHICLE) continue;
-      // Per-model speed takes precedence; the global constant is the
-      // defensive fallback for descriptors that lack a valid speed.
-      // The validity check mirrors the contract on `createObject` /
-      // the model table: must be a finite, strictly positive number.
-      // Infinity / NaN / 0 / negative would all silently break the
-      // per-frame `obj.z += speed * dt` (Infinity blows up the road
-      // position; NaN taints the position and breaks collision /
-      // recycling downstream).
-      const speed = typeof obj.speed === 'number'
-        && Number.isFinite(obj.speed)
-        && obj.speed > 0
-        ? obj.speed
-        : ONCOMING_VEHICLE_SPEED;
-      obj.z += speed * safeMultiplier * dt;
-    }
-  }
-
-  /* ===================================================================
-     Game Loop Update
-     =================================================================== */
-  function updateGame(deltaTime) {
-    if (gameState === 'gameover') return;
-
-    const dt = Math.min(deltaTime, 0.05);
-    runningTime += dt;
-
-    // -- Forward progress --
-    const forwardStep = PLAYER_SPEED * dt;
-    distance += forwardStep;
-    scrollOffset += forwardStep; // world scrolls backward
-
-    // -- Update display --
-    displayDistance = Math.floor(distance);
-    displayHealth = health;
-    displayScore = calculateScore(distance, 1);
-
-    // -- Speed --
-    const speedMps = forwardStep / Math.max(dt, 0.001);
-    displaySpeed = Math.round(Math.min(speedMps * 3.6, 180));
-
-    // -- Oncoming warning --
-    showOncomingWarning = objectDescriptors.some((obj) => {
-      if (!obj || obj.type !== OBJECT_TYPES.ONCOMING_VEHICLE) return false;
-      const worldZ = obj.z + scrollOffset;
-      return worldZ >= -60 && worldZ <= 0;
-    });
-
-    // -- Dynamic difficulty --
-    // Recompute the per-frame difficulty snapshot from the freshly-
-    // updated distance + running time so every downstream consumer
-    // (spawn cooldown reset, spawn chance, per-segment object cap,
-    // enemy speed multiplier) reads a single, consistent set of
-    // values for this frame. Updating the snapshot BEFORE the
-    // spawn / advance calls below is what makes the difficulty
-    // integration a single source of truth: a future refactor that
-    // re-orders updateGame cannot accidentally feed the new spawn
-    // loop the previous frame's snapshot.
-    currentDifficulty = computeDifficulty({ distance, runningTime });
-
-    // -- Lane switching --
-    handleLaneSwitch(dt);
-
-    // -- Jump --
-    handleJump(dt);
-
-    // -- Spawn & recycle objects --
-    spawnCooldown -= dt;
-    if (spawnCooldown <= 0) {
-      spawnObjects();
-      // The reset value is sourced from the dynamic-difficulty
-      // snapshot rather than the previous hard-coded 0.25: at
-      // higher difficulty the spawn loop ticks faster (down to
-      // SPAWN_COOLDOWN_MIN), at level 0 it matches the legacy
-      // 0.25 s cadence exactly.
-      spawnCooldown = currentDifficulty.spawnCooldownSeconds;
-    }
-    // Oncoming vehicles actively drive toward the player in addition to
-    // the world scroll. Mutate obj.z here (rather than later in the
-    // updateObjectVisuals step) so the same value is consumed by
-    // recycleWorldObjects, updateObjectVisuals and handleCollisions —
-    // keeping a single source of truth for each object's road-space Z.
-    // The current frame's enemy-speed multiplier comes from
-    // `currentDifficulty.enemySpeedMultiplier` (≥ 1) so all active
-    // vehicles feel the difficulty ramp in real time, not just the
-    // vehicles spawned this frame.
-    advanceOncomingVehicles(dt, currentDifficulty.enemySpeedMultiplier);
-    recycleWorldObjects();
-
-    // -- Update road --
-    updateRoad();
-
-    // -- Update object visual positions --
-    updateObjectVisuals();
-
-    // -- Collision detection (every N frames, spread cost) --
-    frameCount++;
-    if (frameCount % COLLISION_CHECK_MOD === 0) {
-      handleCollisions();
-    }
-
-    // -- Update vehicle --
-    updateVehicleTransform(dt);
-
-    // -- Update camera --
-    updateCamera(forwardStep, dt);
-
-    // -- Update particles --
-    updateParticles(dt);
-
-    // -- Update scenery parallax --
-    if (sceneryGroup) {
-      sceneryGroup.position.z = scrollOffset * 0.15;
-    }
-    // Apply parallax to staticGroup (mountains/hills InstancedMeshes)
-    if (staticGroup) {
-      staticGroup.position.z = scrollOffset * 0.15;
-    }
-
-    // -- Engine hum pitch modulation --
-    if (engineHum && audioCtx) {
-      try {
-        // Map PLAYER_SPEED (22) to frequency range 80-400Hz using speedFactor
-        const speedFactor = Math.abs(forwardStep) / Math.max(dt, 0.001);
-        const freq = 80 + Math.min(speedFactor / PLAYER_SPEED, 1) * 320;
-        engineHum.oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime);
-      } catch (e) {
-        console.warn('[RacingGame] engine hum modulation error:', e);
-      }
-    }
-
-    // -- Wind noise filter modulation --
-    if (windNoise && audioCtx) {
-      try {
-        updateWindNoiseFilter(windNoise, Math.abs(forwardStep) / Math.max(dt, 0.001));
-        updateWindNoiseGain(windNoise, Math.abs(forwardStep) / Math.max(dt, 0.001));
-      } catch (e) {
-        console.warn('[RacingGame] wind noise modulation error:', e);
-      }
-    }
-
-    // -- Game over check --
-    if (health <= 0 && !gameOverHandled) {
-      gameState = 'gameover';
-      gameOverHandled = true;
-      if (engineHum && audioCtx) {
-        try {
-          stopEngineHum(engineHum, 0.5);
-        } catch (e) {
-          console.warn('[RacingGame] stop engine hum error:', e);
-        }
-        engineHum = null;
-      }
-      if (audioCtx) {
-        try { playGameOverSound(audioCtx); } catch (e) {
-          console.warn('[RacingGame] play game over sound error:', e);
-        }
-      }
-    }
-  }
-
-  /* ===================================================================
-     Restart
-     =================================================================== */
-  function restartGame() {
-    // Reset game state
-    health = MAX_HEALTH;
-    distance = 0;
-    displayHealth = MAX_HEALTH;
-    displayDistance = 0;
-    displayScore = 0;
-    displaySpeed = 0;
-    showOncomingWarning = false;
-    gameState = 'playing';
-    gameOverHandled = false;
-    scrollOffset = 0;
-    runningTime = 0;
-    frameCount = 0;
-    spawnCooldown = 0;
-    // Reset the dynamic-difficulty snapshot to a level-0 baseline
-    // so the new run starts at the legacy "easy" pacing rather
-    // than inheriting a level-N snapshot from the previous run.
-    currentDifficulty = computeDifficulty({ distance: 0, runningTime: 0 });
-
-    // Reset camera shake
-    cameraShake = { duration: 0, intensity: 0 };
-    wasJumping = false;
-
-    // Reset player
-    currentLane = 0;
-    targetLane = 0;
-    laneVisualX = 0;
-    laneSwitchProgress = 1;
-    currentLaneSwitchTilt = 0;
-    currentCurveBank = 0;
-    playerY = 0;
-    isJumping = false;
-    jumpVelocity = 0;
-
-    // Clean up existing objects
-    objectMeshMap.forEach((entry) => {
-      if (entry && entry.mesh) {
-        objectsGroup.remove(entry.mesh);
-        disposeMeshTree(entry.mesh);
-      }
-    });
-    objectMeshMap = new Map();
-    objectDescriptors = [];
-
-    // Clean up existing road
-    while (roadGroup.children.length > 0) {
-      const child = roadGroup.children[0];
-      if (child.isMesh) {
-        try { child.geometry.dispose(); } catch {}
-        // The shoulder and surface materials are shared across every
-        // shoulder/surface mesh — disposing either on the first segment
-        // recycle would leave every other mesh referencing a disposed
-        // GPU resource. Both shared materials are kept alive across
-        // restarts and released exactly once in `onDestroy`. Lane line
-        // materials are per-segment MeshBasicMaterial instances and
-        // are safe to dispose normally.
-        const isSharedShoulder = shoulderMaterial
-          && (child.material === shoulderMaterial
-            || (Array.isArray(child.material)
-              && child.material.indexOf(shoulderMaterial) !== -1));
-        const isSharedSurface = surfaceMaterial
-          && (child.material === surfaceMaterial
-            || (Array.isArray(child.material)
-              && child.material.indexOf(surfaceMaterial) !== -1));
-        if (!isSharedShoulder && !isSharedSurface) {
-          if (Array.isArray(child.material)) {
-            child.material.forEach((m) => { try { m.dispose(); } catch {} });
-          } else if (child.material) {
-            try { child.material.dispose(); } catch {}
-          }
-        }
-      }
-      roadGroup.remove(child);
-    }
-    roadTileData = [];
-
-    // Clean up particles
-    cleanupParticles();
-
-    // Explicitly remove InstancedMesh references from roadGroup before clearing disposables
-    if (trunkMesh) roadGroup.remove(trunkMesh);
-    if (foliageMesh) roadGroup.remove(foliageMesh);
-    if (decoPoleMesh) roadGroup.remove(decoPoleMesh);
-    if (decoHeadMesh) roadGroup.remove(decoHeadMesh);
-    if (decoUtilityPoleMesh) roadGroup.remove(decoUtilityPoleMesh);
-    if (decoFencePostMesh) roadGroup.remove(decoFencePostMesh);
-    if (decoFenceBarMesh) roadGroup.remove(decoFenceBarMesh);
-
-    // Clear decoration disposables (trees, lamps, poles, fences) before recreating
-    // These are recreated on restart and should not persist in disposables
-    // Keep shared materials: shoulderMaterial, surfaceMaterial, grassMaterial
-    // Keep shared geometries: grassGeometry
-    const sharedMats = new Set([shoulderMaterial, surfaceMaterial, grassMaterial]);
-    const sharedGeos = new Set([grassGeometry]);
-    // Dispose decoration geometries and materials, keep shared ones
-    const decorGeos = disposables.geometries.splice(0);
-    const decorMats = disposables.materials.splice(0);
-    for (const g of decorGeos) {
-      if (!sharedGeos.has(g)) { try { g.dispose(); } catch {} }
-    }
-    for (const m of decorMats) {
-      if (!sharedMats.has(m)) { try { m.dispose(); } catch {} }
-    }
-
-    // Null old InstancedMesh references before recreating (avoid dangling refs)
-    trunkMesh = null;
-    foliageMesh = null;
-    decoPoleMesh = null;
-    decoHeadMesh = null;
-    decoUtilityPoleMesh = null;
-    decoFencePostMesh = null;
-    decoFenceBarMesh = null;
-    treesData = [];
-    decoData = [];
-
-    // Re-initialise road and vehicle position
-    roadSegments = generateSegments(0, SEGMENTS_AHEAD);
-    roadSegments.forEach((seg) => {
-      createContinuousRoadSegment(seg, asphaltTextures);
-    });
-    createRoadsideTrees();
-    createRoadsideDecorations();
-
-    vehicle.position.set(0, ROAD_Y, 0);
-    vehicle.rotation.set(0, 0, 0);
-
-    // Stop and restart wind noise
-    if (windNoise) {
-      try { stopWindNoise(windNoise, 0.1); } catch {}
-      windNoise = null;
-    }
-    if (audioCtx) {
-      try {
-        windNoise = createWindNoise(audioCtx);
-      } catch {}
-    }
-
-    // Restart engine hum
-    if (engineHum && audioCtx) {
-      try { stopEngineHum(engineHum, 0.1); } catch {}
-      engineHum = null;
-    }
-    if (audioCtx) {
-      try {
-        engineHum = startEngineHum(audioCtx);
-      } catch {}
-    }
-  }
-
-  /* ===================================================================
-     Start / Menu
-     =================================================================== */
-  function startGame() {
-    initAudio();
-    if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume();
-    }
-    if (audioCtx && !windNoise) {
-      windNoise = createWindNoise(audioCtx);
-    }
-    gameState = 'playing';
-  }
-
-  function triggerCollisionEffect(position, desc) {
-    if (desc && desc.type === OBJECT_TYPES.ONCOMING_VEHICLE) {
-      // Oncoming vehicle: metal sparks + orange/yellow fire particles
-      createParticleBurst(position, 0xcccccc, 10); // metallic grey debris
-      createParticleBurst(position, 0xffaa22, 8);  // orange/yellow fire sparks
-    } else {
-      // Normal obstacle: red particles
-      createParticleBurst(position, 0xff5533, PARTICLE_COUNT_PER_BURST);
-    }
-    showFlash = false;
-    flashColor = 'rgba(255, 60, 40, 0.35)';
-    flashKey++;
-    showFlash = true;
-    triggerShake(0.3, 0.15);
-  }
-
-  function triggerPickupEffect(position) {
-    createParticleBurst(position, 0x44ff44, PARTICLE_COUNT_PER_BURST);
-    createGreenSpiralParticles(position);
-    showFlash = false;
-    flashColor = 'rgba(50, 255, 70, 0.25)';
-    flashKey++;
-    showFlash = true;
-  }
-
-  /* ===================================================================
-     Lane Switching
-     =================================================================== */
-  function handleLaneSwitch(dt) {
-    if (laneSwitchProgress < 1) {
-      laneSwitchProgress += dt / LANE_SWITCH_DURATION;
-      if (laneSwitchProgress >= 1) {
-        laneSwitchProgress = 1;
-        currentLane = targetLane;
-      }
-      const t = laneSwitchProgress;
-      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-      laneVisualX = laneSwitchStartX + (laneSwitchEndX - laneSwitchStartX) * eased;
-    }
-  }
-
-  let laneSwitchStartX = 0;
-  let laneSwitchEndX = 0;
-
-  function startLaneSwitch(direction) {
-    if (gameState === 'gameover') return;
-    const newLane = clampLane(currentLane + direction);
-    if (newLane === currentLane) return;
-
-    targetLane = newLane;
-    laneSwitchStartX = laneVisualX;
-    laneSwitchEndX = getLaneX(targetLane);
-    laneSwitchProgress = 0;
-
-    if (audioCtx) playLaneSwitchSound(audioCtx);
-    if (scene && vehicle) {
-      createParticleBurst(vehicle.position.clone(), 0x88ccff, 8);
-    }
-  }
-
-  /* ===================================================================
-     Jump
-     =================================================================== */
-  function handleJump(dt) {
-    if (isJumping) {
-      jumpVelocity += GRAVITY * dt;
-      playerY += jumpVelocity * dt;
-      if (playerY <= 0) {
-        playerY = 0;
-        const justLanded = wasJumping;
-        isJumping = false;
-        jumpVelocity = 0;
-        // Landing shockwave + camera shake
-        if (justLanded && scene && vehicle) {
-          const pos = vehicle.position.clone();
-          pos.y = ROAD_Y;
-          createShockwaveRing(pos);
-          triggerShake(0.2, 0.12);
-        }
-      }
-    }
-    wasJumping = isJumping;
-  }
-
-  function startJump() {
-    if (gameState === 'gameover') return;
-    if (isJumping) return;
-    isJumping = true;
-    jumpVelocity = JUMP_FORCE;
-    if (audioCtx) playJumpSound(audioCtx);
-    if (scene && vehicle) {
-      // Jump flame/exhaust particles (orange/yellow, upward burst)
-      const pos = vehicle.position.clone();
-      pos.y = ROAD_Y;
-      createParticleBurst(pos, 0xff8800, 14, true); // orange/yellow flame
-      createParticleBurst(pos, 0xffcc00, 6, true);  // yellow accent
-    }
-    triggerShake(0.15, 0.08);
-  }
-
-  /* ===================================================================
-     Collision Detection
-     =================================================================== */
-  function handleCollisions() {
-    if (gameState === 'gameover') return;
-
-    for (let i = objectDescriptors.length - 1; i >= 0; i--) {
-      const obj = objectDescriptors[i];
-      if (!obj.active) continue;
-
-      // Convert to world-space Z for collision check
-      // Player is at world Z = 0, object is at world Z = obj.z + scrollOffset
-      const objWorldZ = obj.z + scrollOffset;
-
-      // checkCollision compares player.z to object.z
-      // We pass player at world z=0 and object at its world Z
-      const collisionPlayer = { lane: currentLane, z: 0, y: playerY };
-      const collisionObj = { ...obj, z: objWorldZ };
-
-      if (checkCollision(collisionPlayer, collisionObj)) {
-        obj.active = false;
-        const result = applyCollision(health, obj);
-
-        if (result.healthDelta < 0) {
-          if (audioCtx) playCollisionSound(audioCtx);
-          if (vehicle) triggerCollisionEffect(vehicle.position.clone(), obj);
-        } else if (result.healthDelta > 0) {
-          if (audioCtx) playPickupSound(audioCtx);
-          if (vehicle) triggerPickupEffect(vehicle.position.clone());
-        }
-
-        health = result.health;
-
-        // Remove visual
-        const entry = objectMeshMap.get(obj);
-        if (entry) {
-          objectsGroup.remove(entry.mesh);
-          disposeMeshTree(entry.mesh);
-          objectMeshMap.delete(obj);
-        }
-
-        objectDescriptors.splice(i, 1);
-
-        if (health <= 0) break;
-      }
-    }
-  }
-
-  /* ===================================================================
-     Vehicle Visual Transform
-     =================================================================== */
-  function updateVehicleTransform(dt) {
-    if (!vehicle) return;
-
-    // Road offset at the player's road-space Z position.
-    // As scrollOffset increases (player moves forward), playerRoadZ
-    // decreases, sampling the noise function at progressively more
-    // negative Z — producing the illusion of forward travel along the
-    // continuous Perlin noise road.
-    const playerRoadZ = -scrollOffset;
-    const offset = getRoadOffsetAt(roadSegments, playerRoadZ);
-
-    const targetX = offset.curveOffset + laneVisualX;
-    const targetY = ROAD_Y + offset.heightOffset + playerY;
-
-    // Fast convergence on the smooth noise road centreline.
-    // The Perlin noise is low-frequency (0.006 Hz, 2 octaves) and the
-    // lateral amplitude is amplified by MAX_CURVE_OFFSET = 5.0, so
-    // curveOffset changes gradually but produces visibly larger
-    // swings than before — no jitter from direct tracking.
-    vehicle.position.x += (targetX - vehicle.position.x) * VEHICLE_SMOOTH_X;
-    vehicle.position.y += (targetY - vehicle.position.y) * VEHICLE_SMOOTH_Y;
-    vehicle.position.z = 0;
-
-    // -- Z-axis tilt: lane-switch component ----------------------------
-    // While a lane switch is in progress, snap directly to the
-    // animation curve value (matches the original behaviour of
-    // assigning rotation.z to the computed tilt each frame).
-    // After the switch completes, the previous tilt decays
-    // exponentially toward 0 — this is exactly the original
-    // `rotation.z *= 0.9` behaviour, just expressed on a separate
-    // state variable so the curve-bank component below is not
-    // pulled along with the decay.
-    let targetLaneSwitchTilt = 0;
-    if (laneSwitchProgress < 1) {
-      const laneDelta = targetLane - currentLane;
-      targetLaneSwitchTilt = -laneDelta * 0.12 * (1 - Math.abs(laneSwitchProgress - 0.5) * 2);
-      currentLaneSwitchTilt = targetLaneSwitchTilt;
-    } else {
-      // Decay rate 0.1 ⇒ 90% retained per frame, matches the
-      // original `*= 0.9` exponential decay toward 0.
-      currentLaneSwitchTilt += (0 - currentLaneSwitchTilt) * 0.1;
-    }
-
-    // -- Z-axis tilt: curve-bank component -----------------------------
-    // Sample the curveOffset change a few units ahead of the player
-    // and lerp the smoothed bank tilt toward the target by
-    // VEHICLE_BANK_SMOOTH each frame. Unlike the previous
-    // implementation (`rotation.z += delta`), this lerp converges
-    // to the current target without accumulating across frames: in
-    // a sustained curve the bank eases toward `targetCurveBank` and
-    // stays there; when the road straightens, `targetCurveBank`
-    // approaches 0 and the smoothed bank eases back to flat. No
-    // accumulation, no runaway tilt.
-    const aheadRoadZ = playerRoadZ - VEHICLE_BANK_LOOK_AHEAD;
-    const aheadOffset = getRoadOffsetAt(roadSegments, aheadRoadZ);
-    const curveDelta = aheadOffset.curveOffset - offset.curveOffset;
-    const targetCurveBank = -curveDelta * VEHICLE_BANK_FACTOR;
-    currentCurveBank += (targetCurveBank - currentCurveBank) * VEHICLE_BANK_SMOOTH;
-
-    // -- Z-axis tilt: compose ------------------------------------------
-    // Set rotation.z fresh each frame as the sum of the two
-    // independently-tracked components. No `+=`, no cross-frame
-    // accumulation.
-    vehicle.rotation.z = currentLaneSwitchTilt + currentCurveBank;
-
-    // Tilt during jump
-    if (isJumping) {
-      vehicle.rotation.x = Math.max(-0.3, Math.min(0.3, jumpVelocity * 0.02));
-    } else {
-      vehicle.rotation.x *= 0.9;
-    }
-
-    // -- Wheel rotation (dynamic, based on speed) --
-    const wheelRotationDelta = PLAYER_SPEED * dt * 4.0;
-    for (const wheel of wheels) {
-      wheel.rotation.z += wheelRotationDelta;
-    }
-  }
-
-  /* ===================================================================
-     Camera
-     =================================================================== */
-  function updateCamera(forwardStep, dt) {
-    if (!camera) return;
-
-    // Look-ahead point: about 15 world units ahead on the road
-    const lookRoadZ = -scrollOffset - 15;
-    const lookOffset = getRoadOffsetAt(roadSegments, lookRoadZ);
-
-    // Smoothly interpolate the camera toward the road-following position,
-    // rather than snapping instantaneously.  CAMERA_SMOOTH = 0.15 gives
-    // a ~0.3 s convergence — fast enough to avoid perceptible lag, slow
-    // enough to glide gently into curves.
-    const targetCamX = lookOffset.curveOffset + laneVisualX * CAMERA_LANE_FACTOR;
-    const targetCamY = ROAD_Y + lookOffset.heightOffset + 6;
-
-    camera.position.x += (targetCamX - camera.position.x) * CAMERA_SMOOTH;
-    camera.position.y += (targetCamY - camera.position.y) * CAMERA_SMOOTH;
-    camera.position.z = 12;
-
-    const lookTarget = new THREE.Vector3(
-      lookOffset.curveOffset,
-      ROAD_Y + lookOffset.heightOffset + 1,
-      -10
-    );
-    camera.lookAt(lookTarget);
-
-    // -- Dynamic FOV based on speed --
-    const speedFactor = forwardStep / Math.max(dt, 0.001);
-    const targetFov = 60 + Math.min(Math.abs(speedFactor) / PLAYER_SPEED, 1) * 12;
-    camera.fov += (targetFov - camera.fov) * 0.08;
-    camera.updateProjectionMatrix();
-
-    // -- Camera shake --
-    if (cameraShake.duration > 0) {
-      cameraShake.duration -= dt;
-      const shakeX = (Math.random() - 0.5) * 2 * cameraShake.intensity;
-      const shakeY = (Math.random() - 0.5) * 2 * cameraShake.intensity;
-      camera.position.x += shakeX;
-      camera.position.y += shakeY;
-      cameraShake.intensity *= 0.92;
-      if (cameraShake.duration <= 0) {
-        cameraShake.intensity = 0;
-      }
-    }
-
-    // Curve banking: tilt the camera around its forward axis based on
-    // the lateral curveOffset change a short distance ahead of the
-    // player. When the road ahead bends to the right (curveOffset
-    // increasing as Z goes more negative), curveDelta is positive and
-    // we rotate the camera so its top tilts to the right, giving the
-    // player a visual cue that they are entering / continuing a
-    // curve. On straight sections curveDelta is ≈ 0 so the camera
-    // stays level, making the contrast between straights and curves
-    // obvious. The CAMERA_BANK_FACTOR keeps the roll moderate — a
-    // large enough swing to be felt, small enough that it does not
-    // disorient the player.
-    const playerRoadZ = -scrollOffset;
-    const aheadRoadZ = playerRoadZ - CAMERA_BANK_LOOK_AHEAD;
-    const playerOffset = getRoadOffsetAt(roadSegments, playerRoadZ);
-    const aheadOffset = getRoadOffsetAt(roadSegments, aheadRoadZ);
-    const curveDelta = aheadOffset.curveOffset - playerOffset.curveOffset;
-    // Negative factor: rotateZ(bankAngle) with negative angle tilts
-    // the camera's up vector to the right (camera-local Z = back
-    // axis, so a negative rotation around it leans the top right).
-    camera.rotateZ(-curveDelta * CAMERA_BANK_FACTOR);
-  }
-
-  // Expose trigger functions for external use
-  function triggerShake(duration, intensity) {
-    cameraShake.duration = duration;
-    cameraShake.intensity = intensity;
-  }
-
-  /* ===================================================================
-     Particles — Burst Effects
-     =================================================================== */
-  function createParticleBurst(position, colorHex, count = PARTICLE_COUNT_PER_BURST, upwardFlame = false) {
-    const positions = new Float32Array(count * 3);
-    const velocities = [];
-
-    for (let i = 0; i < count; i++) {
-      positions[i * 3] = position.x + (Math.random() - 0.5) * 0.3;
-      positions[i * 3 + 1] = position.y + (Math.random() - 0.5) * 0.3;
-      positions[i * 3 + 2] = position.z + (Math.random() - 0.5) * 0.3;
-      if (upwardFlame) {
-        // Upward burst with random horizontal spread for flame effect
-        const angle = Math.random() * Math.PI * 2;
-        const spread = 0.5 + Math.random() * 1.5;
-        velocities.push({
-          x: Math.cos(angle) * spread,
-          y: 2 + Math.random() * 2.5,
-          z: Math.sin(angle) * spread,
-        });
-      } else {
-        velocities.push({
-          x: (Math.random() - 0.5) * PARTICLE_SPEED,
-          y: Math.random() * PARTICLE_SPEED * 0.6 + 0.3,
-          z: (Math.random() - 0.5) * PARTICLE_SPEED,
-        });
-      }
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-    const material = new THREE.PointsMaterial({
-      color: colorHex,
-      size: 0.25,
-      transparent: true,
-      opacity: 1.0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      sizeAttenuation: true,
-    });
-
-    const points = new THREE.Points(geometry, material);
-    if (scene) scene.add(points);
-
-    particleBursts.push({
-      velocities,
-      geometry,
-      material,
-      points,
-      count,
-      lifetime: 0,
-      maxLifetime: PARTICLE_LIFETIME,
-      upwardFlame,
-    });
-
-    return points;
-  }
-
-  function updateParticles(dt) {
-    for (let i = particleBursts.length - 1; i >= 0; i--) {
-      const burst = particleBursts[i];
-      burst.lifetime += dt;
-      const progress = burst.lifetime / burst.maxLifetime;
-
-      if (progress >= 1) {
-        if (scene) scene.remove(burst.points);
-        burst.geometry.dispose();
-        burst.material.dispose();
-        particleBursts.splice(i, 1);
-        continue;
-      }
-
-      const pos = burst.geometry.attributes.position.array;
-      for (let j = 0; j < burst.count; j++) {
-        pos[j * 3] += burst.velocities[j].x * dt;
-        pos[j * 3 + 1] += burst.velocities[j].y * dt;
-        pos[j * 3 + 2] += burst.velocities[j].z * dt;
-        // Flame particles: decelerate upward velocity gently
-        // Regular particles: apply gravity
-        if (burst.upwardFlame) {
-          burst.velocities[j].y -= 2 * dt;
-        } else {
-          burst.velocities[j].y += -8 * dt;
-        }
-      }
-      burst.geometry.attributes.position.needsUpdate = true;
-
-      burst.material.opacity = Math.max(0, 1 - progress);
-      const scale = 1 + progress * 0.5;
-      burst.points.scale.set(scale, scale, scale);
-    }
-
-    // Update shockwave rings
-    for (let i = shockwaves.length - 1; i >= 0; i--) {
-      const sw = shockwaves[i];
-      sw.lifetime += dt;
-      const progress = sw.lifetime / sw.maxLifetime;
-
-      if (progress >= 1) {
-        if (scene) scene.remove(sw.points);
-        sw.geometry.dispose();
-        sw.material.dispose();
-        shockwaves.splice(i, 1);
-        continue;
-      }
-
-      const pos = sw.geometry.attributes.position.array;
-      for (let j = 0; j < sw.count; j++) {
-        pos[j * 3] += sw.velocities[j].x * dt;
-        pos[j * 3 + 1] += sw.velocities[j].y * dt;
-        pos[j * 3 + 2] += sw.velocities[j].z * dt;
-      }
-      sw.geometry.attributes.position.needsUpdate = true;
-
-      sw.material.opacity = Math.max(0, 1 - progress);
-      const scale = 1 + progress * 3;
-      sw.points.scale.set(scale, 1, scale);
-    }
-
-    // Update spiral particles (repair kit pickup)
-    for (let i = spiralParticles.length - 1; i >= 0; i--) {
-      const sp = spiralParticles[i];
-      sp.lifetime += dt;
-      const progress = sp.lifetime / sp.maxLifetime;
-
-      if (progress >= 1) {
-        if (scene) scene.remove(sp.points);
-        sp.geometry.dispose();
-        sp.material.dispose();
-        spiralParticles.splice(i, 1);
-        continue;
-      }
-
-      const pos = sp.geometry.attributes.position.array;
-      for (let j = 0; j < sp.count; j++) {
-        const v = sp.velocities[j];
-        v.angle += v.angularSpeed * dt;
-        pos[j * 3] += Math.cos(v.angle) * v.radius * dt * 0.5;
-        pos[j * 3 + 1] += v.riseSpeed * dt;
-        pos[j * 3 + 2] += Math.sin(v.angle) * v.radius * dt * 0.5;
-      }
-      sp.geometry.attributes.position.needsUpdate = true;
-
-      sp.material.opacity = Math.max(0, 1 - progress);
-    }
-  }
-
-  function cleanupParticles() {
-    for (const burst of particleBursts) {
-      if (scene) scene.remove(burst.points);
-      burst.geometry.dispose();
-      burst.material.dispose();
-    }
-    particleBursts = [];
-    for (const sw of shockwaves) {
-      if (scene) scene.remove(sw.points);
-      sw.geometry.dispose();
-      sw.material.dispose();
-    }
-    shockwaves = [];
-    for (const sp of spiralParticles) {
-      if (scene) scene.remove(sp.points);
-      sp.geometry.dispose();
-      sp.material.dispose();
-    }
-    spiralParticles = [];
-  }
-
-  /**
-   * Shockwave ring: particles arranged in a circle, expanding outward and fading.
-   */
-  function createShockwaveRing(position) {
-    const count = 24;
-    const positions = new Float32Array(count * 3);
-    const velocities = [];
-    const initialRadius = 0.15;
-
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2;
-      positions[i * 3] = position.x + Math.cos(angle) * initialRadius;
-      positions[i * 3 + 1] = position.y + 0.05;
-      positions[i * 3 + 2] = position.z + Math.sin(angle) * initialRadius;
-      const expandSpeed = 2.5;
-      velocities.push({
-        x: Math.cos(angle) * expandSpeed,
-        y: 0.1,
-        z: Math.sin(angle) * expandSpeed,
-      });
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.PointsMaterial({
-      color: 0xffcc88,
-      size: 0.18,
-      transparent: true,
-      opacity: 1.0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      sizeAttenuation: true,
-    });
-    const points = new THREE.Points(geometry, material);
-    if (scene) scene.add(points);
-
-    shockwaves.push({ velocities, geometry, material, points, count, lifetime: 0, maxLifetime: 0.6 });
-    return points;
-  }
-
-  /**
-   * Green spiral particles for repair kit pickup: particles rotating upward around Y axis.
-   */
-  function createGreenSpiralParticles(position) {
-    const count = 16;
-    const positions = new Float32Array(count * 3);
-    const velocities = [];
-
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2;
-      const radius = 0.2 + Math.random() * 0.1;
-      positions[i * 3] = position.x + Math.cos(angle) * radius;
-      positions[i * 3 + 1] = position.y + 0.3;
-      positions[i * 3 + 2] = position.z + Math.sin(angle) * radius;
-      // Spiral upward with angular velocity
-      velocities.push({
-        angle,
-        radius,
-        angularSpeed: 4 + Math.random() * 2,
-        riseSpeed: 1.5 + Math.random() * 1.0,
-      });
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.PointsMaterial({
-      color: 0x44ff44,
-      size: 0.2,
-      transparent: true,
-      opacity: 1.0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      sizeAttenuation: true,
-    });
-    const points = new THREE.Points(geometry, material);
-    if (scene) scene.add(points);
-
-    spiralParticles.push({ velocities, geometry, material, points, count, lifetime: 0, maxLifetime: 0.7 });
-    return points;
-  }
-
-  /* ===================================================================
-     Audio Init
-     =================================================================== */
-  function initAudio() {
-    if (audioCtx) return;
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      engineHum = startEngineHum(audioCtx);
-      windNoise = createWindNoise(audioCtx);
-    } catch (e) {
-      console.warn('[RacingGame] audio init error:', e);
-    }
-  }
-
-  /* ===================================================================
-     Input
-     =================================================================== */
-  function onKeyDown(e) {
-    if (gameState === 'gameover') return;
-
-    if (gameState === 'menu') {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
-        e.preventDefault();
-      }
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        startGame();
-      }
-      return;
-    }
-
-    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) {
-      e.preventDefault();
-    }
-
-    // Init audio on first interaction
-    initAudio();
-
-    // Lane switching (only when current switch is complete)
-    if (laneSwitchProgress >= 1) {
-      if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') {
-        startLaneSwitch(-1);
-      } else if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') {
-        startLaneSwitch(1);
-      }
-    }
-
-    if (e.key === ' ' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (!isJumping) startJump();
-    }
-  }
-
-  function onKeyUp(e) {
-    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) {
-      e.preventDefault();
-    }
-  }
-
-  /* ===================================================================
-     Resize
-     =================================================================== */
-  function onResize() {
-    if (!containerEl || !camera || !renderer) return;
-    const rect = containerEl.getBoundingClientRect();
-    const w = rect.width || 800;
-    const h = rect.height || 500;
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    renderer.setSize(w, h);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    if (composer) {
-      composer.setSize(w, h);
-    }
-  }
-
-  /* ===================================================================
-     Animation Loop
-     =================================================================== */
-  function animate(time) {
-    animationId = requestAnimationFrame(animate);
-
-    if (!prevTime) {
-      prevTime = time;
-      return;
-    }
-
-    const deltaTime = (time - prevTime) / 1000;
-    prevTime = time;
-
-    if (gameState === 'playing') {
-      updateGame(deltaTime);
-    }
-
-    if (renderer && scene && camera) {
-      // Update shadow map only every N frames for performance
-      if (frameCount % SHADOW_UPDATE_INTERVAL === 0) {
-        renderer.shadowMap.needsUpdate = true;
-      }
-      // Use post-processing composer for bloom/glow
-      if (composer) {
-        composer.render();
-      } else {
-        renderer.render(scene, camera);
-      }
-    }
-  }
+  const roadExternalRefs = {
+    get roadGroup() { return roadGroup; },
+    get roadSegments() { return roadSegments; },
+    get roadTileData() { return roadTileData; },
+    get scrollOffset() { return scrollOffset; },
+    get renderer() { return renderer; },
+    getRoadSegments: () => roadSegments,
+    setRoadSegments: (s) => { roadSegments = s; },
+    getScrollOffset: () => scrollOffset,
+    setScrollOffset: (s) => { scrollOffset = s; },
+  };
+
+  const decoExternalRefs = {
+    get roadGroup() { return roadGroup; },
+    get roadSegments() { return roadSegments; },
+    get scrollOffset() { return scrollOffset; },
+    getRoadSegments: () => roadSegments,
+    getScrollOffset: () => scrollOffset,
+  };
 
   /* ===================================================================
      Lifecycle
      =================================================================== */
   onMount(async () => {
     await tick();
-    if (containerEl) {
-      initScene();
-      window.addEventListener('keydown', onKeyDown);
-      window.addEventListener('keyup', onKeyUp);
+    if (!containerEl) return;
 
-      resizeObserver = new ResizeObserver(onResize);
-      resizeObserver.observe(containerEl);
+    // -- Set up keyboard listeners --
+    inputAPI = createInputController({
+      onLaneLeft: () => {
+        if (gameState !== 'playing') return;
+        const state = vehicleAPI ? vehicleAPI.getState() : {};
+        if ((state.laneSwitchProgress ?? 1) >= 1 && vehicleAPI) {
+          vehicleAPI.startLaneSwitch(-1);
+        }
+      },
+      onLaneRight: () => {
+        if (gameState !== 'playing') return;
+        const state = vehicleAPI ? vehicleAPI.getState() : {};
+        if ((state.laneSwitchProgress ?? 1) >= 1 && vehicleAPI) {
+          vehicleAPI.startLaneSwitch(1);
+        }
+      },
+      onJump: () => {
+        if (gameState !== 'playing') return;
+        const state = vehicleAPI ? vehicleAPI.getState() : {};
+        if (!state.isJumping && vehicleAPI) {
+          vehicleAPI.startJump();
+        }
+      },
+      onEnter: () => {
+        if (gameState === 'menu') {
+          if (gameLoopAPI) gameLoopAPI.start();
+        }
+      },
+    });
+
+    window.addEventListener('keydown', inputAPI.onKeyDown);
+    window.addEventListener('keyup', inputAPI.onKeyUp);
+
+    // -- Set up ResizeObserver --
+    resizeObserver = new ResizeObserver(onResize);
+    resizeObserver.observe(containerEl);
+
+    // -- Initialise environment --
+    const rect = containerEl.getBoundingClientRect();
+    const w = rect.width || 800;
+    const h = rect.height || 500;
+
+    try {
+      const env = await createEnvironment({ containerEl });
+      if (!env.scene) {
+        webglError = true;
+        loading = false;
+        return;
+      }
+
+      scene = env.scene;
+      camera = env.camera;
+      renderer = env.renderer;
+      staticGroup = env.staticGroup;
+      grassGroup = env.grassGroup;
+      envDispose = env.dispose;
+
+      // -- Road groups --
+      roadGroup = new THREE.Group();
+      scene.add(roadGroup);
+      objectsGroup = new THREE.Group();
+      scene.add(objectsGroup);
+
+      // -- Asphalt textures (created once, reused across all restarts) --
+      asphaltTextures = createAsphaltTextures();
+
+      // -- Effects module (needs scene) --
+      effectsAPI = createEffects({ scene });
+
+      // -- Vehicle module (created early; createVehicle called after effects setup) --
+      vehicleAPI = createPlayerVehicle({
+        scene,
+        createParticleBurst: null,
+        createShockwaveRing: null,
+        triggerShake: null,
+        onCollisionEffect: null,
+        onPickupEffect: null,
+      });
+
+      // -- World objects module --
+      worldObjectsAPI = createWorldObjects({ scene, objectsGroup });
+
+      // -- Road system --
+      createRoadSystem({ scene, roadGroup, asphaltTextures, externalRefs: roadExternalRefs });
+
+      // -- Decorations --
+      createDecorations({ scene, roadGroup, externalRefs: decoExternalRefs });
+
+      // -- Wire vehicle callbacks (needs effectsAPI) --
+      vehicleAPI._setCallbacks({
+        createParticleBurst: effectsAPI.createParticleBurst,
+        createShockwaveRing: effectsAPI.createShockwave,
+        triggerShake,
+        onCollisionEffect: triggerCollisionEffect,
+        onPickupEffect: triggerPickupEffect,
+      });
+
+      // -- Vehicle mesh (after effects callbacks are wired) --
+      vehicleAPI.createVehicle();
+
+      // -- Post-processing --
+      composer = new EffectComposer(renderer);
+      composer.addPass(new RenderPass(scene, camera));
+      bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.3, 0.2, 0.1);
+      composer.addPass(bloomPass);
+      composer.addPass(new OutputPass());
+
+      // -- HUD module --
+      hudAPI = createHud({
+        setDisplayHealth: (v) => { displayHealth = v; },
+        setDisplayDistance: (v) => { displayDistance = v; },
+        setDisplayScore: (v) => { displayScore = v; },
+        setDisplaySpeed: (v) => { displaySpeed = v; },
+        setShowOncomingWarning: (v) => { showOncomingWarning = v; },
+        setShowFlash: (v) => { showFlash = v; },
+        setFlashColor: (v) => { flashColor = v; },
+        setFlashKey: (v) => { flashKey = v; },
+      });
+
+      // -- Game loop (assembles all modules and drives the RAF loop) --
+      gameLoopAPI = createGameLoop({
+        containerEl,
+        modules: {
+          environment: { scene, camera, renderer, staticGroup, grassGroup },
+          road: { createRoadSystem, updateRoad, cleanupRoadForRestart, disposeRoadMaterials },
+          decorations: { createDecorations, updateDecorations, cleanupDecorationsForRestart, disposeDecorations },
+          vehicle: vehicleAPI,
+          worldObjects: worldObjectsAPI,
+          effects: effectsAPI,
+          input: inputAPI,
+          hud: hudAPI,
+          _roadGroup: roadGroup,
+          _objectsGroup: objectsGroup,
+          _composer: composer,
+        },
+        callbacks: {
+          onGameStateChange: (s) => { gameState = s; },
+          onGameOverHandled: () => { gameOverHandled = true; },
+          onHealthChange: (h) => { health = h; },
+          onDistanceChange: (d) => { distance = d; },
+          onScrollOffsetChange: (s) => { scrollOffset = s; },
+          onRunningTimeChange: (t) => { runningTime = t; },
+          onCameraShakeChange: (cs) => { cameraShake = cs; },
+          onRoadSegmentsChange: (segs) => { roadSegments = segs; },
+          onRoadTileDataChange: (data) => { roadTileData = data; },
+          onTreesDataChange: (d) => { treesData = d; },
+          onDecoDataChange: (d) => { decoData = d; },
+          onStaticGroupChange: (g) => { staticGroup = g; },
+          onLoadingChange: (v) => { loading = v; },
+          onWebglErrorChange: (v) => { webglError = v; },
+          onFrameCountChange: (c) => { frameCount = c; },
+        },
+      });
+
+      // Start the RAF animation loop
+      gameLoopAPI.init();
+
+    } catch (e) {
+      console.warn('[RacingGame] Scene init error:', e);
+      webglError = true;
+      loading = false;
     }
   });
 
@@ -2973,39 +325,39 @@
       animationId = null;
     }
 
-    // Remove event listeners
-    window.removeEventListener('keydown', onKeyDown);
-    window.removeEventListener('keyup', onKeyUp);
+    // Remove keyboard listeners
+    if (inputAPI) {
+      window.removeEventListener('keydown', inputAPI.onKeyDown);
+      window.removeEventListener('keyup', inputAPI.onKeyUp);
+    }
 
-    // Disconnect resize observer
+    // Disconnect ResizeObserver
     if (resizeObserver) {
       resizeObserver.disconnect();
       resizeObserver = null;
     }
 
-    // Stop engine hum
-    if (engineHum && audioCtx) {
-      try { stopEngineHum(engineHum, 0.2); } catch (e) {
-        console.warn('[RacingGame] stop engine hum on destroy error:', e);
-      }
-      engineHum = null;
-    }
-    if (windNoise) {
-      try { stopWindNoise(windNoise, 0.2); } catch (e) {
-        console.warn('[RacingGame] stop wind noise on destroy error:', e);
-      }
-      windNoise = null;
+    // Stop audio
+    stopEngineHumAudio(0.2);
+    stopWindNoiseAudio(0.2);
+    closeAudioContext();
+
+    // Dispose input module
+    if (inputAPI && inputAPI.dispose) inputAPI.dispose();
+
+    // Dispose effects
+    if (effectsAPI && effectsAPI.cleanup) effectsAPI.cleanup();
+
+    // Dispose vehicle
+    if (vehicleAPI && vehicleAPI.dispose) vehicleAPI.dispose();
+
+    // Dispose environment resources (sky sphere, grass plane, shared textures)
+    if (envDispose) {
+      try { envDispose(); } catch {}
+      envDispose = null;
     }
 
-    // Close audio context
-    if (audioCtx) {
-      try { audioCtx.close(); } catch (e) {
-        console.warn('[RacingGame] close audio context error:', e);
-      }
-      audioCtx = null;
-    }
-
-    // Dispose all Three.js resources
+    // Dispose all Three.js resources from scene objects via traversal
     if (scene) {
       scene.traverse((obj) => {
         if (obj.isMesh || obj.isPoints) {
@@ -3019,86 +371,98 @@
       });
     }
 
-    // Explicitly dispose grass GPU resources. The scene.traverse() loop
-    // above already covers them, but releasing the cached references up
-    // front prevents accidental retention if grassGroup is later detached
-    // from the scene (and makes the cleanup contract explicit).
-    if (grassGeometry) {
-      try { grassGeometry.dispose(); } catch {}
-      grassGeometry = null;
-    }
-    if (grassMaterial) {
-      try { grassMaterial.dispose(); } catch {}
-      grassMaterial = null;
-    }
-    // Dispose the shared shoulder material exactly once. The
-    // per-segment recycle path (`removeTileVisuals`) deliberately
-    // skips material disposal for shoulder meshes because every
-    // shoulder mesh shares this single instance — releasing it here
-    // (in step with `grassMaterial`) keeps the lifecycle balanced.
-    if (shoulderMaterial) {
-      try { shoulderMaterial.dispose(); } catch {}
-      shoulderMaterial = null;
-    }
-    if (surfaceMaterial) {
-      try { surfaceMaterial.dispose(); } catch {}
-      surfaceMaterial = null;
-    }
+    // Dispose shared road materials
+    disposeRoadMaterials();
 
-    // Dispose all tracked geometries and materials from disposables list
-    for (const geo of disposables.geometries) {
-      try { geo.dispose(); } catch {}
-    }
+    // Dispose decorations
+    disposeDecorations();
+
+    // Dispose tracked geometries, materials, textures
+    for (const geo of disposables.geometries) { try { geo.dispose(); } catch {} }
     disposables.geometries = [];
-
-    for (const mat of disposables.materials) {
-      try { mat.dispose(); } catch {}
-    }
+    for (const mat of disposables.materials) { try { mat.dispose(); } catch {} }
     disposables.materials = [];
-
-    // Dispose tracked textures (must be explicitly disposed per Three.js contract)
-    for (const tex of disposables.textures) {
-      try { tex.dispose(); } catch {}
-    }
+    for (const tex of disposables.textures) { try { tex.dispose(); } catch {} }
     disposables.textures = [];
 
+    // Dispose post-processing
     if (composer) {
       composer.dispose();
-      if (bloomPass) {
-        bloomPass.dispose();
-        bloomPass = null;
-      }
+      if (bloomPass) { bloomPass.dispose(); bloomPass = null; }
       composer = null;
     }
 
+    // Dispose renderer and remove its canvas from DOM
     if (renderer) {
       renderer.dispose();
       if (renderer.domElement && renderer.domElement.parentNode) {
         renderer.domElement.parentNode.removeChild(renderer.domElement);
       }
+      renderer = null;
     }
 
-    // Clean up particles
-    cleanupParticles();
-
-    // Null out refs
+    // Null out scene refs
     scene = null;
     camera = null;
-    renderer = null;
-    vehicle = null;
     roadGroup = null;
     objectsGroup = null;
-    sceneryGroup = null;
-    grassGroup = null;
     staticGroup = null;
-    grassGeometry = null;
-    grassMaterial = null;
-    shoulderMaterial = null;
+    grassGroup = null;
+
+    // Clear data arrays
     roadSegments = [];
     roadTileData = [];
-    objectDescriptors = [];
-    objectMeshMap = new Map();
+    treesData = [];
+    decoData = [];
   });
+
+  /* ===================================================================
+     Event handlers
+     =================================================================== */
+  function onResize() {
+    if (!containerEl || !camera || !renderer) return;
+    const rect = containerEl.getBoundingClientRect();
+    const w = rect.width || 800;
+    const h = rect.height || 500;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    if (composer) composer.setSize(w, h);
+  }
+
+  function triggerShake(duration, intensity) {
+    cameraShake = { duration, intensity };
+  }
+
+  function triggerCollisionEffect(position, desc) {
+    if (desc && desc.type === OBJECT_TYPES.ONCOMING_VEHICLE) {
+      if (effectsAPI) {
+        effectsAPI.createParticleBurst(position, 0xcccccc, 10);
+        effectsAPI.createParticleBurst(position, 0xffaa22, 8);
+      }
+    } else {
+      if (effectsAPI) effectsAPI.createParticleBurst(position, 0xff5533, 16);
+    }
+    if (hudAPI) hudAPI.flashCollision();
+    triggerShake(SHAKE_DURATION_COLLISION, SHAKE_INTENSITY_COLLISION);
+  }
+
+  function triggerPickupEffect(position) {
+    if (effectsAPI) {
+      effectsAPI.createParticleBurst(position, 0x44ff44, 16);
+      effectsAPI.createSpiralParticles(position);
+    }
+    if (hudAPI) hudAPI.flashPickup();
+  }
+
+  function handleStart() {
+    if (gameLoopAPI) gameLoopAPI.start();
+  }
+
+  function handleRestart() {
+    if (gameLoopAPI) gameLoopAPI.restart();
+  }
 </script>
 
 <!-- Template -->
@@ -3131,7 +495,7 @@
             <span>碰撞障碍物 -❤️ · 撞车 -❤️❤️ · 拾取修理包 +❤️</span>
           </div>
         </div>
-        <button class="start-btn" on:click={startGame}>🚗 开始游戏</button>
+        <button class="start-btn" on:click={handleStart}>🚗 开始游戏</button>
         <p class="menu-prompt">或按 Enter 键开始</p>
       </div>
     </div>
@@ -3165,7 +529,7 @@
         <div class="gameover-stats">
           行驶 {displayDistance}m · 得分 {displayScore}
         </div>
-        <button class="restart-btn" on:click={restartGame}>🔄 重新开始</button>
+        <button class="restart-btn" on:click={handleRestart}>🔄 重新开始</button>
       </div>
     {/if}
   {/if}

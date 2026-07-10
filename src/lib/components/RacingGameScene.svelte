@@ -6,6 +6,8 @@
   import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
   import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
   import { createEnvironment, createAsphaltTextures, GRASS_Y } from './racingGame/environment.js';
+  import { createRoadSystem, updateRoad, cleanupRoadForRestart, getShoulderMaterial, getSurfaceMaterial, disposeRoadMaterials, ROAD_VISUAL_WIDTH } from './racingGame/road.js';
+  import { createDecorations, updateDecorations, cleanupDecorationsForRestart, disposeDecorations } from './racingGame/decorations.js';
   import {
     LANE_COUNT, LANE_WIDTH, getLaneX, clampLane,
     MAX_HEALTH, OBSTACLE_DAMAGE, VEHICLE_DAMAGE, REPAIR_HEAL,
@@ -64,26 +66,6 @@
   /** @type {THREE.Group|null} */
   let staticGroup = null;
 
-  /**
-   * Shared road-shoulder material. All shoulder meshes (left and
-   * right side, across every road segment) reference this single
-   * instance so they pick up identical lighting and fog response.
-   * Keeping it at module scope also lets `onDestroy` release the GPU
-   * resource exactly once, even though the material is referenced
-   * by many meshes.
-   *
-   * @type {THREE.Material|null} */
-  let shoulderMaterial = null;
-
-  /**
-   * Shared road-surface material. All surface meshes across every
-   * road segment reference this single instance so they respond to
-   * fog identically and eliminate colour-band artefacts at segment
-   * boundaries. Released exactly once in `onDestroy`.
-   *
-   * @type {THREE.Material|null} */
-  let surfaceMaterial = null;
-
   /** Unified disposables list for performance optimization */
   const disposables = { geometries: [], materials: [], textures: [] };
 
@@ -96,19 +78,6 @@
   let asphaltTextures = null;
 
   let disposeEnvironment = null;
-
-  /** Tree InstancedMesh references and per-instance data for recycling */
-  let trunkMesh = null;
-  let foliageMesh = null;
-  let treesData = []; // { roadZ, x, trunkH, foliageH, foliageR, foliageCount, side, distFromCenter, foliageBaseIdx }
-
-  /** Decoration InstancedMesh references and per-instance data */
-  let decoPoleMesh = null;
-  let decoHeadMesh = null;
-  let decoUtilityPoleMesh = null;
-  let decoFencePostMesh = null;
-  let decoFenceBarMesh = null;
-  let decoData = []; // { roadZ, x, type, side, distFromCenter, lampIdx, poleIdx, fencePostBaseIdx, fenceBarIdx }
 
   /** @type {ResizeObserver|null} */
   let resizeObserver = null;
@@ -176,13 +145,44 @@
   let scrollOffset = 0;
 
   /* ===================================================================
-     Road state
+     Road state (managed by road.js module)
      =================================================================== */
-  const SEGMENTS_AHEAD = 40;
   let roadSegments = []; // sorted: [0] = closest, [last] = farthest ahead
-
-  // Track meshes created for road tiles so we can reposition them
   let roadTileData = []; // { segment, surface, lines[], shoulders[] }
+
+  // Setters for road module state
+  function setRoadSegments(segments) { roadSegments = segments; }
+  function setRoadTileData(data) { roadTileData = data; }
+  function getScrollOffset() { return scrollOffset; }
+
+  // External refs for road module
+  const roadExternalRefs = {
+    get roadGroup() { return roadGroup; },
+    get roadSegments() { return roadSegments; },
+    get roadTileData() { return roadTileData; },
+    get scrollOffset() { return scrollOffset; },
+    get shoulderMaterial() { return getShoulderMaterial(); },
+    get surfaceMaterial() { return getSurfaceMaterial(); },
+    get renderer() { return renderer; },
+    getRoadSegments: () => roadSegments,
+    setRoadSegments: (s) => { roadSegments = s; },
+    getScrollOffset: () => scrollOffset,
+    setScrollOffset: (s) => { scrollOffset = s; },
+  };
+
+  // Tree and decoration data arrays (managed by decorations.js module)
+  let treesData = [];
+  let decoData = [];
+  function setTreesData(d) { treesData = d; }
+  function setDecoData(d) { decoData = d; }
+
+  const decoExternalRefs = {
+    get roadGroup() { return roadGroup; },
+    get roadSegments() { return roadSegments; },
+    get scrollOffset() { return scrollOffset; },
+    getRoadSegments: () => roadSegments,
+    getScrollOffset: () => scrollOffset,
+  };
 
   /* ===================================================================
      Game objects
@@ -225,18 +225,7 @@
   const JUMP_FORCE = 7.5;
   const GRAVITY = -22;
   // ROAD_Y imported from racingGame.js
-
-  const ROAD_VISUAL_WIDTH = LANE_COUNT * LANE_WIDTH * 1.6;
-  const ROAD_TILE_HEIGHT = 0.2;
-  /** Subdivisions per road segment for continuous noise-sampled geometry. */
-  const ROAD_SUBDIVISIONS = 6;
-  const ROAD_COLOR = 0x8a9a8a;
-  const ROAD_SHOULDER_COLOR = 0x6a7a6a;
-  const LANE_LINE_COLOR = 0xd8e8d8;
-
-  // Texture repeat factors for seamless road tiling
-  const ROAD_TEXTURE_REPEAT_X = 4;
-  const ROAD_TEXTURE_REPEAT_Z = 2;
+  // ROAD_VISUAL_WIDTH imported from road.js
 
   // Vehicle transform smoothing factors.
   // Fast convergence is safe because the Perlin noise road centreline
@@ -288,13 +277,6 @@
   // Objects with worldZ > this are recycled (behind the player)
   const RECYCLE_WORLD_Z = 5;
 
-  // Road segments are kept until their far end has scrolled past the
-  // camera (camera Z = 12, looking toward -Z). Recycling on segment
-  // "center" caused the road under the player to disappear while its far
-  // portion was still in view; checking the far end ensures each segment
-  // only disappears after it is entirely behind the camera.
-  const CAMERA_RECYCLE_Z = 12;
-
   /** Camera shake state */
   let cameraShake = { duration: 0, intensity: 0 };
   /** Previous jump state for landing detection */
@@ -322,7 +304,7 @@
         grassGroup = env.grassGroup;
         disposeEnvironment = env.dispose;
 
-        createRoadSystem();
+        initRoadSystem();
         createVehicle();
 
         // Post-processing: bloom / glow
@@ -348,9 +330,9 @@
   }
 
   /* ===================================================================
-     Road System
+     Road System (delegated to road.js and decorations.js modules)
      =================================================================== */
-  function createRoadSystem() {
+  function initRoadSystem() {
     roadGroup = new THREE.Group();
     scene.add(roadGroup);
 
@@ -360,734 +342,20 @@
     // Create procedural asphalt textures (created once, reused across all segments)
     asphaltTextures = createAsphaltTextures();
 
-    // Generate initial road segments (ahead of player, in road-space)
-    roadSegments = generateSegments(0, SEGMENTS_AHEAD);
-
-    // Create visuals for each segment
-    roadSegments.forEach((seg) => {
-      createContinuousRoadSegment(seg, asphaltTextures);
+    // Create road system using module
+    createRoadSystem({
+      scene,
+      roadGroup,
+      asphaltTextures,
+      externalRefs: roadExternalRefs,
     });
 
-    // Roadside decoration trees
-    createRoadsideTrees();
-
-    // Roadside decorations: lamps, poles, fences
-    createRoadsideDecorations();
-  }
-
-  /**
-   * Create continuous smooth road geometry for a single road segment.
-   * Uses a custom BufferGeometry with vertices sampled from the Perlin noise
-   * centre‑line at multiple Z positions, ensuring seamless connection with
-   * adjacent segments (vertices at shared Z boundaries match exactly).
-   *
-   * Lane divider lines and road shoulders are also created as continuous
-   * strips using the same noise sampling.
-   */
-  function createContinuousRoadSegment(segment, asphaltTextures) {
-    const zStart = segment.zStart;
-    const step = segment.length / ROAD_SUBDIVISIONS;
-    const rows = ROAD_SUBDIVISIONS + 1;
-    const halfW = ROAD_VISUAL_WIDTH / 2;
-
-    // `spawned` records whether objects have already been generated for
-    // this segment during its lifetime. It stays false until spawnObjects
-    // produces objects in this segment, then is flipped to true so the
-    // segment never spawns again. This prevents an oncoming vehicle from
-    // leaving its parent segment (its desc.z is advanced toward the
-    // player every frame) and a fresh vehicle being spawned into the
-    // same segment which is now very close to — or already past — the
-    // player, causing an object to suddenly pop in front of or behind
-    // them.
-    let data = { segment, surface: null, lines: [], shoulders: [], spawned: false };
-
-    // ---- Road surface ----
-    const surfacePositions = [];
-    const surfaceIndices = [];
-
-    for (let i = 0; i < rows; i++) {
-      const z = zStart - i * step;
-      const offset = getRoadOffsetAt(roadSegments, z);
-      surfacePositions.push(offset.curveOffset - halfW, offset.heightOffset, z);
-      surfacePositions.push(offset.curveOffset + halfW, offset.heightOffset, z);
-    }
-
-    for (let i = 0; i < ROAD_SUBDIVISIONS; i++) {
-      const a = i * 2;
-      const b = i * 2 + 1;
-      const c = (i + 1) * 2;
-      const d = (i + 1) * 2 + 1;
-      surfaceIndices.push(a, c, b, b, c, d);
-    }
-
-    const surfaceGeo = new THREE.BufferGeometry();
-    surfaceGeo.setAttribute('position', new THREE.Float32BufferAttribute(surfacePositions, 3));
-    surfaceGeo.setIndex(surfaceIndices);
-    surfaceGeo.computeVertexNormals();
-
-    if (!surfaceMaterial) {
-      // Create procedural road texture once and share across all road segments
-      surfaceMaterial = new THREE.MeshStandardMaterial({
-        color: 0x5a5a5a, // Darker asphalt base
-        map: asphaltTextures.map,
-        normalMap: asphaltTextures.normalMap,
-        roughnessMap: asphaltTextures.roughnessMap,
-        roughness: 0.85,
-        metalness: 0.0,
-        flatShading: false,
-        side: THREE.DoubleSide,
-        fog: true,
-      });
-      // Surface material is shared, will be disposed in onDestroy
-    }
-    const surfaceMat = surfaceMaterial;
-    const surface = new THREE.Mesh(surfaceGeo, surfaceMat);
-    surface.position.set(0, ROAD_Y, 0);
-    surface.receiveShadow = true;
-    surface.castShadow = true;
-    roadGroup.add(surface);
-    data.surface = surface;
-
-    // ---- Lane divider lines (2 dividers for 3 lanes, drawn as dashes) ----
-    // Each divider is split into short mesh strips separated by gaps, so the
-    // three lane boundaries read as intermittent dashed lines rather than a
-    // continuous band. Road width, lane count and surface geometry are
-    // unchanged.
-    const lineMat = new THREE.MeshBasicMaterial({ color: LANE_LINE_COLOR, fog: true });
-    const lineHalfW = 0.075;
-    // Dash pattern based on subdivision indices: every DASH_PATTERN_SUBDIVS
-    // subdivisions we draw DASH_LENGTH_SUBDIVS rows of stripe then leave the
-    // rest as a gap.  ROAD_SUBDIVISIONS (6) is a multiple of 3, so each
-    // segment cleanly contains two full dashes and segments tile seamlessly.
-    const DASH_PATTERN_SUBDIVS = 3;
-    const DASH_LENGTH_SUBDIVS = 2;
-
-    for (let li = 0; li < LANE_COUNT - 1; li++) {
-      const lineCenterX = (li - (LANE_COUNT - 2) / 2) * LANE_WIDTH;
-      let dashPositions = [];
-      let dashIndices = [];
-
-      const flushDash = () => {
-        // Skip building a mesh when the buffered strip has no triangles.
-        // This happens at the trailing edge of every segment because
-        // rows = ROAD_SUBDIVISIONS + 1 = 7 leaves the final dash row with
-        // no following row to pair into a quad within the same segment.
-        // Without this guard we'd allocate a degenerate 2-vertex / 0-index
-        // mesh for every lane of every segment.
-        if (dashIndices.length === 0) {
-          dashPositions = [];
-          dashIndices = [];
-          return;
-        }
-        const lineGeo = new THREE.BufferGeometry();
-        lineGeo.setAttribute(
-          'position',
-          new THREE.Float32BufferAttribute(dashPositions, 3),
-        );
-        lineGeo.setIndex(dashIndices);
-        lineGeo.computeVertexNormals();
-
-        const lineMesh = new THREE.Mesh(lineGeo, lineMat);
-        lineMesh.position.set(0, ROAD_Y, 0);
-        roadGroup.add(lineMesh);
-        data.lines.push(lineMesh);
-        dashPositions = [];
-        dashIndices = [];
-      };
-
-      for (let i = 0; i < rows; i++) {
-        const z = zStart - i * step;
-        const offset = getRoadOffsetAt(roadSegments, z);
-        const cx = offset.curveOffset;
-        const cy = offset.heightOffset;
-        const inDash = (i % DASH_PATTERN_SUBDIVS) < DASH_LENGTH_SUBDIVS;
-
-        if (inDash) {
-          const v0 = dashPositions.length / 3;
-          dashPositions.push(cx + lineCenterX - lineHalfW, cy + 0.12, z);
-          dashPositions.push(cx + lineCenterX + lineHalfW, cy + 0.12, z);
-          // Only emit quad indices once we have a previous row to pair with.
-          if (v0 >= 2) {
-            const a = v0 - 2;
-            const b = v0 - 1;
-            const c = v0;
-            const d = v0 + 1;
-            dashIndices.push(a, c, b, b, c, d);
-          }
-        } else {
-          flushDash();
-        }
-      }
-
-      // Flush any trailing dash that reaches the end of the segment.
-      flushDash();
-    }
-
-    // ---- Road shoulders ----
-    // The shoulder material is built ONCE and shared by every
-    // shoulder mesh (both sides of every road segment). The previous
-    // implementation created a fresh `MeshBasicMaterial` inside this
-    // function for each segment, so each tile had its own material
-    // instance, and that material was a flat, unlit, semi-transparent
-    // colour — meaning:
-    //   * the shoulder never reacted to the scene lights, so it read
-    //     as a uniformly coloured band sitting on top of the
-    //     (correctly lit) grass, creating a visible "shoulder-vs-
-    //     grass" style gap on both sides of the road;
-    //   * the `transparent: true, opacity: 0.5` made the shoulder
-    //     blend with whatever was behind it, which broke the fog
-    //     transition at the far end of the road and made the two
-    //     sides look different depending on the noise-driven road
-    //     curve.
-    // The shared `MeshLambertMaterial` below fixes both issues:
-    //   * it responds to the same ambient / hemisphere / directional
-    //     lights as the grass, so the shoulder and the grass on
-    //     either side receive identical illumination at the same
-    //     world position — the left and right shoulders therefore
-    //     pick up the same shading pattern as their neighbouring
-    //     grass, and the two sides look identical to each other;
-    //   * it is opaque (no `transparent` flag), so the fog
-    //     interpolates its colour directly toward the sky colour at
-    //     the far plane, matching the road surface and grass for a
-    //     smooth horizon transition.
-    // Both sides of every segment reference the same `shoulderMaterial`
-    // instance (set up in `createRoadSystem()`), so a state change on
-    // the material — colour, fog flag, etc. — automatically applies
-    // uniformly to every shoulder mesh in the scene.
-    if (!shoulderMaterial) {
-      shoulderMaterial = new THREE.MeshLambertMaterial({
-        color: ROAD_SHOULDER_COLOR,
-        fog: true,
-      });
-    }
-    const shoulderMat = shoulderMaterial;
-    const shoulderHalfW = 0.3;
-
-    for (let si = 0; si < 2; si++) {
-      const side = si === 0 ? -1 : 1;
-      const shoulderPositions = [];
-      const shoulderIndices = [];
-
-      for (let i = 0; i < rows; i++) {
-        const z = zStart - i * step;
-        const offset = getRoadOffsetAt(roadSegments, z);
-        const cx = offset.curveOffset;
-        const cy = offset.heightOffset;
-
-        const innerEdge = side * halfW - side * shoulderHalfW;
-        const outerEdge = side * halfW + side * shoulderHalfW;
-        shoulderPositions.push(cx + innerEdge, cy + 0.12, z);
-        shoulderPositions.push(cx + outerEdge, cy + 0.12, z);
-      }
-
-      for (let i = 0; i < ROAD_SUBDIVISIONS; i++) {
-        const a = i * 2;
-        const b = i * 2 + 1;
-        const c = (i + 1) * 2;
-        const d = (i + 1) * 2 + 1;
-        shoulderIndices.push(a, c, b, b, c, d);
-      }
-
-      const shoulderGeo = new THREE.BufferGeometry();
-      shoulderGeo.setAttribute('position', new THREE.Float32BufferAttribute(shoulderPositions, 3));
-      shoulderGeo.setIndex(shoulderIndices);
-      shoulderGeo.computeVertexNormals();
-
-      const shoulderMesh = new THREE.Mesh(shoulderGeo, shoulderMat);
-      shoulderMesh.position.set(0, ROAD_Y, 0);
-      roadGroup.add(shoulderMesh);
-      data.shoulders.push(shoulderMesh);
-    }
-
-    roadTileData.push(data);
-  }
-
-  /**
-   * Reposition all road tile visuals based on current scrollOffset.
-   * With continuous noise‑sampled geometry, vertex positions already encode
-   * the correct lateral and height offsets.  We only need to scroll the
-   * meshes along the Z axis.
-   */
-  function repositionRoadTiles() {
-    for (const data of roadTileData) {
-      // With continuous noise‑based geometry, vertex positions are already at
-      // the correct local‑space curve/height offsets. Only scroll Z.
-      if (data.surface) {
-        data.surface.position.z = scrollOffset;
-      }
-      for (const line of data.lines) {
-        line.position.z = scrollOffset;
-      }
-      for (const s of data.shoulders) {
-        s.position.z = scrollOffset;
-      }
-    }
-
-    // Anchor the grass plane at world Z=0 so it always covers the
-    // player position. The grass plane is not scrolled with the world —
-    // it is fixed at Z=0 regardless of scrollOffset; its length
-    // (GRASS_LENGTH=4000) is sufficient to cover the visible range.
-    if (grassGroup) {
-      grassGroup.position.z = 0;
-    }
-  }
-
-  /**
-   * Simple cone-shaped trees along the road using InstancedMesh.
-   * 60 trees split into 2 InstancedMeshes: trunks and foliage.
-   * Tree positions are stored in treesData[] for per-instance recycling.
-   */
-  function createRoadsideTrees() {
-    const TREE_COUNT = 60;
-
-    // Collect tree data for positioning and store in module-level array for recycling
-    treesData = [];
-    for (let i = 0; i < TREE_COUNT; i++) {
-      const roadZ = -5 - Math.random() * 200;
-      const side = Math.random() > 0.5 ? -1 : 1;
-      const distFromCenter = ROAD_VISUAL_WIDTH / 2 + 2 + Math.random() * 5;
-      const offset = getRoadOffsetAt(roadSegments, roadZ);
-      const trunkH = 0.5 + Math.random() * 0.5;
-      const foliageH = 0.8 + Math.random() * 0.6;
-      const foliageR = 0.5 + Math.random() * 0.4;
-      const foliageCount = 1 + Math.floor(Math.random() * 2);
-      treesData.push({
-        roadZ,
-        x: offset.curveOffset + side * distFromCenter,
-        trunkH,
-        foliageH,
-        foliageR,
-        foliageCount,
-        side,
-        distFromCenter,
-        foliageBaseIdx: 0, // Will be set during instance setup
-      });
-    }
-
-    // Trunk InstancedMesh
-    const trunkGeo = new THREE.CylinderGeometry(0.15, 0.2, 1, 4);
-    disposables.geometries.push(trunkGeo);
-    const trunkMat = new THREE.MeshPhongMaterial({ color: 0x6a4a2a });
-    disposables.materials.push(trunkMat);
-    trunkMesh = new THREE.InstancedMesh(trunkGeo, trunkMat, TREE_COUNT);
-    trunkMesh.castShadow = true;
-
-    // Foliage InstancedMesh (multiple cones per tree merged into one)
-    const foliageGeo = new THREE.ConeGeometry(1, 1, 5);
-    disposables.geometries.push(foliageGeo);
-    const foliageMat = new THREE.MeshPhongMaterial({
-      color: 0x5a9a5a,
-      flatShading: true,
+    // Create roadside decorations using module
+    createDecorations({
+      scene,
+      roadGroup,
+      externalRefs: decoExternalRefs,
     });
-    disposables.materials.push(foliageMat);
-    foliageMesh = new THREE.InstancedMesh(foliageGeo, foliageMat, TREE_COUNT * 2); // Max 2 foliage cones per tree
-    foliageMesh.castShadow = true;
-
-    const dummy = new THREE.Object3D();
-    let foliageIdx = 0;
-
-    for (let i = 0; i < TREE_COUNT; i++) {
-      const td = treesData[i];
-      td.foliageBaseIdx = foliageIdx;
-
-      // Trunk
-      dummy.position.set(td.x, GRASS_Y + td.trunkH / 2, td.roadZ);
-      dummy.rotation.set(0, 0, 0);
-      dummy.scale.set(1, td.trunkH, 1);
-      dummy.updateMatrix();
-      trunkMesh.setMatrixAt(i, dummy.matrix);
-
-      // Foliage cones
-      for (let f = 0; f < td.foliageCount && foliageIdx < TREE_COUNT * 2; f++) {
-        // Align with original algorithm: foliage.position.y = trunkH + f * fHeight * 0.5
-        dummy.position.set(td.x, GRASS_Y + td.trunkH + f * td.foliageH * 0.5, td.roadZ);
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(td.foliageR, td.foliageH, td.foliageR);
-        dummy.updateMatrix();
-        foliageMesh.setMatrixAt(foliageIdx, dummy.matrix);
-        foliageIdx++;
-      }
-    }
-
-    // Hide unused foliage instances
-    for (let i = foliageIdx; i < TREE_COUNT * 2; i++) {
-      dummy.position.set(0, -1000, 0);
-      dummy.scale.set(0, 0, 0);
-      dummy.updateMatrix();
-      foliageMesh.setMatrixAt(i, dummy.matrix);
-    }
-
-    trunkMesh.instanceMatrix.needsUpdate = true;
-    foliageMesh.instanceMatrix.needsUpdate = true;
-
-    roadGroup.add(trunkMesh);
-    roadGroup.add(foliageMesh);
-  }
-
-  /**
-   * Roadside decorations: street lamps, utility poles, and fences.
-   * All use InstancedMesh for performance.
-   * Decoration data is stored in decoData[] for per-instance recycling.
-   */
-  function createRoadsideDecorations() {
-    const DECO_COUNT = 30; // Mix of decorations
-
-    // Street lamp InstancedMesh (pole + head)
-    const lampPoleGeo = new THREE.CylinderGeometry(0.05, 0.08, 3, 6);
-    disposables.geometries.push(lampPoleGeo);
-    const lampHeadGeo = new THREE.SphereGeometry(0.3, 8, 8);
-    disposables.geometries.push(lampHeadGeo);
-    const lampMat = new THREE.MeshPhongMaterial({
-      color: 0x444444,
-      flatShading: true,
-    });
-    disposables.materials.push(lampMat);
-    const lampGlowMat = new THREE.MeshPhongMaterial({
-      color: 0xffff88,
-      emissive: 0xffaa00,
-      emissiveIntensity: 0.8,
-    });
-    disposables.materials.push(lampGlowMat);
-
-    decoPoleMesh = new THREE.InstancedMesh(lampPoleGeo, lampMat, DECO_COUNT);
-    decoHeadMesh = new THREE.InstancedMesh(lampHeadGeo, lampGlowMat, DECO_COUNT);
-    decoPoleMesh.castShadow = true;
-    decoHeadMesh.castShadow = true;
-
-    // Utility pole InstancedMesh
-    const poleGeo = new THREE.BoxGeometry(0.15, 4, 0.15);
-    disposables.geometries.push(poleGeo);
-    const poleColorMat = new THREE.MeshPhongMaterial({ color: 0x5a4030 });
-    disposables.materials.push(poleColorMat);
-    decoUtilityPoleMesh = new THREE.InstancedMesh(poleGeo, poleColorMat, DECO_COUNT);
-    decoUtilityPoleMesh.castShadow = true;
-
-    // Fence InstancedMesh (horizontal bar + vertical posts)
-    const fencePostGeo = new THREE.BoxGeometry(0.1, 0.8, 0.1);
-    disposables.geometries.push(fencePostGeo);
-    const fenceBarGeo = new THREE.BoxGeometry(0.08, 0.08, 2);
-    disposables.geometries.push(fenceBarGeo);
-    const fenceMat = new THREE.MeshPhongMaterial({ color: 0x888888 });
-    disposables.materials.push(fenceMat);
-    decoFencePostMesh = new THREE.InstancedMesh(fencePostGeo, fenceMat, DECO_COUNT * 3);
-    decoFenceBarMesh = new THREE.InstancedMesh(fenceBarGeo, fenceMat, DECO_COUNT);
-    decoFencePostMesh.castShadow = true;
-    decoFenceBarMesh.castShadow = true;
-
-    // Collect decoration data for recycling
-    decoData = [];
-    const dummy = new THREE.Object3D();
-
-    // Generate decoration positions along the roadside
-    for (let i = 0; i < DECO_COUNT; i++) {
-      const roadZ = -10 - i * 8 + Math.random() * 4;
-      const side = i % 2 === 0 ? -1 : 1;
-      const distFromCenter = ROAD_VISUAL_WIDTH / 2 + 1.5 + Math.random() * 2;
-      const offset = getRoadOffsetAt(roadSegments, roadZ);
-      decoData.push({
-        roadZ,
-        x: offset.curveOffset + side * distFromCenter,
-        type: i % 3, // 0=lamp, 1=pole, 2=fence
-        side,
-        distFromCenter,
-        lampIdx: -1,
-        poleIdx: -1,
-        fencePostBaseIdx: -1,
-        fenceBarIdx: -1,
-      });
-    }
-
-    // Place street lamps (type 0)
-    let lampIdx = 0;
-    // Place utility poles (type 1)
-    let poleIdx = 0;
-    // Place fences (type 2) - track post and bar indices separately
-    let fencePostIdx = 0;
-    let fenceBarIdx = 0;
-
-    for (let i = 0; i < DECO_COUNT; i++) {
-      const deco = decoData[i];
-      const worldZ = deco.roadZ;
-
-      if (deco.type === 0 && lampIdx < DECO_COUNT) {
-        deco.lampIdx = lampIdx;
-        // Pole
-        dummy.position.set(deco.x, GRASS_Y + 1.5, worldZ);
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(1, 1, 1);
-        dummy.updateMatrix();
-        decoPoleMesh.setMatrixAt(lampIdx, dummy.matrix);
-        // Head
-        dummy.position.set(deco.x, GRASS_Y + 3.2, worldZ);
-        dummy.scale.set(1, 1, 1);
-        dummy.updateMatrix();
-        decoHeadMesh.setMatrixAt(lampIdx, dummy.matrix);
-        lampIdx++;
-      } else if (deco.type === 1 && poleIdx < DECO_COUNT) {
-        deco.poleIdx = poleIdx;
-        dummy.position.set(deco.x, GRASS_Y + 2, worldZ);
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(1, 1, 1);
-        dummy.updateMatrix();
-        decoUtilityPoleMesh.setMatrixAt(poleIdx, dummy.matrix);
-        poleIdx++;
-      } else if (deco.type === 2) {
-        // Fence: 3 vertical posts
-        deco.fencePostBaseIdx = fencePostIdx;
-        for (let p = 0; p < 3; p++) {
-          dummy.position.set(deco.x, GRASS_Y + 0.4, worldZ - 1 + p);
-          dummy.rotation.set(0, 0, 0);
-          dummy.scale.set(1, 1, 1);
-          dummy.updateMatrix();
-          decoFencePostMesh.setMatrixAt(fencePostIdx, dummy.matrix);
-          fencePostIdx++;
-        }
-        // 1 horizontal bar
-        if (fenceBarIdx < DECO_COUNT) {
-          deco.fenceBarIdx = fenceBarIdx;
-          dummy.position.set(deco.x, GRASS_Y + 0.6, worldZ);
-          dummy.rotation.set(0, 0, 0);
-          dummy.scale.set(1, 1, 1);
-          dummy.updateMatrix();
-          decoFenceBarMesh.setMatrixAt(fenceBarIdx, dummy.matrix);
-          fenceBarIdx++;
-        }
-      }
-    }
-
-    // Hide unused instances
-    const hideInstance = (mesh, idx) => {
-      dummy.position.set(0, -1000, 0);
-      dummy.scale.set(0, 0, 0);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(idx, dummy.matrix);
-    };
-    for (let i = lampIdx; i < DECO_COUNT; i++) {
-      hideInstance(decoPoleMesh, i);
-      hideInstance(decoHeadMesh, i);
-    }
-    for (let i = poleIdx; i < DECO_COUNT; i++) {
-      hideInstance(decoUtilityPoleMesh, i);
-    }
-    for (let i = fencePostIdx; i < DECO_COUNT * 3; i++) {
-      hideInstance(decoFencePostMesh, i);
-    }
-    for (let i = fenceBarIdx; i < DECO_COUNT; i++) {
-      hideInstance(decoFenceBarMesh, i);
-    }
-
-    decoPoleMesh.instanceMatrix.needsUpdate = true;
-    decoHeadMesh.instanceMatrix.needsUpdate = true;
-    decoUtilityPoleMesh.instanceMatrix.needsUpdate = true;
-    decoFencePostMesh.instanceMatrix.needsUpdate = true;
-    decoFenceBarMesh.instanceMatrix.needsUpdate = true;
-
-    roadGroup.add(decoPoleMesh);
-    roadGroup.add(decoHeadMesh);
-    roadGroup.add(decoUtilityPoleMesh);
-    roadGroup.add(decoFencePostMesh);
-    roadGroup.add(decoFenceBarMesh);
-  }
-
-  /**
-   * Update road: recycle old segments, extend new ones ahead,
-   * reposition all road tile visuals.
-   */
-  function updateRoad() {
-    if (!roadGroup) return;
-
-    // -- Recycle old segments that are fully past the camera --
-    // Each segment extends in road-space from seg.zStart (near end, +Z
-    // side when viewed in front of the player) to seg.zStart - seg.length
-    // (far end, -Z side). We recycle only when this far end has scrolled
-    // past the camera, guaranteeing the segment is no longer visible.
-    while (roadTileData.length > 0) {
-      const data = roadTileData[0];
-      const seg = data.segment;
-      const roadFarZ = seg.zStart - seg.length;
-      const worldZ = roadFarZ + scrollOffset;
-      if (worldZ < CAMERA_RECYCLE_Z) break;
-
-      // Remove from roadSegments (index 0 = closest segment)
-      roadSegments.shift();
-
-      // Remove meshes
-      removeTileVisuals(data);
-      roadTileData.shift();
-    }
-
-    // -- Extend new segments at the front (ahead) --
-    let needNew = true;
-    while (needNew) {
-      const lastSeg = roadSegments.length > 0 ? roadSegments[roadSegments.length - 1] : null;
-      const newRoadZ = lastSeg ? lastSeg.zStart - SEGMENT_LENGTH : -SEGMENT_LENGTH;
-      const newWorldZ = newRoadZ + scrollOffset;
-      // Only generate if the new segment's far end is within draw distance
-      if (newWorldZ < -260) {
-        needNew = false;
-        break;
-      }
-
-      const newSeg = generateSegment(newRoadZ);
-      roadSegments.push(newSeg);
-      createContinuousRoadSegment(newSeg, asphaltTextures);
-    }
-
-    // -- Reposition all road tiles --
-    repositionRoadTiles();
-
-    // -- Reposition trees (InstancedMesh per-instance recycling) --
-    if (trunkMesh && foliageMesh && treesData.length > 0) {
-      const dummy = new THREE.Object3D();
-      let needsTreeUpdate = false;
-
-      for (let i = 0; i < treesData.length; i++) {
-        const td = treesData[i];
-        const worldZ = td.roadZ + scrollOffset;
-
-        if (worldZ > RECYCLE_WORLD_Z + 20) {
-          // Recycle tree: place it far ahead
-          const lastSeg = roadSegments[roadSegments.length - 1];
-          td.roadZ = lastSeg ? lastSeg.zStart - Math.random() * 200 : -200;
-          td.side = Math.random() > 0.5 ? -1 : 1;
-          td.distFromCenter = ROAD_VISUAL_WIDTH / 2 + 2 + Math.random() * 5;
-          needsTreeUpdate = true;
-        }
-
-        // Update road-aligned X position
-        const offset = getRoadOffsetAt(roadSegments, td.roadZ);
-        td.x = offset.curveOffset + td.side * td.distFromCenter;
-
-        // Update trunk instance matrix
-        dummy.position.set(td.x, GRASS_Y + td.trunkH / 2, td.roadZ + scrollOffset);
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(1, td.trunkH, 1);
-        dummy.updateMatrix();
-        trunkMesh.setMatrixAt(i, dummy.matrix);
-
-        // Update foliage instance matrices
-        for (let f = 0; f < td.foliageCount; f++) {
-          const foliageIdx = td.foliageBaseIdx + f;
-          dummy.position.set(td.x, GRASS_Y + td.trunkH + f * td.foliageH * 0.5, td.roadZ + scrollOffset);
-          dummy.rotation.set(0, 0, 0);
-          dummy.scale.set(td.foliageR, td.foliageH, td.foliageR);
-          dummy.updateMatrix();
-          foliageMesh.setMatrixAt(foliageIdx, dummy.matrix);
-        }
-      }
-
-      // Always upload matrices every frame (not just on recycling frames) for smooth following
-      trunkMesh.instanceMatrix.needsUpdate = true;
-      foliageMesh.instanceMatrix.needsUpdate = true;
-
-      if (needsTreeUpdate) {
-        // Trigger shadow update after recycling instances
-        if (renderer) renderer.shadowMap.needsUpdate = true;
-      }
-    }
-
-    // -- Reposition decorations (InstancedMesh per-instance recycling) --
-    // Decorations are recycled like trees to provide infinite roadside scenery
-    if (decoPoleMesh && decoData.length > 0) {
-      const dummy = new THREE.Object3D();
-      let needsDecoUpdate = false;
-
-      for (let i = 0; i < decoData.length; i++) {
-        const deco = decoData[i];
-        const worldZ = deco.roadZ + scrollOffset;
-
-        if (worldZ > RECYCLE_WORLD_Z + 20) {
-          // Recycle decoration: place it far ahead
-          const lastSeg = roadSegments[roadSegments.length - 1];
-          deco.roadZ = lastSeg ? lastSeg.zStart - Math.random() * 240 : -240;
-          deco.side = Math.random() > 0.5 ? -1 : 1;
-          deco.distFromCenter = ROAD_VISUAL_WIDTH / 2 + 1.5 + Math.random() * 2;
-          needsDecoUpdate = true;
-        }
-
-        // Update road-aligned X position
-        const offset = getRoadOffsetAt(roadSegments, deco.roadZ);
-        deco.x = offset.curveOffset + deco.side * deco.distFromCenter;
-        const currentWorldZ = deco.roadZ + scrollOffset;
-
-        // Update lamp instances
-        if (deco.lampIdx >= 0) {
-          dummy.position.set(deco.x, GRASS_Y + 1.5, currentWorldZ);
-          dummy.rotation.set(0, 0, 0);
-          dummy.scale.set(1, 1, 1);
-          dummy.updateMatrix();
-          decoPoleMesh.setMatrixAt(deco.lampIdx, dummy.matrix);
-
-          dummy.position.set(deco.x, GRASS_Y + 3.2, currentWorldZ);
-          dummy.updateMatrix();
-          decoHeadMesh.setMatrixAt(deco.lampIdx, dummy.matrix);
-        }
-
-        // Update utility pole instance
-        if (deco.poleIdx >= 0) {
-          dummy.position.set(deco.x, GRASS_Y + 2, currentWorldZ);
-          dummy.rotation.set(0, 0, 0);
-          dummy.scale.set(1, 1, 1);
-          dummy.updateMatrix();
-          decoUtilityPoleMesh.setMatrixAt(deco.poleIdx, dummy.matrix);
-        }
-
-        // Update fence instances
-        if (deco.fencePostBaseIdx >= 0) {
-          for (let p = 0; p < 3; p++) {
-            dummy.position.set(deco.x, GRASS_Y + 0.4, currentWorldZ - 1 + p);
-            dummy.rotation.set(0, 0, 0);
-            dummy.scale.set(1, 1, 1);
-            dummy.updateMatrix();
-            decoFencePostMesh.setMatrixAt(deco.fencePostBaseIdx + p, dummy.matrix);
-          }
-          if (deco.fenceBarIdx >= 0) {
-            dummy.position.set(deco.x, GRASS_Y + 0.6, currentWorldZ);
-            dummy.updateMatrix();
-            decoFenceBarMesh.setMatrixAt(deco.fenceBarIdx, dummy.matrix);
-          }
-        }
-      }
-
-      // Always upload matrices every frame (not just on recycling frames) for smooth following
-      decoPoleMesh.instanceMatrix.needsUpdate = true;
-      decoHeadMesh.instanceMatrix.needsUpdate = true;
-      decoUtilityPoleMesh.instanceMatrix.needsUpdate = true;
-      decoFencePostMesh.instanceMatrix.needsUpdate = true;
-      decoFenceBarMesh.instanceMatrix.needsUpdate = true;
-
-      if (needsDecoUpdate) {
-        // Trigger shadow update after recycling decorations
-        if (renderer) renderer.shadowMap.needsUpdate = true;
-      }
-    }
-  }
-
-  function removeTileVisuals(data) {
-    // `skipMaterialDispose` is true for shoulder meshes because the
-    // shoulder material is shared across every segment (and both
-    // sides) of the road — disposing it on the first segment recycle
-    // would leave every other shoulder mesh with a dangling GPU
-    // reference. The shared material is released exactly once in
-    // `onDestroy`.
-    const removeMesh = (mesh, skipMaterialDispose = false) => {
-      if (!mesh) return;
-      roadGroup.remove(mesh);
-      if (mesh.isMesh || mesh.isPoints) {
-        mesh.geometry.dispose();
-        if (!skipMaterialDispose) {
-          if (Array.isArray(mesh.material)) {
-            mesh.material.forEach((m) => m.dispose());
-          } else if (mesh.material) {
-            mesh.material.dispose();
-          }
-        }
-      }
-    };
-
-    if (data.surface) removeMesh(data.surface, true);
-    for (const line of data.lines) removeMesh(line);
-    for (const s of data.shoulders) removeMesh(s, true);
   }
 
   /* ===================================================================
@@ -1689,8 +957,24 @@
     advanceOncomingVehicles(dt, currentDifficulty.enemySpeedMultiplier);
     recycleWorldObjects();
 
-    // -- Update road --
-    updateRoad();
+    // -- Update road (tiles and decorations) --
+    updateRoad({
+      roadSegments,
+      roadTileData,
+      scrollOffset,
+      asphaltTextures,
+      roadGroup,
+      grassGroup,
+      renderer,
+      setRoadSegments: (s) => { roadSegments = s; },
+      setScrollOffset: (s) => { scrollOffset = s; },
+      setRoadTileData: (d) => { roadTileData = d; },
+    });
+    updateDecorations({
+      renderer,
+      setTreesData,
+      setDecoData,
+    });
 
     // -- Update object visual positions --
     updateObjectVisuals();
@@ -1809,86 +1093,36 @@
     objectMeshMap = new Map();
     objectDescriptors = [];
 
-    // Clean up existing road
-    while (roadGroup.children.length > 0) {
-      const child = roadGroup.children[0];
-      if (child.isMesh) {
-        try { child.geometry.dispose(); } catch {}
-        // The shoulder and surface materials are shared across every
-        // shoulder/surface mesh — disposing either on the first segment
-        // recycle would leave every other mesh referencing a disposed
-        // GPU resource. Both shared materials are kept alive across
-        // restarts and released exactly once in `onDestroy`. Lane line
-        // materials are per-segment MeshBasicMaterial instances and
-        // are safe to dispose normally.
-        const isSharedShoulder = shoulderMaterial
-          && (child.material === shoulderMaterial
-            || (Array.isArray(child.material)
-              && child.material.indexOf(shoulderMaterial) !== -1));
-        const isSharedSurface = surfaceMaterial
-          && (child.material === surfaceMaterial
-            || (Array.isArray(child.material)
-              && child.material.indexOf(surfaceMaterial) !== -1));
-        if (!isSharedShoulder && !isSharedSurface) {
-          if (Array.isArray(child.material)) {
-            child.material.forEach((m) => { try { m.dispose(); } catch {} });
-          } else if (child.material) {
-            try { child.material.dispose(); } catch {}
-          }
-        }
-      }
-      roadGroup.remove(child);
-    }
-    roadTileData = [];
+    // Clean up road using module
+    cleanupRoadForRestart({
+      roadGroup,
+      roadTileData,
+      setRoadSegments: (s) => { roadSegments = s; },
+      setRoadTileData: (d) => { roadTileData = d; },
+    });
 
     // Clean up particles
     cleanupParticles();
 
-    // Explicitly remove InstancedMesh references from roadGroup before clearing disposables
-    if (trunkMesh) roadGroup.remove(trunkMesh);
-    if (foliageMesh) roadGroup.remove(foliageMesh);
-    if (decoPoleMesh) roadGroup.remove(decoPoleMesh);
-    if (decoHeadMesh) roadGroup.remove(decoHeadMesh);
-    if (decoUtilityPoleMesh) roadGroup.remove(decoUtilityPoleMesh);
-    if (decoFencePostMesh) roadGroup.remove(decoFencePostMesh);
-    if (decoFenceBarMesh) roadGroup.remove(decoFenceBarMesh);
-
-    // Clear decoration disposables (trees, lamps, poles, fences) before recreating
-    // These are recreated on restart and should not persist in disposables.
-    // shoulderMaterial and surfaceMaterial are kept alive across restarts and
-    // released exactly once in onDestroy. grassMaterial/grassGeometry are
-    // owned by environment.js and persist across restarts (disposeEnvironment
-    // is NOT called during restart — only in onDestroy).
-    const sharedMats = new Set([shoulderMaterial, surfaceMaterial]);
-    const sharedGeos = new Set([]);
-    // Dispose decoration geometries and materials, keep shared ones
-    const decorGeos = disposables.geometries.splice(0);
-    const decorMats = disposables.materials.splice(0);
-    for (const g of decorGeos) {
-      if (!sharedGeos.has(g)) { try { g.dispose(); } catch {} }
-    }
-    for (const m of decorMats) {
-      if (!sharedMats.has(m)) { try { m.dispose(); } catch {} }
-    }
-
-    // Null old InstancedMesh references before recreating (avoid dangling refs)
-    trunkMesh = null;
-    foliageMesh = null;
-    decoPoleMesh = null;
-    decoHeadMesh = null;
-    decoUtilityPoleMesh = null;
-    decoFencePostMesh = null;
-    decoFenceBarMesh = null;
-    treesData = [];
-    decoData = [];
-
-    // Re-initialise road and vehicle position
-    roadSegments = generateSegments(0, SEGMENTS_AHEAD);
-    roadSegments.forEach((seg) => {
-      createContinuousRoadSegment(seg, asphaltTextures);
+    // Clean up decorations using module
+    cleanupDecorationsForRestart({
+      roadGroup,
+      setTreesData,
+      setDecoData,
     });
-    createRoadsideTrees();
-    createRoadsideDecorations();
+
+    // Re-initialise road and decorations using modules
+    createRoadSystem({
+      scene,
+      roadGroup,
+      asphaltTextures,
+      externalRefs: roadExternalRefs,
+    });
+    createDecorations({
+      scene,
+      roadGroup,
+      externalRefs: decoExternalRefs,
+    });
 
     vehicle.position.set(0, ROAD_Y, 0);
     vehicle.rotation.set(0, 0, 0);
@@ -2672,15 +1906,11 @@
       });
     }
 
-    // Dispose the shared shoulder and surface materials.
-    if (shoulderMaterial) {
-      try { shoulderMaterial.dispose(); } catch {}
-      shoulderMaterial = null;
-    }
-    if (surfaceMaterial) {
-      try { surfaceMaterial.dispose(); } catch {}
-      surfaceMaterial = null;
-    }
+    // Dispose shared road materials using module.
+    disposeRoadMaterials();
+
+    // Dispose decorations using module.
+    disposeDecorations();
 
     // Dispose all tracked geometries and materials from disposables list
     for (const geo of disposables.geometries) {
@@ -2728,9 +1958,11 @@
     sceneryGroup = null;
     grassGroup = null;
     staticGroup = null;
-    shoulderMaterial = null;
+    // shoulderMaterial and surfaceMaterial disposed via disposeRoadMaterials()
     roadSegments = [];
     roadTileData = [];
+    treesData = [];
+    decoData = [];
     objectDescriptors = [];
     objectMeshMap = new Map();
   });

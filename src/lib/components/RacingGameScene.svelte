@@ -5,6 +5,7 @@
   import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
   import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
   import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+  import { createEnvironment, createAsphaltTextures, GRASS_Y } from './racingGame/environment.js';
   import {
     LANE_COUNT, LANE_WIDTH, getLaneX, clampLane,
     MAX_HEALTH, OBSTACLE_DAMAGE, VEHICLE_DAMAGE, REPAIR_HEAL,
@@ -63,12 +64,6 @@
   /** @type {THREE.Group|null} */
   let staticGroup = null;
 
-  /** @type {THREE.BufferGeometry|null} */
-  let grassGeometry = null;
-
-  /** @type {THREE.Material|null} */
-  let grassMaterial = null;
-
   /**
    * Shared road-shoulder material. All shoulder meshes (left and
    * right side, across every road segment) reference this single
@@ -99,6 +94,8 @@
    * Disposed once in onDestroy. NOT recreated in restart to avoid texture leaks.
    */
   let asphaltTextures = null;
+
+  let disposeEnvironment = null;
 
   /** Tree InstancedMesh references and per-instance data for recycling */
   let trunkMesh = null;
@@ -241,29 +238,6 @@
   const ROAD_TEXTURE_REPEAT_X = 4;
   const ROAD_TEXTURE_REPEAT_Z = 2;
 
-  // Grass / ground plane that covers the area below and around the road,
-  // giving roadside trees a visible surface to stand on instead of floating
-  // at road-surface height. The road surface itself can dip by up to
-  // MAX_HEIGHT_DELTA below ROAD_Y, so GRASS_Y is anchored to
-  // ROAD_Y - MAX_HEIGHT_DELTA - 0.2 to guarantee the grass plane stays
-  // strictly below the deepest possible road surface — preventing the
-  // grass from clipping through the road in dips. The small 0.2 unit
-  // buffer keeps the surfaces visually distinct while trees stay
-  // anchored to a stable, non-jittery ground plane.
-  const GRASS_Y = ROAD_Y - MAX_HEIGHT_DELTA - 0.2;
-  const GRASS_COLOR = 0x4a7a3a;
-  // Grass plane width must comfortably exceed the camera's horizontal
-  // field of view at the fog far plane, otherwise the plane's edge
-  // is visible as a hard colour boundary inside the fog band. With
-  // the camera at z=12 and the fog far plane at z≈-238 (250 units
-  // away in the -Z direction), the visible horizontal half-width at
-  // the far plane is ≈ 250·tan(45.5°) ≈ 255 units (assuming a 16:9
-  // aspect and ~91° horizontal FOV). GRASS_WIDTH=600 (±300) gives a
-  // generous margin so the plane edge always sits well outside the
-  // visible frustum, and therefore never produces a visible band.
-  const GRASS_WIDTH = 600;
-  const GRASS_LENGTH = 4000;
-
   // Vehicle transform smoothing factors.
   // Fast convergence is safe because the Perlin noise road centreline
   // is continuous and low-frequency (0.006 Hz, 2 octaves), and the
@@ -325,386 +299,52 @@
   let cameraShake = { duration: 0, intensity: 0 };
   /** Previous jump state for landing detection */
   let wasJumping = false;
-
   /* ===================================================================
-     Three.js — Scene Setup
+     Three.js — Scene Setup (delegated to environment.js)
      =================================================================== */
   function initScene() {
-    const container = containerEl;
-    const rect = container.getBoundingClientRect();
+    const rect = containerEl.getBoundingClientRect();
     const w = rect.width || 800;
     const h = rect.height || 500;
 
-    scene = new THREE.Scene();
-    // Fog range is intentionally wider than the original (80, 200) so
-    // the transition from "no fog" to "fully fog colour" happens over
-    // a longer Z span. The near edge (60) starts fading just past the
-    // close-to-player road tiles; the far edge (250) sits a little
-    // inside the camera's 300-unit far plane so the road and grass
-    // are guaranteed to be fully fog colour (and therefore equal to
-    // the sky) before the far plane clips them. This kills the hard
-    // "sky / ground" colour band the user reported.
-    scene.fog = new THREE.Fog(0x87CEEB, 60, 250);
+    createEnvironment({ containerEl })
+      .then((env) => {
+        if (!env.scene) {
+          webglError = true;
+          loading = false;
+          return;
+        }
 
-    camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 300);
-    camera.position.set(0, 6, 12);
-    camera.lookAt(0, 0, -10);
+        scene = env.scene;
+        camera = env.camera;
+        renderer = env.renderer;
+        staticGroup = env.staticGroup;
+        grassGroup = env.grassGroup;
+        disposeEnvironment = env.dispose;
 
-    try {
-      renderer = new THREE.WebGLRenderer({ antialias: true });
-    } catch (e) {
-      console.warn('[RacingGame] WebGL not supported:', e);
-      webglError = true;
-      loading = false;
-      return;
-    }
-    renderer.setSize(w, h);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.shadowMap.autoUpdate = false; // Manual shadow updates for performance; any event that changes shadow geometry (instance recycling, road tile changes) must explicitly set renderer.shadowMap.needsUpdate = true
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
-    container.appendChild(renderer.domElement);
+        createRoadSystem();
+        createVehicle();
 
-    setupLighting();
+        // Post-processing: bloom / glow
+        composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        bloomPass = new UnrealBloomPass(
+          new THREE.Vector2(w, h),
+          0.3,
+          0.2,
+          0.1
+        );
+        composer.addPass(bloomPass);
+        composer.addPass(new OutputPass());
 
-    // Create static group for frustum culling optimization
-    staticGroup = new THREE.Group();
-    staticGroup.frustumCulled = true;
-    scene.add(staticGroup);
-
-    // Create procedural sky sphere
-    createProceduralSky();
-
-    createBackgroundScenery();
-    createGrassPlane();
-    createRoadSystem();
-    createVehicle();
-
-    // Post-processing: bloom / glow
-    composer = new EffectComposer(renderer);
-    composer.addPass(new RenderPass(scene, camera));
-    bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(w, h),
-      0.3,   // strength
-      0.2,   // radius
-      0.1    // threshold
-    );
-    composer.addPass(bloomPass);
-    composer.addPass(new OutputPass());
-
-    loading = false;
-    animate(0);
-  }
-
-  function setupLighting() {
-    const ambient = new THREE.AmbientLight(0x8899bb, 0.5);
-    scene.add(ambient);
-
-    const hemi = new THREE.HemisphereLight(0x87CEEB, 0x3a5a3a, 0.6);
-    scene.add(hemi);
-
-    const dirLight = new THREE.DirectionalLight(0xffeedd, 1.0);
-    dirLight.position.set(20, 30, 10);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 1024;
-    dirLight.shadow.mapSize.height = 1024;
-    const d = 30;
-    dirLight.shadow.camera.left = -d;
-    dirLight.shadow.camera.right = d;
-    dirLight.shadow.camera.top = d;
-    dirLight.shadow.camera.bottom = -d;
-    dirLight.shadow.camera.near = 1;
-    dirLight.shadow.camera.far = 60;
-    scene.add(dirLight);
-
-    const fillLight = new THREE.DirectionalLight(0xaaaaee, 0.3);
-    fillLight.position.set(-15, 10, -20);
-    scene.add(fillLight);
-  }
-
-  /* ===================================================================
-     Background Scenery (mountains, hills) — InstancedMesh
-     =================================================================== */
-  function createBackgroundScenery() {
-    sceneryGroup = new THREE.Group();
-    scene.add(sceneryGroup);
-
-    // Mountains: single InstancedMesh for 12 cones
-    const MOUNTAIN_COUNT = 12;
-    const mountainGeo = new THREE.ConeGeometry(1, 1, 6);
-    disposables.geometries.push(mountainGeo);
-    const mountainMat = new THREE.MeshLambertMaterial({
-      color: 0x6a8a6a,
-      flatShading: true,
-      fog: true,
-    });
-    disposables.materials.push(mountainMat);
-
-    const mountainMesh = new THREE.InstancedMesh(mountainGeo, mountainMat, MOUNTAIN_COUNT);
-    const mountainDummy = new THREE.Object3D();
-
-    for (let i = 0; i < MOUNTAIN_COUNT; i++) {
-      const height = 8 + Math.random() * 16;
-      const radius = 5 + Math.random() * 10;
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 60 + Math.random() * 40;
-      const scaleX = 0.8 + Math.random() * 0.6;
-
-      mountainDummy.position.set(
-        Math.cos(angle) * dist,
-        -2 + height / 2,
-        -30 - Math.random() * 50
-      );
-      mountainDummy.rotation.set(0, Math.random() * Math.PI, 0);
-      mountainDummy.scale.set(radius * scaleX, height, radius);
-      mountainDummy.updateMatrix();
-      mountainMesh.setMatrixAt(i, mountainDummy.matrix);
-    }
-    mountainMesh.instanceMatrix.needsUpdate = true;
-    staticGroup.add(mountainMesh);
-
-    // Hills: single InstancedMesh for 8 half-spheres
-    const HILL_COUNT = 8;
-    const hillGeo = new THREE.SphereGeometry(1, 8, 8, 0, Math.PI * 2, 0, Math.PI / 2);
-    disposables.geometries.push(hillGeo);
-    const hillMat = new THREE.MeshLambertMaterial({
-      color: 0x7a9a7a,
-      flatShading: true,
-      fog: true,
-    });
-    disposables.materials.push(hillMat);
-
-    const hillMesh = new THREE.InstancedMesh(hillGeo, hillMat, HILL_COUNT);
-    const hillDummy = new THREE.Object3D();
-
-    for (let i = 0; i < HILL_COUNT; i++) {
-      const radius = 15 + Math.random() * 20;
-      const side = Math.random() > 0.5 ? -1 : 1;
-
-      // Half-sphere base (y=0 in local coords) at world y=-2 (ground level)
-      hillDummy.position.set(
-        (40 + Math.random() * 30) * side,
-        -2,
-        -20 - Math.random() * 40
-      );
-      hillDummy.rotation.set(0, 0, 0);
-      hillDummy.scale.set(radius, radius, radius);
-      hillDummy.updateMatrix();
-      hillMesh.setMatrixAt(i, hillDummy.matrix);
-    }
-    hillMesh.instanceMatrix.needsUpdate = true;
-    staticGroup.add(hillMesh);
-  }
-
-  /* ===================================================================
-     Grass / Ground Plane
-     =================================================================== */
-  function createGrassPlane() {
-    // A wide, flat green plane covering the area below and around the road.
-    // It exists purely as scenery — a stable surface that roadside trees
-    // can sit on at a constant Y instead of inheriting the road's noise-
-    // driven heightOffset (which would make them float in dips and sink on
-    // hilltops). The plane is added to its own group so it doesn't get
-    // recycled by the road tile system. The grass plane is anchored at
-    // world Z=0 (under the player position) and does NOT scroll with
-    // scrollOffset; its length (GRASS_LENGTH=4000) is sufficient to
-    // cover from the player position to well past the fog far plane
-    // (≈200 units ahead) regardless of how far the player has travelled.
-    grassGroup = new THREE.Group();
-    grassGroup.position.z = 0;
-    staticGroup.add(grassGroup);
-
-    // Capture the geometry and material at module level so onDestroy can
-    // explicitly dispose them. The scene.traverse() in onDestroy already
-    // disposes every mesh, but retaining direct references guarantees the
-    // GPU resources are freed even if the grass group is ever detached
-    // from the scene graph during a future refactor.
-    grassMaterial = new THREE.MeshPhongMaterial({
-      color: GRASS_COLOR,
-      flatShading: true,
-      // Explicitly enable fog response. MeshPhongMaterial defaults to
-      // fog:true in Three.js, but stating it makes the contract
-      // auditable and protects the material from accidentally being
-      // switched off by a future refactor that flattens the options
-      // object. With fog enabled, the grass colour is interpolated
-      // toward the sky colour (0x87CEEB) as the grass recedes into
-      // the distance, so the grass-to-sky transition is smooth
-      // rather than a hard line at the fog far plane.
-      fog: true,
-    });
-    disposables.materials.push(grassMaterial);
-    grassGeometry = new THREE.PlaneGeometry(GRASS_WIDTH, GRASS_LENGTH);
-    disposables.geometries.push(grassGeometry);
-    const grass = new THREE.Mesh(grassGeometry, grassMaterial);
-    grass.rotation.x = -Math.PI / 2;
-    grass.position.y = GRASS_Y;
-    grass.receiveShadow = true;
-    grassGroup.add(grass);
-  }
-
-  /* ===================================================================
-     Procedural Sky Texture
-     =================================================================== */
-  function createProceduralSky() {
-    // Use canvas to draw procedural sky texture
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 512;
-    const ctx = canvas.getContext('2d');
-
-    // Gradient from horizon to zenith
-    const gradient = ctx.createLinearGradient(0, 0, 0, 512);
-    gradient.addColorStop(0, '#a0c4e8');     // Light blue at horizon
-    gradient.addColorStop(0.3, '#87CEEB');   // Sky blue
-    gradient.addColorStop(0.5, '#b8d4e8');   // Pale blue
-    gradient.addColorStop(0.7, '#f5e6d0');   // Warm sunset tint
-    gradient.addColorStop(0.85, '#ff9966');  // Orange sunset
-    gradient.addColorStop(1.0, '#ff6600');   // Deep sunset orange
-
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 512, 512);
-
-    // Add sun glow (yellow-white glow in upper right area)
-    const sunX = 380;
-    const sunY = 100;
-    const sunGlow = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 80);
-    sunGlow.addColorStop(0, 'rgba(255, 255, 200, 0.9)');
-    sunGlow.addColorStop(0.2, 'rgba(255, 220, 150, 0.6)');
-    sunGlow.addColorStop(0.5, 'rgba(255, 180, 100, 0.2)');
-    sunGlow.addColorStop(1, 'rgba(255, 150, 50, 0)');
-    ctx.fillStyle = sunGlow;
-    ctx.fillRect(0, 0, 512, 512);
-
-    // Draw sun disc
-    ctx.beginPath();
-    ctx.arc(sunX, sunY, 25, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 230, 1)';
-    ctx.fill();
-
-    // Add clouds (semi-transparent white circles)
-    const drawCloud = (cx, cy, r) => {
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.fill();
-      // Smaller overlapping circles for fluffy effect
-      ctx.beginPath();
-      ctx.arc(cx - r * 0.6, cy + r * 0.2, r * 0.6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx + r * 0.5, cy + r * 0.3, r * 0.5, 0, Math.PI * 2);
-      ctx.fill();
-    };
-
-    // Place clouds at various positions
-    drawCloud(120, 150, 30);
-    drawCloud(200, 200, 25);
-    drawCloud(280, 170, 35);
-    drawCloud(350, 220, 20);
-    drawCloud(80, 250, 22);
-    drawCloud(450, 180, 28);
-    drawCloud(160, 280, 18);
-    drawCloud(320, 260, 24);
-
-    const skyTexture = new THREE.CanvasTexture(canvas);
-    skyTexture.wrapS = THREE.RepeatWrapping;
-    skyTexture.wrapT = THREE.ClampToEdgeWrapping;
-    disposables.textures.push(skyTexture);
-
-    // Use texture directly for background (scene.background accepts Texture, not Mesh)
-    scene.background = skyTexture;
-  }
-
-  /* ===================================================================
-     Procedural Road Textures
-     =================================================================== */
-  function createAsphaltTextures() {
-    const textureSize = 256;
-
-    // Create canvas for color map (grayscale asphalt)
-    const colorCanvas = document.createElement('canvas');
-    colorCanvas.width = textureSize;
-    colorCanvas.height = textureSize;
-    const colorCtx = colorCanvas.getContext('2d');
-
-    // Fill with base gray
-    colorCtx.fillStyle = '#7a7a7a';
-    colorCtx.fillRect(0, 0, textureSize, textureSize);
-
-    // Add noise for asphalt texture
-    const imageData = colorCtx.getImageData(0, 0, textureSize, textureSize);
-    const data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const noise = (Math.random() - 0.5) * 30;
-      data[i] = Math.max(0, Math.min(255, data[i] + noise));     // R
-      data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise)); // G
-      data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise)); // B
-    }
-    colorCtx.putImageData(imageData, 0, 0);
-
-    const colorTexture = new THREE.CanvasTexture(colorCanvas);
-    colorTexture.wrapS = THREE.RepeatWrapping;
-    colorTexture.wrapT = THREE.RepeatWrapping;
-    colorTexture.repeat.set(ROAD_TEXTURE_REPEAT_X, ROAD_TEXTURE_REPEAT_Z);
-    colorTexture.needsUpdate = true;
-
-    // Create normal map (bump)
-    const normalCanvas = document.createElement('canvas');
-    normalCanvas.width = textureSize;
-    normalCanvas.height = textureSize;
-    const normalCtx = normalCanvas.getContext('2d');
-
-    // Fill with neutral normal (128, 128, 255)
-    normalCtx.fillStyle = 'rgb(128, 128, 255)';
-    normalCtx.fillRect(0, 0, textureSize, textureSize);
-
-    const normalImageData = normalCtx.getImageData(0, 0, textureSize, textureSize);
-    const normalData = normalImageData.data;
-    for (let i = 0; i < normalData.length; i += 4) {
-      // Add random perturbation for normal map variation (intensity 0.3-0.5)
-      const perturb = (Math.random() - 0.5) * 40;
-      normalData[i] = Math.max(0, Math.min(255, 128 + perturb));     // R (x)
-      normalData[i + 1] = Math.max(0, Math.min(255, 128 + perturb)); // G (y)
-      // B stays at 255 for z-up normals
-    }
-    normalCtx.putImageData(normalImageData, 0, 0);
-
-    const normalTexture = new THREE.CanvasTexture(normalCanvas);
-    normalTexture.wrapS = THREE.RepeatWrapping;
-    normalTexture.wrapT = THREE.RepeatWrapping;
-    normalTexture.repeat.set(ROAD_TEXTURE_REPEAT_X, ROAD_TEXTURE_REPEAT_Z);
-    normalTexture.needsUpdate = true;
-
-    // Create roughness map (rough asphalt ~0.8)
-    const roughnessCanvas = document.createElement('canvas');
-    roughnessCanvas.width = textureSize;
-    roughnessCanvas.height = textureSize;
-    const roughnessCtx = roughnessCanvas.getContext('2d');
-
-    const roughnessImageData = roughnessCtx.createImageData(textureSize, textureSize);
-    const roughnessData = roughnessImageData.data;
-    for (let i = 0; i < roughnessData.length; i += 4) {
-      // Roughness value around 0.8 (200 in RGB)
-      const roughness = 180 + Math.random() * 40;
-      roughnessData[i] = roughness;
-      roughnessData[i + 1] = roughness;
-      roughnessData[i + 2] = roughness;
-      roughnessData[i + 3] = 255;
-    }
-    roughnessCtx.putImageData(roughnessImageData, 0, 0);
-
-    const roughnessTexture = new THREE.CanvasTexture(roughnessCanvas);
-    roughnessTexture.wrapS = THREE.RepeatWrapping;
-    roughnessTexture.wrapT = THREE.RepeatWrapping;
-    roughnessTexture.repeat.set(ROAD_TEXTURE_REPEAT_X, ROAD_TEXTURE_REPEAT_Z);
-    roughnessTexture.needsUpdate = true;
-
-    // Track textures for proper disposal
-    disposables.textures.push(colorTexture, normalTexture, roughnessTexture);
-
-    return { map: colorTexture, normalMap: normalTexture, roughnessMap: roughnessTexture };
+        loading = false;
+        animate(0);
+      })
+      .catch((e) => {
+        console.warn('[RacingGame] Scene init error:', e);
+        webglError = true;
+        loading = false;
+      });
   }
 
   /* ===================================================================
@@ -1429,7 +1069,7 @@
     // sides) of the road — disposing it on the first segment recycle
     // would leave every other shoulder mesh with a dangling GPU
     // reference. The shared material is released exactly once in
-    // `onDestroy`, matching the lifecycle of `grassMaterial`.
+    // `onDestroy`.
     const removeMesh = (mesh, skipMaterialDispose = false) => {
       if (!mesh) return;
       roadGroup.remove(mesh);
@@ -2214,11 +1854,13 @@
     if (decoFenceBarMesh) roadGroup.remove(decoFenceBarMesh);
 
     // Clear decoration disposables (trees, lamps, poles, fences) before recreating
-    // These are recreated on restart and should not persist in disposables
-    // Keep shared materials: shoulderMaterial, surfaceMaterial, grassMaterial
-    // Keep shared geometries: grassGeometry
-    const sharedMats = new Set([shoulderMaterial, surfaceMaterial, grassMaterial]);
-    const sharedGeos = new Set([grassGeometry]);
+    // These are recreated on restart and should not persist in disposables.
+    // shoulderMaterial and surfaceMaterial are kept alive across restarts and
+    // released exactly once in onDestroy. grassMaterial/grassGeometry are
+    // owned by environment.js and persist across restarts (disposeEnvironment
+    // is NOT called during restart — only in onDestroy).
+    const sharedMats = new Set([shoulderMaterial, surfaceMaterial]);
+    const sharedGeos = new Set([]);
     // Dispose decoration geometries and materials, keep shared ones
     const decorGeos = disposables.geometries.splice(0);
     const decorMats = disposables.materials.splice(0);
@@ -2957,12 +2599,13 @@
   onMount(async () => {
     await tick();
     if (containerEl) {
-      initScene();
       window.addEventListener('keydown', onKeyDown);
       window.addEventListener('keyup', onKeyUp);
 
       resizeObserver = new ResizeObserver(onResize);
       resizeObserver.observe(containerEl);
+
+      initScene();
     }
   });
 
@@ -3005,7 +2648,17 @@
       audioCtx = null;
     }
 
-    // Dispose all Three.js resources
+    // Dispose environment resources (sky sphere, grass plane, shared textures)
+    // This is called first so environment-owned resources are released
+    // before the scene traversal below handles road/object resources.
+    if (disposeEnvironment) {
+      try { disposeEnvironment(); } catch (e) {
+        console.warn('[RacingGame] disposeEnvironment error:', e);
+      }
+      disposeEnvironment = null;
+    }
+
+    // Dispose all Three.js resources from scene objects (road, vehicles, objects, etc.)
     if (scene) {
       scene.traverse((obj) => {
         if (obj.isMesh || obj.isPoints) {
@@ -3019,23 +2672,7 @@
       });
     }
 
-    // Explicitly dispose grass GPU resources. The scene.traverse() loop
-    // above already covers them, but releasing the cached references up
-    // front prevents accidental retention if grassGroup is later detached
-    // from the scene (and makes the cleanup contract explicit).
-    if (grassGeometry) {
-      try { grassGeometry.dispose(); } catch {}
-      grassGeometry = null;
-    }
-    if (grassMaterial) {
-      try { grassMaterial.dispose(); } catch {}
-      grassMaterial = null;
-    }
-    // Dispose the shared shoulder material exactly once. The
-    // per-segment recycle path (`removeTileVisuals`) deliberately
-    // skips material disposal for shoulder meshes because every
-    // shoulder mesh shares this single instance — releasing it here
-    // (in step with `grassMaterial`) keeps the lifecycle balanced.
+    // Dispose the shared shoulder and surface materials.
     if (shoulderMaterial) {
       try { shoulderMaterial.dispose(); } catch {}
       shoulderMaterial = null;
@@ -3056,7 +2693,7 @@
     }
     disposables.materials = [];
 
-    // Dispose tracked textures (must be explicitly disposed per Three.js contract)
+    // Dispose tracked textures
     for (const tex of disposables.textures) {
       try { tex.dispose(); } catch {}
     }
@@ -3091,8 +2728,6 @@
     sceneryGroup = null;
     grassGroup = null;
     staticGroup = null;
-    grassGeometry = null;
-    grassMaterial = null;
     shoulderMaterial = null;
     roadSegments = [];
     roadTileData = [];

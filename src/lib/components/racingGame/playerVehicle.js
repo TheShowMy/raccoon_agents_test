@@ -38,6 +38,13 @@ const VEHICLE_BANK_SMOOTH = 0.15;
    Module state
    =================================================================== */
 
+/** Effect callbacks — may be set at creation time or via _setCallbacks */
+let _createParticleBurst = null;
+let _createShockwaveRing = null;
+let _triggerShake = null;
+let _onCollisionEffect = null;
+let _onPickupEffect = null;
+
 /**
  * Create and return the player vehicle module API.
  *
@@ -51,6 +58,12 @@ const VEHICLE_BANK_SMOOTH = 0.15;
  * @returns {object} Module API
  */
 export function createPlayerVehicle({ scene, createParticleBurst, createShockwaveRing, triggerShake, onCollisionEffect, onPickupEffect }) {
+  // Accept callbacks at construction time (original signature) OR allow deferred setup
+  _createParticleBurst = createParticleBurst ?? _createParticleBurst;
+  _createShockwaveRing = createShockwaveRing ?? _createShockwaveRing;
+  _triggerShake = triggerShake ?? _triggerShake;
+  _onCollisionEffect = onCollisionEffect ?? _onCollisionEffect;
+  _onPickupEffect = onPickupEffect ?? _onPickupEffect;
   /* ---- Vehicle mesh ---- */
   let vehicle = null;
   let wheels = [];
@@ -246,8 +259,8 @@ export function createPlayerVehicle({ scene, createParticleBurst, createShockwav
     laneSwitchEndX = getLaneX(targetLane);
     laneSwitchProgress = 0;
 
-    if (scene && vehicle && createParticleBurst) {
-      createParticleBurst(vehicle.position.clone(), 0x88ccff, 8);
+    if (scene && vehicle && _createParticleBurst) {
+      _createParticleBurst(vehicle.position.clone(), 0x88ccff, 8);
     }
   }
 
@@ -267,8 +280,8 @@ export function createPlayerVehicle({ scene, createParticleBurst, createShockwav
           if (scene && vehicle) {
             const pos = vehicle.position.clone();
             pos.y = ROAD_Y;
-            if (createShockwaveRing) createShockwaveRing(pos);
-            if (triggerShake) triggerShake(0.2, 0.12);
+            if (_createShockwaveRing) _createShockwaveRing(pos);
+            if (_triggerShake) _triggerShake(0.2, 0.12);
           }
         }
       }
@@ -280,13 +293,13 @@ export function createPlayerVehicle({ scene, createParticleBurst, createShockwav
     if (isJumping) return;
     isJumping = true;
     jumpVelocity = JUMP_FORCE;
-    if (scene && vehicle && createParticleBurst) {
+    if (scene && vehicle && _createParticleBurst) {
       const pos = vehicle.position.clone();
       pos.y = ROAD_Y;
-      createParticleBurst(pos, 0xff8800, 14, true);
-      createParticleBurst(pos, 0xffcc00, 6, true);
+      _createParticleBurst(pos, 0xff8800, 14, true);
+      _createParticleBurst(pos, 0xffcc00, 6, true);
     }
-    if (triggerShake) triggerShake(0.15, 0.08);
+    if (_triggerShake) _triggerShake(0.15, 0.08);
   }
 
   /* ===================================================================
@@ -314,12 +327,12 @@ export function createPlayerVehicle({ scene, createParticleBurst, createShockwav
         newHealth = result.health;
 
         if (result.healthDelta < 0) {
-          if (onCollisionEffect && vehicle) {
-            onCollisionEffect(vehicle.position.clone(), obj);
+          if (_onCollisionEffect && vehicle) {
+            _onCollisionEffect(vehicle.position.clone(), obj);
           }
         } else if (result.healthDelta > 0) {
-          if (onPickupEffect && vehicle) {
-            onPickupEffect(vehicle.position.clone());
+          if (_onPickupEffect && vehicle) {
+            _onPickupEffect(vehicle.position.clone());
           }
         }
 
@@ -390,6 +403,17 @@ export function createPlayerVehicle({ scene, createParticleBurst, createShockwav
   /* ===================================================================
      Public API
      =================================================================== */
+  /* ===================================================================
+     Deferred callback setter (allows gameLoop to wire effects after module init)
+     =================================================================== */
+  function _setCallbacks({ createParticleBurst, createShockwaveRing, triggerShake, onCollisionEffect, onPickupEffect }) {
+    if (createParticleBurst) _createParticleBurst = createParticleBurst;
+    if (createShockwaveRing) _createShockwaveRing = createShockwaveRing;
+    if (triggerShake) _triggerShake = triggerShake;
+    if (onCollisionEffect) _onCollisionEffect = onCollisionEffect;
+    if (onPickupEffect) _onPickupEffect = onPickupEffect;
+  }
+
   return {
     createVehicle,
     updateVehicle: function (dt, scrollOffset, roadSegments, objectDescriptors, objectMeshMap, objectsGroup, health, runningTime) {
@@ -413,5 +437,6 @@ export function createPlayerVehicle({ scene, createParticleBurst, createShockwav
     }),
     dispose,
     reset,
+    _setCallbacks,
   };
 }

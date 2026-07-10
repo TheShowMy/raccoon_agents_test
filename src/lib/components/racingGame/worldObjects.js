@@ -417,9 +417,20 @@ export function createWorldObjects({ scene, objectsGroup }) {
   }
 
   /* ===================================================================
+     Deferred init (allows gameLoop to pass scene/objectsGroup after environment setup)
+     =================================================================== */
+  function init({ scene: s, objectsGroup: og }) {
+    // Re-assign module-level vars if deferred init is used
+    // (in practice these are set at construction time, this is for flexibility)
+    if (s) scene = s;
+    if (og) objectsGroup = og;
+  }
+
+  /* ===================================================================
      Public API
      =================================================================== */
   return {
+    init,
     update,
     // Return shallow copy to preserve encapsulation
     getObjectDescriptors: () => [...objectDescriptors],

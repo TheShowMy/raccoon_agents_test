@@ -1,8 +1,8 @@
 <script>
   import { onMount } from 'svelte';
-  import MenuBar from '../lib/macos/MenuBar.svelte';
-  import Desktop from '../lib/macos/Desktop.svelte';
-  import Dock from '../lib/macos/Dock.svelte';
+  import MenuBar from '../lib/components/macos/MenuBar.svelte';
+  import Desktop from '../lib/components/macos/Desktop.svelte';
+  import Dock from '../lib/components/macos/Dock.svelte';
 
   let showMobileHint = false;
 

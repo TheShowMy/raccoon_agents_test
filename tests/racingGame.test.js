@@ -79,7 +79,7 @@ import {
   updateWindNoiseFilter,
   updateWindNoiseGain,
   stopWindNoise,
-} from '../src/lib/utils/racingGame.js';
+} from '../src/lib/utils/racingGame/index.js';
 
 /* ===================================================================
    Constants

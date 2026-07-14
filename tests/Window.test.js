@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/svelte';
-import Window from '../src/lib/macos/Window.svelte';
+import Window from '../src/lib/components/macos/Window.svelte';
 import * as windowsStore from '../src/lib/stores/windows.js';
 
 /* ===================================================================

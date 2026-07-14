@@ -98,22 +98,22 @@
 
 <style>
   .card {
-    background: var(--bg-card, #24253a);
-    border: 1px solid var(--border, #3b3d54);
-    border-radius: var(--radius, 10px);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
     overflow: hidden;
     transition:
-      transform var(--transition, 0.2s ease),
-      box-shadow var(--transition, 0.2s ease),
-      border-color var(--transition, 0.2s ease);
+      transform var(--transition),
+      box-shadow var(--transition),
+      border-color var(--transition);
     animation: fadeIn 0.35s ease both;
     animation-delay: var(--stagger-delay, 0s);
   }
 
   .card:hover {
     transform: translateY(-3px);
-    box-shadow: var(--shadow-lg, 0 8px 32px rgba(0, 0, 0, 0.45));
-    border-color: var(--border-light, #454766);
+    box-shadow: var(--shadow-lg);
+    border-color: var(--border-light);
   }
 
   /* ---- Card Header (editor tab bar) ---- */
@@ -123,7 +123,7 @@
     justify-content: space-between;
     padding: 0.7rem 1rem;
     background: #1f2137;
-    border-bottom: 1px solid var(--border, #3b3d54);
+    border-bottom: 1px solid var(--border);
     user-select: none;
   }
 
@@ -133,41 +133,13 @@
     gap: 0.6rem;
   }
 
-  /* macOS-style traffic light dots */
-  .card__dots {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .card__dot {
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    transition: opacity var(--transition, 0.2s ease);
-  }
-
-  .card__dot--red {
-    background: #ff5f57;
-  }
-
-  .card__dot--yellow {
-    background: #febc2e;
-  }
-
-  .card__dot--green {
-    background: #28c840;
-  }
-
-  .card:hover .card__dot {
-    opacity: 0.85;
-  }
+  /* Traffic light dots now use global styles from app.css */
 
   .card__lang {
     font-size: 0.85rem;
     font-weight: 600;
-    color: var(--text-secondary, #9aa5ce);
-    font-family: var(--font-mono, 'Cascadia Code', 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Menlo', 'Monaco', monospace);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
     letter-spacing: 0.01em;
   }
 
@@ -177,20 +149,20 @@
     gap: 0.35rem;
     padding: 0.35rem 0.7rem;
     font-size: 0.78rem;
-    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', system-ui, sans-serif);
+    font-family: var(--font-sans);
     font-weight: 500;
-    color: var(--text-muted, #565f89);
+    color: var(--text-muted);
     background: transparent;
     border: 1px solid transparent;
-    border-radius: var(--radius-sm, 6px);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: all var(--transition, 0.2s ease);
+    transition: all var(--transition);
   }
 
   .card__copy-btn:hover {
-    color: var(--text-primary, #c0caf5);
-    background: var(--bg-input, #2a2b3d);
-    border-color: var(--border, #3b3d54);
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border-color: var(--border);
   }
 
   .card__copy-btn:active {
@@ -198,20 +170,30 @@
   }
 
   .card__copy-btn:focus-visible {
-    outline: 2px solid var(--accent, #7aa2f7);
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 
   .card__copy-btn--copied {
     color: #9ece6a !important;
     border-color: #9ece6a !important;
-    background: rgba(158, 206, 106, 0.1) !important;
+    background: rgba(158, 206, 106, 0.12) !important;
+    transform: scale(1.02);
   }
 
   .card__copy-btn--failed {
     color: #f7768e !important;
     border-color: #f7768e !important;
-    background: rgba(247, 118, 142, 0.1) !important;
+    background: rgba(247, 118, 142, 0.12) !important;
+    animation: shake 0.35s ease;
+  }
+
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-3px); }
+    40% { transform: translateX(3px); }
+    60% { transform: translateX(-2px); }
+    80% { transform: translateX(2px); }
   }
 
   /* ---- Card Code Area ---- */
@@ -230,16 +212,16 @@
     left: 0;
     bottom: 0;
     width: 3px;
-    background: linear-gradient(180deg, var(--accent, #7aa2f7), #bb9af7);
+    background: linear-gradient(180deg, var(--accent), #bb9af7);
     opacity: 0.6;
     border-radius: 0 2px 2px 0;
   }
 
   .card__code pre {
-    font-family: var(--font-mono, 'Cascadia Code', 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Menlo', 'Monaco', monospace);
+    font-family: var(--font-mono);
     font-size: 0.85rem;
     line-height: 1.7;
-    color: var(--text-primary, #c0caf5);
+    color: var(--text-primary);
     white-space: pre;
     word-break: normal;
     overflow-wrap: normal;
@@ -255,68 +237,56 @@
 
   /* ---- Syntax Highlighting Tokens ---- */
   :global(.token.keyword) {
-    color: var(--token-keyword, #bb9af7);
+    color: var(--token-keyword);
     font-style: italic;
   }
 
   :global(.token.builtin) {
-    color: var(--token-function, #7aa2f7);
+    color: var(--token-function);
   }
 
   :global(.token.type) {
-    color: var(--token-number, #ff9e64);
+    color: var(--token-number);
   }
 
   :global(.token.function) {
-    color: var(--token-function, #7aa2f7);
+    color: var(--token-function);
   }
 
   :global(.token.string) {
-    color: var(--token-string, #9ece6a);
+    color: var(--token-string);
   }
 
   :global(.token.number) {
-    color: var(--token-number, #ff9e64);
+    color: var(--token-number);
   }
 
   :global(.token.comment) {
-    color: var(--token-comment, #565f89);
+    color: var(--token-comment);
     font-style: italic;
   }
 
   :global(.token.operator) {
-    color: var(--token-operator, #89ddff);
+    color: var(--token-operator);
   }
 
   :global(.token.punctuation) {
-    color: var(--token-punctuation, #a9b1d6);
+    color: var(--token-punctuation);
   }
 
   :global(.token.boolean) {
-    color: var(--token-number, #ff9e64);
+    color: var(--token-number);
   }
 
   :global(.token.constant) {
-    color: var(--token-number, #ff9e64);
+    color: var(--token-number);
   }
 
   :global(.token.property) {
-    color: var(--token-property, #c0caf5);
+    color: var(--token-property);
   }
 
   :global(.token.regex) {
-    color: var(--token-keyword, #bb9af7);
-  }
-
-  /* ---- Animations ---- */
-  @keyframes fadeIn {
-    from {
-      opacity: 0;
-      transform: translateY(6px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
+    color: var(--token-keyword);
   }
 </style>

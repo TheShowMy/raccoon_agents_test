@@ -1,6 +1,6 @@
 <script>
   import { APP_REGISTRY } from './appRegistry.js';
-  import { focusedWindowId, focusWindow, closeWindow, toggleMinimize, toggleMaximize, moveWindow, resizeWindow } from '../stores/windows.js';
+  import { focusedWindowId, focusWindow, closeWindow, toggleMinimize, toggleMaximize, moveWindow, resizeWindow } from '../../stores/windows.js';
 
   /** @type {{ id: string, appId: string, title: string, x: number, y: number, width: number, height: number, zIndex: number, minimized: boolean, maximized: boolean }} */
   export let win;

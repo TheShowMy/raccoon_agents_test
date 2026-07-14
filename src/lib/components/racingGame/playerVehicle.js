@@ -14,7 +14,7 @@ import {
   getRoadOffsetAt,
   checkCollision,
   applyCollision,
-} from '../../utils/racingGame.js';
+} from '../../utils/racingGame/index.js';
 
 /* ===================================================================
    Constants

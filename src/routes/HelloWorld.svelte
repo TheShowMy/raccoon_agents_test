@@ -73,29 +73,31 @@
     width: 100%;
     padding: 0.8rem 1.2rem 0.8rem 2.85rem;
     font-size: 0.95rem;
-    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', system-ui, sans-serif);
-    color: var(--text-primary, #c0caf5);
+    font-family: var(--font-sans);
+    color: var(--text-primary);
     background:
-      var(--bg-input, #2a2b3d)
+      var(--bg-input)
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%239aa5ce' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E")
       0.9rem center no-repeat;
-    border: 1.5px solid var(--border, #3b3d54);
-    border-radius: var(--radius, 10px);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
     outline: none;
     transition:
-      border-color var(--transition, 0.2s ease),
-      box-shadow var(--transition, 0.2s ease),
-      background-color var(--transition, 0.2s ease);
+      border-color var(--transition),
+      box-shadow var(--transition),
+      background-color var(--transition);
   }
 
   .search-input::placeholder {
-    color: var(--text-muted, #565f89);
+    color: var(--text-muted);
   }
 
   .search-input:focus {
-    border-color: var(--accent, #7aa2f7);
-    background-color: #1a1b26;
-    box-shadow: 0 0 0 3px rgba(122, 162, 247, 0.18);
+    border-color: var(--accent);
+    background-color: #1c1e30;
+    box-shadow:
+      0 0 0 3px rgba(122, 162, 247, 0.25),
+      inset 0 0 0 1px rgba(122, 162, 247, 0.08);
   }
 
   /* ===== Results Counter ===== */
@@ -104,7 +106,7 @@
     margin: 0.6rem auto 0;
     padding: 0 1.5rem;
     font-size: 0.8rem;
-    color: var(--text-muted, #565f89);
+    color: var(--text-muted);
     letter-spacing: 0.02em;
   }
 
@@ -128,7 +130,7 @@
   .empty-state {
     text-align: center;
     padding: 4rem 1rem 3rem;
-    color: var(--text-muted, #565f89);
+    color: var(--text-muted);
     animation: fadeIn 0.3s ease;
   }
 
@@ -140,18 +142,7 @@
 
   .empty-state__text {
     font-size: 1.05rem;
-    color: var(--text-secondary, #9aa5ce);
-  }
-
-  @keyframes fadeIn {
-    from {
-      opacity: 0;
-      transform: translateY(6px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
+    color: var(--text-secondary);
   }
 
   /* ===== Responsive ===== */

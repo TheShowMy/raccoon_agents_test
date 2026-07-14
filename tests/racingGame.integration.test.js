@@ -52,7 +52,7 @@ import {
   ROAD_Y,
   JUMP_IMMUNITY_HEIGHT,
   OBJECT_TYPES,
-} from '../src/lib/utils/racingGame.js';
+} from '../src/lib/utils/racingGame/index.js';
 
 /* ===================================================================
    Integration: Collision detection — component's game loop reuses

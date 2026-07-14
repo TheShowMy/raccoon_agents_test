@@ -1,5 +1,5 @@
 <script>
-  import { windows, openWindow, focusWindow } from '../stores/windows.js';
+  import { windows, openWindow, focusWindow } from '../../stores/windows.js';
   import { APP_REGISTRY, DOCK_APPS } from './appRegistry.js';
 
   /** Check if an app already has an open window; if so, return its id, else null */

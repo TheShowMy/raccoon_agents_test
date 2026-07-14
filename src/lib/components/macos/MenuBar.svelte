@@ -1,8 +1,8 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { activeAppId } from '../stores/windows.js';
+  import { activeAppId } from '../../stores/windows.js';
   import { APP_REGISTRY } from './appRegistry.js';
-  import { pendingMenuAction } from '../stores/menuActions.js';
+  import { pendingMenuAction } from '../../stores/menuActions.js';
 
   // --- Clock state ---
   let timeStr = '00:00';

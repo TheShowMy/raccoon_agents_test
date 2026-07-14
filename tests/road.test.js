@@ -25,7 +25,7 @@ import {
   getShoulderMaterial,
   getSurfaceMaterial,
   disposeRoadMaterials,
-} from '../src/lib/components/racingGame/road.js';
+} from '../src/lib/components/racingGame/roadVisual.js';
 
 /* ===================================================================
    Constants

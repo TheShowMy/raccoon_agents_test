@@ -20,7 +20,7 @@ import {
   getRoadOffsetAt,
   OBJECT_TYPES,
   ROAD_Y,
-} from '../../utils/racingGame.js';
+} from '../../utils/racingGame/index.js';
 import {
   createAudioController,
   updateAudioSpeed,

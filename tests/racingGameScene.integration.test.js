@@ -31,7 +31,7 @@ import {
   updateWindNoiseGain,
   OBJECT_TYPES,
   REPAIR_HEAL,
-} from '../src/lib/utils/racingGame.js';
+} from '../src/lib/utils/racingGame/index.js';
 
 /* ===================================================================
    Integration: Vehicle tracking behaviour
@@ -2623,7 +2623,7 @@ import {
   AUDIO_SMOOTH_TIME,
   OBJECT_TYPES,
   REPAIR_HEAL,
-} from '../src/lib/utils/racingGame.js';
+} from '../src/lib/utils/racingGame/index.js';
 
 const SW_MAX_LIFETIME = 0.6;
 const SP_MAX_LIFETIME = 0.7;

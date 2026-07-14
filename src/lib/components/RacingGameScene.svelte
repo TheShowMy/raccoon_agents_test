@@ -6,7 +6,7 @@
   import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
   import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
   import { createEnvironment, createAsphaltTextures } from './racingGame/environment.js';
-  import { createRoadSystem, updateRoad, cleanupRoadForRestart, disposeRoadMaterials } from './racingGame/road.js';
+  import { createRoadSystem, updateRoad, cleanupRoadForRestart, disposeRoadMaterials } from './racingGame/roadVisual.js';
   import {
     createDecorations,
     updateDecorations,
@@ -18,7 +18,7 @@
   import {
     MAX_HEALTH,
     OBJECT_TYPES,
-  } from '../utils/racingGame.js';
+  } from '../utils/racingGame/index.js';
   import {
     createAudioController,
     updateAudioSpeed,

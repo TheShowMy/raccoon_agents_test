@@ -15,7 +15,7 @@ import {
   ONCOMING_VEHICLE_SPEED,
   generateObjectsForSegment,
   computeDifficulty,
-} from '../../utils/racingGame.js';
+} from '../../utils/racingGame/index.js';
 
 /* ===================================================================
    Constants

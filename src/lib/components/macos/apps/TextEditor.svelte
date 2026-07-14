@@ -1,6 +1,6 @@
 <script>
   import { onMount, tick } from 'svelte';
-  import { pendingMenuAction } from '../../stores/menuActions.js';
+  import { pendingMenuAction } from '../../../stores/menuActions.js';
 
   /** @type {{ id: string, appId: string }} */
   export let win;

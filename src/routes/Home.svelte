@@ -171,27 +171,6 @@
     gap: 0.75rem;
   }
 
-  .card__dots {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .card__dot {
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    transition: opacity var(--transition);
-  }
-
-  .card__dot--red    { background: #ff5f57; }
-  .card__dot--yellow { background: #febc2e; }
-  .card__dot--green  { background: #28c840; }
-
-  .list-card:hover .card__dot {
-    opacity: 0.85;
-  }
-
   .list-card__title {
     font-size: 0.95rem;
     font-weight: 600;

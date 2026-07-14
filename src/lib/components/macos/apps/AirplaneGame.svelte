@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { pendingMenuAction } from '../../stores/menuActions.js';
-  import { syncRendererSize, mapMouseToPlayArea } from '../../utils/airplaneGame.js';
+  import { pendingMenuAction } from '../../../stores/menuActions.js';
+  import { syncRendererSize, mapMouseToPlayArea } from '../../../utils/airplaneGame.js';
   import * as THREE from 'three';
 
   /** @type {{ id: string, appId: string }} */

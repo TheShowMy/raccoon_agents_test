@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import { GRASS_Y } from './environment.js';
-import { ROAD_VISUAL_WIDTH } from './road.js';
+import { ROAD_VISUAL_WIDTH } from './roadVisual.js';
 import { getRoadOffsetAt } from '../../utils/racingGame/index.js';
 
 /* ===================================================================

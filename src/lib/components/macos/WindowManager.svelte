@@ -1,5 +1,5 @@
 <script>
-  import { windows } from '../stores/windows.js';
+  import { windows } from '../../stores/windows.js';
   import Window from './Window.svelte';
 </script>
 

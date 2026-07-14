@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
-  import { pendingMenuAction } from '../../stores/menuActions.js';
-  import { ROOT_FOLDER, SIDEBAR_FAVORITES, SIDEBAR_TAGS, resolvePath } from '../../data/finderData.js';
+  import { pendingMenuAction } from '../../../stores/menuActions.js';
+  import { ROOT_FOLDER, SIDEBAR_FAVORITES, SIDEBAR_TAGS, resolvePath } from '../../../data/finderData.js';
 
   /** @type {{ id: string, appId: string }} */
   export let win;

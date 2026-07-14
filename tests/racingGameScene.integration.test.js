@@ -3258,4 +3258,117 @@ describe('WebGL2 compatibility detection', () => {
       warnSpy.mockRestore();
     }
   });
+
+  it('createEnvironment returns null scene when no WebGL is available', async () => {
+    HTMLCanvasElement.prototype.getContext = function () {
+      return null;
+    };
+    const containerEl = document.createElement('div');
+    containerEl.getBoundingClientRect = () => ({ width: 800, height: 500 });
+    const mod = await import(
+      /* @vite-ignore */
+      '../src/lib/components/racingGame/environment.js?t=' + Date.now()
+    );
+    const env = await mod.createEnvironment({ containerEl });
+    expect(env.scene).toBeNull();
+    expect(env.camera).toBeNull();
+    expect(env.renderer).toBeNull();
+  });
+
+  it('createEnvironment logs console.warn with no-WebGL message when no WebGL is available', async () => {
+    HTMLCanvasElement.prototype.getContext = function () {
+      return null;
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const containerEl = document.createElement('div');
+      containerEl.getBoundingClientRect = () => ({ width: 800, height: 500 });
+      const mod = await import(
+        /* @vite-ignore */
+        '../src/lib/components/racingGame/environment.js?t=' + Date.now()
+      );
+      await mod.createEnvironment({ containerEl });
+
+      expect(warnSpy).toHaveBeenCalled();
+      const warnMessage = warnSpy.mock.calls[0][0];
+      expect(warnMessage).toContain('WebGL2 不可用');
+      expect(warnMessage).toContain('不支持 WebGL');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('createEnvironment logs console.warn with WebGL1-only message when WebGL1-only', async () => {
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      if (type === 'webgl2') return null;
+      if (type === 'webgl') return createGLStub();
+      if (type === 'experimental-webgl') return null;
+      return null;
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const containerEl = document.createElement('div');
+      containerEl.getBoundingClientRect = () => ({ width: 800, height: 500 });
+      const mod = await import(
+        /* @vite-ignore */
+        '../src/lib/components/racingGame/environment.js?t=' + Date.now()
+      );
+      await mod.createEnvironment({ containerEl });
+
+      expect(warnSpy).toHaveBeenCalled();
+      const warnMessage = warnSpy.mock.calls[0][0];
+      expect(warnMessage).toContain('WebGL2 不可用');
+      expect(warnMessage).toContain('仅支持 WebGL1');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('detectWebGLSupport returns webgl1Available=true when WebGL1 available but WebGL2 is not', () => {
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      if (type === 'webgl2') return null;
+      if (type === 'webgl') return createGLStub();
+      if (type === 'experimental-webgl') return null;
+      return null;
+    };
+    const result = detectWebGLSupport();
+    expect(result.webgl1Available).toBe(true);
+    expect(result.supported).toBe(false);
+  });
+
+  it('detectWebGLSupport returns webgl1Available=false when no WebGL at all', () => {
+    HTMLCanvasElement.prototype.getContext = function () {
+      return null;
+    };
+    const result = detectWebGLSupport();
+    expect(result.webgl1Available).toBe(false);
+    expect(result.supported).toBe(false);
+  });
+
+  it('createEnvironment returns undefined scene/objects (nulls) when WebGLRenderer fails despite probe success', async () => {
+    // The stub passes the getContext('webgl2') probe but lacks the methods
+    // needed by THREE.WebGLRenderer (getShaderPrecisionFormat, etc.)
+    // This tests that createEnvironment gracefully degrades to null objects.
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      if (type === 'webgl2' && attrs && attrs.antialias !== false) return createGLStub();
+      return null;
+    };
+    const containerEl = document.createElement('div');
+    containerEl.getBoundingClientRect = () => ({ width: 800, height: 500 });
+    const mod = await import(
+      /* @vite-ignore */
+      '../src/lib/components/racingGame/environment.js?t=' + Date.now()
+    );
+    const env = await mod.createEnvironment({ containerEl });
+    // When WebGLRenderer construction fails despite probe success,
+    // createEnvironment returns null objects (same as no-WebGL path).
+    expect(env.scene).toBeNull();
+    expect(env.camera).toBeNull();
+    expect(env.renderer).toBeNull();
+    expect(env.staticGroup).toBeNull();
+    expect(env.grassGroup).toBeNull();
+    // onWebGLError must be a callable function even in this degraded state
+    expect(typeof env.onWebGLError).toBe('function');
+    expect(() => env.onWebGLError()).not.toThrow();
+  });
 });

@@ -405,6 +405,60 @@ export function createAsphaltTextures(repeatX = 4, repeatZ = 2) {
 }
 
 // =============================================================================
+// WebGL capability detection (independent of Three.js)
+// =============================================================================
+
+/**
+ * Probes the browser for WebGL support using native canvas API,
+ * without relying on THREE.WebGLRenderer constructor.
+ *
+ * Tries default attributes first (antialias: true). If that fails,
+ * retries with simplified attributes (antialias: false, alpha: false,
+ * powerPreference: 'default') to handle browsers where the default
+ * context creation is blocked but a fallback configuration works.
+ *
+ * @returns {{ supported: boolean, usedFallback: boolean }}
+ *   - supported: true if WebGL is available (default or fallback)
+ *   - usedFallback: true if only fallback attributes succeeded
+ */
+export function detectWebGLSupport() {
+  const canvas = document.createElement('canvas');
+
+  // Try WebGL2 with default params first
+  let gl = canvas.getContext('webgl2', { antialias: true, alpha: true });
+  if (gl) {
+    return { supported: true, usedFallback: false };
+  }
+
+  // Try WebGL1 with default params
+  gl = canvas.getContext('webgl', { antialias: true, alpha: true });
+  if (gl) {
+    return { supported: true, usedFallback: false };
+  }
+
+  // Fallback: try with simplified attributes (antialias: false, alpha: false)
+  gl = canvas.getContext('webgl2', {
+    antialias: false,
+    alpha: false,
+    powerPreference: 'default',
+  });
+  if (gl) {
+    return { supported: true, usedFallback: true };
+  }
+
+  gl = canvas.getContext('webgl', {
+    antialias: false,
+    alpha: false,
+    powerPreference: 'default',
+  });
+  if (gl) {
+    return { supported: true, usedFallback: true };
+  }
+
+  return { supported: false, usedFallback: false };
+}
+
+// =============================================================================
 // Main factory
 // =============================================================================
 
@@ -433,12 +487,36 @@ export async function createEnvironment({ containerEl }) {
   const w = rect.width || 800;
   const h = rect.height || 500;
 
-  // Renderer (create first so we can bail out before scene/camera if WebGL fails)
+  // -- WebGL capability detection before renderer construction --
+  const webglSupport = detectWebGLSupport();
+  if (!webglSupport.supported) {
+    console.warn('[RacingGame] WebGL not supported (browser probe failed)');
+    return {
+      scene: null,
+      camera: null,
+      renderer: null,
+      staticGroup: null,
+      grassGroup: null,
+      grassMesh: null,
+      grassGeometry: null,
+      grassMaterial: null,
+      onWebGLError: () => {},
+      dispose: () => {},
+    };
+  }
+
+  // Use conservative params if default probe failed; otherwise use standard
+  const rendererOptions = webglSupport.usedFallback
+    ? { antialias: false, alpha: false, powerPreference: 'default' }
+    : { antialias: true };
+
+  // Renderer (safety net — probe succeeded, but WebGLRenderer may still fail
+  // in exotic environments)
   let renderer;
   try {
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer = new THREE.WebGLRenderer(rendererOptions);
   } catch (e) {
-    console.warn('[RacingGame] WebGL not supported:', e);
+    console.warn('[RacingGame] WebGLRenderer construction failed despite probe success:', e);
     return {
       scene: null,
       camera: null,

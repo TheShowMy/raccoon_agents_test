@@ -473,7 +473,7 @@
     </div>
   {:else if webglError}
     <div class="loading-overlay">
-      <div class="loading-text error">⚠️ WebGL 不可用，无法启动 3D 赛车游戏</div>
+      <div class="loading-text error">⚠️ 浏览器不支持 WebGL，无法启动 3D 赛车游戏<br><span class="error-hint">请尝试：更新浏览器、启用硬件加速，或使用 Chrome/Firefox/Edge</span></div>
     </div>
   {:else if gameState === 'menu'}
     <div class="menu-overlay">
@@ -822,7 +822,15 @@
     color: #ff8888;
     font-size: 15px;
     text-align: center;
-    max-width: 300px;
-    line-height: 1.4;
+    max-width: 400px;
+    line-height: 1.6;
+  }
+
+  .error-hint {
+    display: block;
+    font-size: 12px;
+    color: rgba(255, 200, 200, 0.7);
+    margin-top: 8px;
+    font-weight: 400;
   }
 </style>

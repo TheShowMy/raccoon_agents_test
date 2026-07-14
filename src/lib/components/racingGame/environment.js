@@ -421,9 +421,10 @@ export function createAsphaltTextures(repeatX = 4, repeatZ = 2) {
  * powerPreference: 'default') to handle environments where the default
  * context creation is blocked but a fallback configuration works.
  *
- * @returns {{ supported: boolean, usedFallback: boolean }}
+ * @returns {{ supported: boolean, usedFallback: boolean, webgl1Available: boolean }}
  *   - supported: true if WebGL2 is available (default or fallback)
  *   - usedFallback: true if only fallback attributes succeeded
+ *   - webgl1Available: true if WebGL1 is available but WebGL2 is not (diagnostic)
  */
 export function detectWebGLSupport() {
   const canvas = document.createElement('canvas');
@@ -431,7 +432,7 @@ export function detectWebGLSupport() {
   // Try WebGL2 with default params first
   let gl = canvas.getContext('webgl2', { antialias: true, alpha: true });
   if (gl) {
-    return { supported: true, usedFallback: false };
+    return { supported: true, usedFallback: false, webgl1Available: false };
   }
 
   // Fallback: try with simplified attributes (antialias: false, alpha: false)
@@ -441,11 +442,15 @@ export function detectWebGLSupport() {
     powerPreference: 'default',
   });
   if (gl) {
-    return { supported: true, usedFallback: true };
+    return { supported: true, usedFallback: true, webgl1Available: false };
   }
 
+  // Probe WebGL1 for diagnostic distinction between WebGL1-only and no-WebGL
+  const gl1 = canvas.getContext('webgl', { antialias: true, alpha: true })
+    || canvas.getContext('experimental-webgl', { antialias: true, alpha: true });
+
   // WebGL1-only or no WebGL at all → not supported
-  return { supported: false, usedFallback: false };
+  return { supported: false, usedFallback: false, webgl1Available: !!gl1 };
 }
 
 // =============================================================================
@@ -480,7 +485,11 @@ export async function createEnvironment({ containerEl }) {
   // -- WebGL capability detection before renderer construction --
   const webglSupport = detectWebGLSupport();
   if (!webglSupport.supported) {
-    console.warn('[RacingGame] WebGL2 not supported (browser probe failed — WebGL1-only or no WebGL)');
+    if (webglSupport.webgl1Available) {
+      console.warn('[RacingGame] 浏览器仅支持 WebGL1，WebGL2 不可用，无法启动 3D 赛车游戏。请更新浏览器或使用最新版 Chrome/Firefox/Edge。');
+    } else {
+      console.warn('[RacingGame] WebGL2 不可用（浏览器不支持 WebGL），无法启动 3D 赛车游戏。请更新浏览器或使用最新版 Chrome/Firefox/Edge。');
+    }
     return {
       scene: null,
       camera: null,

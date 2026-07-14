@@ -199,6 +199,7 @@
     try {
       const env = await createEnvironment({ containerEl });
       if (!env.scene) {
+        console.warn('[RacingGame] 浏览器仅支持 WebGL1，WebGL2 不可用：3D 赛车游戏无法启动（详情请见上方环境检测警告）');
         webglError = true;
         loading = false;
         return;

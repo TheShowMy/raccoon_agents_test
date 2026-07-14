@@ -3204,6 +3204,7 @@ describe('WebGL2 compatibility detection', () => {
     };
     const result = detectWebGLSupport();
     expect(result.supported).toBe(false);
+    expect(result.webgl1Available).toBe(false);
   });
 
   it('does not throw when getContext returns undefined (defensive)', () => {
@@ -3211,7 +3212,7 @@ describe('WebGL2 compatibility detection', () => {
       return undefined;
     };
     const result = detectWebGLSupport();
-    expect(result).toEqual({ supported: false, usedFallback: false });
+    expect(result).toEqual({ supported: false, usedFallback: false, webgl1Available: false });
   });
 
   it('createEnvironment returns null scene when WebGL2 is absent (WebGL1-only)', async () => {
@@ -3231,5 +3232,30 @@ describe('WebGL2 compatibility detection', () => {
     expect(env.scene).toBeNull();
     expect(env.camera).toBeNull();
     expect(env.renderer).toBeNull();
+  });
+
+  it('createEnvironment logs console.warn with WebGL2 unavailable message when WebGL1-only', async () => {
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      if (type === 'webgl2') return null;
+      if (type === 'webgl') return createGLStub();
+      return null;
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const containerEl = document.createElement('div');
+      containerEl.getBoundingClientRect = () => ({ width: 800, height: 500 });
+      const { createEnvironment } = await import(
+        /* @vite-ignore */
+        '../src/lib/components/racingGame/environment.js'
+      );
+      await createEnvironment({ containerEl });
+
+      expect(warnSpy).toHaveBeenCalled();
+      const warnMessage = warnSpy.mock.calls[0][0];
+      expect(warnMessage).toContain('WebGL2 不可用');
+      expect(warnMessage).toContain('仅支持 WebGL1');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

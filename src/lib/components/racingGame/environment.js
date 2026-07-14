@@ -409,16 +409,20 @@ export function createAsphaltTextures(repeatX = 4, repeatZ = 2) {
 // =============================================================================
 
 /**
- * Probes the browser for WebGL support using native canvas API,
+ * Probes the browser for WebGL2 support using native canvas API,
  * without relying on THREE.WebGLRenderer constructor.
  *
- * Tries default attributes first (antialias: true). If that fails,
- * retries with simplified attributes (antialias: false, alpha: false,
- * powerPreference: 'default') to handle browsers where the default
+ * WebGL1-only browsers are considered unsupported because Three.js r170
+ * requires WebGL2 and the project does not provide a WebGL1 rendering
+ * fallback (per ChangeSpec).
+ *
+ * Tries default attributes first (antialias: true, alpha: true). If that
+ * fails, retries with simplified attributes (antialias: false, alpha: false,
+ * powerPreference: 'default') to handle environments where the default
  * context creation is blocked but a fallback configuration works.
  *
  * @returns {{ supported: boolean, usedFallback: boolean }}
- *   - supported: true if WebGL is available (default or fallback)
+ *   - supported: true if WebGL2 is available (default or fallback)
  *   - usedFallback: true if only fallback attributes succeeded
  */
 export function detectWebGLSupport() {
@@ -426,12 +430,6 @@ export function detectWebGLSupport() {
 
   // Try WebGL2 with default params first
   let gl = canvas.getContext('webgl2', { antialias: true, alpha: true });
-  if (gl) {
-    return { supported: true, usedFallback: false };
-  }
-
-  // Try WebGL1 with default params
-  gl = canvas.getContext('webgl', { antialias: true, alpha: true });
   if (gl) {
     return { supported: true, usedFallback: false };
   }
@@ -446,15 +444,7 @@ export function detectWebGLSupport() {
     return { supported: true, usedFallback: true };
   }
 
-  gl = canvas.getContext('webgl', {
-    antialias: false,
-    alpha: false,
-    powerPreference: 'default',
-  });
-  if (gl) {
-    return { supported: true, usedFallback: true };
-  }
-
+  // WebGL1-only or no WebGL at all → not supported
   return { supported: false, usedFallback: false };
 }
 
@@ -490,7 +480,7 @@ export async function createEnvironment({ containerEl }) {
   // -- WebGL capability detection before renderer construction --
   const webglSupport = detectWebGLSupport();
   if (!webglSupport.supported) {
-    console.warn('[RacingGame] WebGL not supported (browser probe failed)');
+    console.warn('[RacingGame] WebGL2 not supported (browser probe failed — WebGL1-only or no WebGL)');
     return {
       scene: null,
       camera: null,

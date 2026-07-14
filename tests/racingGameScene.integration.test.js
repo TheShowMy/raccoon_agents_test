@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   getRoadOffsetAt,
   sampleCurveOffset,
@@ -32,6 +33,8 @@ import {
   OBJECT_TYPES,
   REPAIR_HEAL,
 } from '../src/lib/utils/racingGame/index.js';
+
+import { detectWebGLSupport } from '../src/lib/components/racingGame/environment.js';
 
 /* ===================================================================
    Integration: Vehicle tracking behaviour
@@ -3095,5 +3098,138 @@ describe('Flash key counter — increment before showFlash reset', () => {
   it('{#key flashKey} block re-mounts on each new key value', () => {
     const k1 = 0, k2 = 1;
     expect(k1).not.toBe(k2);
+  });
+});
+
+/* ==================================================================
+   17. WebGL2 compatibility detection
+
+      detectWebGLSupport() must only accept WebGL2 as supported.
+      WebGL1-only browsers and browsers with no WebGL support must
+      return { supported: false }.
+
+      The tests mock HTMLCanvasElement.prototype.getContext to
+      simulate three scenarios:
+        1. WebGL2 available (returns a webgl2 context stub)
+        2. WebGL1-only (webgl2 returns null, webgl returns a stub)
+        3. No WebGL support (both return null)
+      ================================================================== */
+describe('WebGL2 compatibility detection', () => {
+  /** Creates a minimal WebGL context stub for mocking. */
+  function createGLStub() {
+    return {
+      getParameter: () => {},
+      getExtension: () => null,
+      VERSION: 'WebGL 1.0',
+      canvas: document.createElement('canvas'),
+    };
+  }
+
+  let originalGetContext;
+
+  beforeEach(() => {
+    originalGetContext = HTMLCanvasElement.prototype.getContext;
+  });
+
+  afterEach(() => {
+    HTMLCanvasElement.prototype.getContext = originalGetContext;
+  });
+
+  it('returns supported=true when WebGL2 is available (default params)', () => {
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      if (type === 'webgl2') return createGLStub();
+      return null;
+    };
+    const result = detectWebGLSupport();
+    expect(result.supported).toBe(true);
+    expect(result.usedFallback).toBe(false);
+  });
+
+  it('returns supported=true when WebGL2 is available (fallback params)', () => {
+    // First call (default attrs) returns null; second call (fallback) succeeds
+    let callCount = 0;
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      callCount++;
+      if (type === 'webgl2') {
+        if (callCount === 1) return null; // default attrs fail
+        if (callCount === 2) return createGLStub(); // fallback attrs succeed
+      }
+      return null;
+    };
+    const result = detectWebGLSupport();
+    expect(result.supported).toBe(true);
+    expect(result.usedFallback).toBe(true);
+  });
+
+  it('returns supported=false when only WebGL1 is available (WebGL2 returns null)', () => {
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      if (type === 'webgl2') return null;
+      if (type === 'webgl') return createGLStub();
+      return null;
+    };
+    const result = detectWebGLSupport();
+    expect(result.supported).toBe(false);
+    expect(result.usedFallback).toBe(false);
+  });
+
+  it('returns supported=false when neither WebGL1 nor WebGL2 is available', () => {
+    HTMLCanvasElement.prototype.getContext = function () {
+      return null;
+    };
+    const result = detectWebGLSupport();
+    expect(result.supported).toBe(false);
+    expect(result.usedFallback).toBe(false);
+  });
+
+  it('does not fall back to WebGL1 context (only WebGL2 is acceptable)', () => {
+    let webglCalled = false;
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      if (type === 'webgl2') return null;
+      if (type === 'webgl') {
+        webglCalled = true;
+        return createGLStub();
+      }
+      return null;
+    };
+    const result = detectWebGLSupport();
+    expect(result.supported).toBe(false);
+    expect(result.usedFallback).toBe(false);
+  });
+
+  it('returns supported=false when WebGL2 is blocked by security policy', () => {
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      if (type === 'webgl2') return null;
+      if (type === 'webgl') return null;
+      return null;
+    };
+    const result = detectWebGLSupport();
+    expect(result.supported).toBe(false);
+  });
+
+  it('does not throw when getContext returns undefined (defensive)', () => {
+    HTMLCanvasElement.prototype.getContext = function () {
+      return undefined;
+    };
+    const result = detectWebGLSupport();
+    expect(result).toEqual({ supported: false, usedFallback: false });
+  });
+
+  it('createEnvironment returns null scene when WebGL2 is absent (WebGL1-only)', async () => {
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      if (type === 'webgl2') return null;
+      if (type === 'webgl') return createGLStub();
+      return null;
+    };
+    // createEnvironment needs a container element
+    const containerEl = document.createElement('div');
+    containerEl.getBoundingClientRect = () => ({ width: 800, height: 500 });
+    const { createEnvironment } = await import(
+      /* @vite-ignore */
+      '../src/lib/components/racingGame/environment.js'
+    );
+    const env = await createEnvironment({ containerEl });
+    expect(env.scene).toBeNull();
+    expect(env.camera).toBeNull();
+    expect(env.renderer).toBeNull();
   });
 });

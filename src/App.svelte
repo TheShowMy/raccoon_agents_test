@@ -1,5 +1,5 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { GameRenderer } from './lib/game/renderer.js';
   import { GameLoop } from './lib/game/gameLoop.js';
 
@@ -8,17 +8,28 @@
   let gameLoop;
   let state = { score: 0, health: 3, alive: true, gameOver: false };
   let showStart = true;
+  let pollTimer;
 
+  /** 始终渲染 canvas 容器（初始隐藏），避免 start 时 DOM 未就绪 */
   function startGame() {
     showStart = false;
-    if (!renderer) {
-      renderer = new GameRenderer(container);
-    }
-    gameLoop = new GameLoop(renderer);
-    gameLoop.start();
 
-    // 状态轮询
-    state = gameLoop.getState();
+    // 等待 DOM 更新，确保 game-canvas 容器已渲染
+    tick().then(() => {
+      if (!renderer) {
+        renderer = new GameRenderer(container);
+      }
+      gameLoop = new GameLoop(renderer);
+      gameLoop.start();
+      state = gameLoop.getState();
+
+      // 周期性轮询游戏状态，驱动 HUD 和游戏结束界面更新
+      pollTimer = setInterval(() => {
+        if (gameLoop) {
+          state = gameLoop.getState();
+        }
+      }, 100);
+    });
   }
 
   function handleRestart() {
@@ -29,10 +40,11 @@
   }
 
   onMount(() => {
-    // 自动调整容器尺寸
+    // 容器尺寸自适应由 renderer 内部处理
   });
 
   onDestroy(() => {
+    if (pollTimer) clearInterval(pollTimer);
     if (gameLoop) gameLoop.destroy();
     if (renderer) renderer.destroy();
   });

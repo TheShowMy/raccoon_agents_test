@@ -24,8 +24,8 @@ export class InputManager {
     let x = 0, y = 0, z = 0;
     if (this.isPressed('KeyA') || this.isPressed('ArrowLeft'))  x -= 1;
     if (this.isPressed('KeyD') || this.isPressed('ArrowRight')) x += 1;
-    if (this.isPressed('KeyW') || this.isPressed('ArrowUp'))    z -= 1;
-    if (this.isPressed('KeyS') || this.isPressed('ArrowDown'))  z += 1;
+    if (this.isPressed('KeyW') || this.isPressed('ArrowUp'))    z += 1;
+    if (this.isPressed('KeyS') || this.isPressed('ArrowDown'))  z -= 1;
     if (this.isPressed('ShiftLeft') || this.isPressed('ShiftRight')) y -= 1;
     if (this.isPressed('Space')) y += 1;
     const len = Math.sqrt(x * x + y * y + z * z);

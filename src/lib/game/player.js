@@ -234,14 +234,25 @@ export class Player {
     this.group.position.z += dir.z * moveSpeed;
 
     // 边界限制
-    const bound = 24;
+    const boundX = 24;
     const yMin = 0.5;
     const yMax = 18;
-    this.group.position.x = THREE.MathUtils.clamp(this.group.position.x, -bound, bound);
+    const boundZ = 24;
+    this.group.position.x = THREE.MathUtils.clamp(this.group.position.x, -boundX, boundX);
     this.group.position.y = THREE.MathUtils.clamp(this.group.position.y, yMin, yMax);
-    this.group.position.z = THREE.MathUtils.clamp(this.group.position.z, -24, 24);
+    this.group.position.z = THREE.MathUtils.clamp(this.group.position.z, -boundZ, boundZ);
 
-    // 战机倾斜动画
+    // 战机朝向 — 根据水平方向（XZ 平面）计算偏航角，使机头朝向运动方向
+    if (dir.x !== 0 || dir.z !== 0) {
+      const targetYaw = Math.atan2(dir.x, dir.z);
+      let diff = targetYaw - this.group.rotation.y;
+      // 将差值归一化到 [-PI, PI]
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      this.group.rotation.y += diff * 5 * dt;
+    }
+
+    // 战机倾斜动画（滚转 & 俯仰）
     const targetRoll = -dir.x * 0.5;
     const targetPitch = dir.z * 0.3;
     this.group.rotation.z += (targetRoll - this.group.rotation.z) * 5 * dt;

@@ -1,15 +1,13 @@
 {
-  "name": "hello-world-collection",
+  "name": "airplane-shooter-3d",
   "version": "1.0.0",
   "private": true,
-  "description": "多语言 Hello World 展示网页 — Svelte + Vite",
+  "description": "3D 打飞机游戏 — Svelte + Three.js",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "test": "vitest run",
-    "check": "svelte-check"
+    "preview": "vite preview"
   },
   "dependencies": {
     "svelte": "^4.2.19",
@@ -17,10 +15,6 @@
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.2",
-    "@testing-library/svelte": "^5.4.2",
-    "jsdom": "^29.1.1",
-    "svelte-check": "^4.7.1",
-    "vite": "^5.4.11",
-    "vitest": "^2.1.8"
+    "vite": "^5.4.11"
   }
 }

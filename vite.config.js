@@ -1,4 +1,3 @@
-/// <reference types="vitest" />
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
@@ -10,16 +9,5 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (/\/node_modules\/three(\/|$)/.test(id)) return 'three';
-          if (/\/src\/lib\/macos(\/|$)/.test(id)) return 'macOS';
-        },
-      },
-    },
-  },
-  test: {
-    include: ['tests/**/*.test.js'],
   },
 });

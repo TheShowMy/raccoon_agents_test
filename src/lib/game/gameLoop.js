@@ -66,12 +66,12 @@ export class GameLoop {
     // 更新玩家
     this.player.update(dt, this.input);
 
-    // 开火
+    // 开火：从机头炮口生成子弹，沿战机朝向飞行
     if (this.player.canFire() && this.input.isFiring()) {
       this.player.fire();
-      const pos = this.player.getPosition().clone();
-      pos.z += 1.5;
-      this.bullets.fire(pos);
+      const muzzlePos = this.player.getMuzzlePosition();
+      const forwardDir = this.player.getForwardDirection();
+      this.bullets.fire(muzzlePos, forwardDir);
     }
 
     // 更新子弹

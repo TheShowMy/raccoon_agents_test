@@ -279,8 +279,31 @@ export class Player {
     }
   }
 
+  /**
+   * 获取玩家中心位置
+   */
   getPosition() {
     return this.group.position;
+  }
+
+  /**
+   * 获取机头（炮口）的世界坐标
+   * 机头尖端在局部坐标系中位于 (0, 0, 1.35)
+   */
+  getMuzzlePosition() {
+    const localOffset = new THREE.Vector3(0, 0, 1.35);
+    localOffset.applyQuaternion(this.group.quaternion);
+    return this.group.position.clone().add(localOffset);
+  }
+
+  /**
+   * 获取玩家战机的朝向向量（局部 +Z 方向转换到世界空间）
+   */
+  getForwardDirection() {
+    const forward = new THREE.Vector3(0, 0, 1);
+    forward.applyQuaternion(this.group.quaternion);
+    forward.normalize();
+    return forward;
   }
 
   getBoundsRadius() {

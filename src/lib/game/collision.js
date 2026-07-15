@@ -14,8 +14,8 @@ export class CollisionManager {
    * @param {Object} player - 玩家对象
    * @param {BulletManager} bulletManager
    * @param {EnemyManager} enemyManager
-   * @param {Function} onEnemyHit - 敌机被击中回调 (score)
-   * @param {Function} onPlayerHit - 玩家被击中回调
+   * @param {Function} onEnemyHit - 敌机被击中回调 (score, position)
+   * @param {Function} onPlayerHit - 玩家被击中回调 (position)
    */
   update(player, bulletManager, enemyManager, onEnemyHit, onPlayerHit) {
     const playerPos = player.getPosition();
@@ -35,10 +35,11 @@ export class CollisionManager {
         const dist = bulletPos.distanceTo(enemyPos);
 
         if (dist < 1.5) {
-          // 碰撞！移除子弹和敌机
+          // 碰撞！记录位置后移除子弹和敌机
+          const hitPos = enemyPos.clone();
           bulletManager.removeBullet(bi);
           enemyManager.removeEnemy(ei);
-          if (onEnemyHit) onEnemyHit(100);
+          if (onEnemyHit) onEnemyHit(100, hitPos);
           break; // 子弹已移除，跳出内层循环
         }
       }
@@ -52,9 +53,10 @@ export class CollisionManager {
         const dist = playerPos.distanceTo(enemyPos);
 
         if (dist < playerRadius + 1.0) {
+          const hitPos = enemyPos.clone();
           enemyManager.removeEnemy(ei);
           player.takeDamage();
-          if (onPlayerHit) onPlayerHit();
+          if (onPlayerHit) onPlayerHit(hitPos);
         }
       }
     }

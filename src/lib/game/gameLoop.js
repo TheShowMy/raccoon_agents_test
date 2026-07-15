@@ -3,6 +3,7 @@ import { Player } from './player.js';
 import { BulletManager } from './bullets.js';
 import { EnemyManager } from './enemies.js';
 import { CollisionManager } from './collision.js';
+import { EffectsManager } from './effects.js';
 
 /**
  * 游戏主循环
@@ -16,6 +17,8 @@ export class GameLoop {
     this.bullets = new BulletManager(renderer.scene);
     this.enemies = new EnemyManager(renderer.scene);
     this.collision = new CollisionManager();
+
+    this.effects = new EffectsManager(renderer.scene);
 
     this.score = 0;
     this.gameOver = false;
@@ -85,13 +88,22 @@ export class GameLoop {
       this.player,
       this.bullets,
       this.enemies,
-      (points) => { this.score += points; },
-      () => {
+      (points, position) => {
+        this.score += points;
+        this.effects.createExplosion(position);
+      },
+      (position) => {
+        this.effects.triggerPlayerHit();
+        this.effects.createHitShockwave(position);
         if (!this.player.alive) {
           this.gameOver = true;
         }
       }
     );
+
+    // 更新视觉特效（粒子、闪烁等）
+    this.effects.update(dt);
+    this.effects.flashPlayer(this.player.group);
   }
 
   getState() {
@@ -108,6 +120,7 @@ export class GameLoop {
     this.input.destroy();
     this.bullets.clear();
     this.enemies.clear();
+    this.effects.clear();
     if (this.player.group.parent) {
       this.player.group.parent.remove(this.player.group);
     }

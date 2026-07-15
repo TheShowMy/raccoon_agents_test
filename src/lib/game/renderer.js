@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ThirdPersonCamera } from './camera.js';
 
 /**
  * Three.js 渲染场景、相机（第三人称尾随）、灯光和环境
@@ -16,6 +17,9 @@ export class GameRenderer {
     const aspect = container.clientWidth / container.clientHeight;
     this.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 100);
     this.camera.position.set(0, 5, 8);
+
+    // 第三人称尾随相机控制器
+    this.thirdPersonCamera = new ThirdPersonCamera(this.camera);
 
     // 渲染器
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -97,14 +101,11 @@ export class GameRenderer {
   }
 
   /**
-   * 第三人称尾随相机
-   * 固定在玩家后方上方跟随
+   * 更新相机：委托给 ThirdPersonCamera 实现平滑后方上方跟随
+   * @param {THREE.Vector3} playerPosition
    */
   updateCamera(playerPosition) {
-    const offset = new THREE.Vector3(0, 4, 7);
-    const targetPos = playerPosition.clone().add(offset);
-    this.camera.position.lerp(targetPos, 0.1);
-    this.camera.lookAt(playerPosition);
+    this.thirdPersonCamera.update(playerPosition);
   }
 
   render() {
